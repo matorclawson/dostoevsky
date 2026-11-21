@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+version=$1
+root=$(pwd -P)
+name=dostoevsky-$version
+mkdir -p dist
+stage=$(mktemp -d "$root/dist/.release.XXXXXX")
+trap 'rm -rf -- "$stage"' EXIT
+if [ "${2:-build}" = build ]; then
+ mkdir "$stage/$name"
+ cp *.go go.mod LICENSE README.md Makefile "$stage/$name/"
+ cp -R examples scripts "$stage/$name/"
+ (cd "$stage" && tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf "$name.tar" "$name" && gzip -n "$name.tar" && sha256sum "$name.tar.gz" > "$name.sha256")
+ location=$stage
+else
+ location=$root/dist
+fi
+(cd "$location" && sha256sum -c "$name.sha256")
+mkdir "$stage/check"
+tar -xzf "$location/$name.tar.gz" -C "$stage/check"
+(cd "$stage/check/$name" && GOPROXY=off CGO_ENABLED=0 "$GO" test ./...)
+if [ "$location" = "$stage" ]; then
+ mv "$stage/$name.tar.gz" "$stage/$name.sha256" dist/
+fi

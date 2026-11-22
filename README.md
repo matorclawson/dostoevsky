@@ -12,7 +12,7 @@ Requires Go 1.22 or later. Import it as `github.com/rodriveracom/dostoevsky`. Th
 
 ## Run a persistent word count
 
-Use Go 1.22 or later on Linux and extract the source archive. From the module directory:
+Use Go 1.22 or later on Linux and clone the repository. From the module directory:
 
 ```sh
 make dev-wordcount WORDS="blue red blue"

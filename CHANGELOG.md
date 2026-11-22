@@ -4,11 +4,6 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
-## Unreleased
-
-- **Module path is now `github.com/rodriveracom/dostoevsky`.** Dostoevsky is a standalone community project. Update your import paths and `go.mod`; GitHub redirects the old repository URL.
-- README: added install and contribute sections.
-
 ## 0.1.0 — Embedded topics, durable storage, and stream processing
 
 - **Added an embedded Go module.** Reviewed the supplied Faust source and its word-count example, then implemented keyed streams and recoverable processor state in Go. A single-process application opens a data directory. Kafka, Flink, RocksDB, and a separately deployed broker are unnecessary.
@@ -50,12 +45,14 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 - **Added offline replay.** `make dev-openai-replay` reads recorded events from offset zero without credentials or another billable API request. An interrupted stream leaves a replayable prefix and reports incomplete termination.
 - **Verified the HTTP behavior with local fixtures.** Tests cover both request paths, streamed event parsing, and a disconnect before completion. **Live OpenAI execution remains unverified.**
 
-## 0.2.3 — Durable background task queue example
+## 0.2.3 — Durable background task queue example (22 November 2026)
 
 - **Added `examples/taskqueue`** with `make dev-task-enqueue`, `make dev-task-drain`, and `make dev-task-inspect`. A producer can submit a named job and exit. A later worker process drains the durable queue.
 - **Demonstrated partitioned workers and acknowledgments.** Four partitions share one consumer group, with one worker goroutine per partition. The worker publishes a result, retry, or dead letter before committing the input offset.
 - **Demonstrated three job outcomes end to end.** A SHA-256 task succeeds on its first attempt. A simulated transient failure succeeds on attempt two. A persistent failure produces a dead letter on attempt three with the original input and failure reason. Unknown tasks go directly to dead letters.
 - **Tested the critical restart window.** After outcome publication and before acknowledgment, an interruption causes the handler to run again on restart. Stable IDs deduplicate the example’s retry and result publications. External effects such as sending email still require idempotency at the destination.
+- **Module path is now `github.com/rodriveracom/dostoevsky`.** Dostoevsky is a standalone community project. Update your import paths and `go.mod`; GitHub redirects the old repository URL.
+- README: added install and contribute sections.
 
 ## Verification and operating limits at 0.2.3
 

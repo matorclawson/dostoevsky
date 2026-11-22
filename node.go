@@ -57,6 +57,7 @@ type Position struct {
 	State []byte
 }
 type checkpoint struct {
+	Expected *int64 `json:",omitempty"`
 	Partition
 	Group string
 	Position
@@ -215,7 +216,11 @@ func (n *Node) index(e entry, loc location) error {
 		if err != nil {
 			return err
 		}
-		if c.Next != s.groups[c.Group].Next+1 || c.Next > int64(len(s.records)) {
+		expected := c.Next - 1
+		if c.Expected != nil {
+			expected = *c.Expected
+		}
+		if expected != s.groups[c.Group].Next || c.Next <= expected || c.Next > int64(len(s.records)) {
 			return ErrConflict
 		}
 		s.groups[c.Group] = Position{c.Next, bytes.Clone(c.State)}
@@ -317,7 +322,10 @@ func (n *Node) Position(ctx context.Context, p Partition, g string) (Position, e
 
 // Commit advances exactly one offset and atomically replaces this group's partition-local state.
 func (n *Node) Commit(ctx context.Context, p Partition, g string, offset int64, state []byte) error {
-	if !name.MatchString(g) || offset < 0 {
+	return n.CommitBatch(ctx, p, g, offset, offset+1, state)
+}
+func (n *Node) CommitBatch(ctx context.Context, p Partition, g string, offset, next int64, state []byte) error {
+	if !name.MatchString(g) || offset < 0 || next <= offset {
 		return ErrInvalid
 	}
 	if len(state) > MaxValue {
@@ -332,10 +340,13 @@ func (n *Node) Commit(ctx context.Context, p Partition, g string, offset int64, 
 	if e = ctx.Err(); e != nil {
 		return e
 	}
-	if s.groups[g].Next != offset || offset >= int64(len(s.records)) {
+	if s.groups[g].Next != offset || next > int64(len(s.records)) {
 		return ErrConflict
 	}
-	ev := entry{Check: &checkpoint{p, g, Position{offset + 1, state}}}
+	ev := entry{Check: &checkpoint{Partition: p, Group: g, Position: Position{next, state}}}
+	if next != offset+1 {
+		ev.Check.Expected = &offset
+	}
 	loc, e := n.j.append(ev)
 	if e != nil {
 		return e

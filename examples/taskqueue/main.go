@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	d "github.com/zeroemployeeorg/dostoevsky"
+	d "github.com/rodriveracom/dostoevsky"
 )
 
 const partitions = 4

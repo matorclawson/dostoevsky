@@ -9,7 +9,7 @@ import (
 	"log"
 	"os"
 
-	d "github.com/zeroemployeeorg/dostoevsky"
+	d "github.com/rodriveracom/dostoevsky"
 )
 
 func main() {

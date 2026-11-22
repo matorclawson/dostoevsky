@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	d "github.com/zeroemployeeorg/dostoevsky"
+	d "github.com/rodriveracom/dostoevsky"
 )
 
 type lostAck struct{ d.Store }

@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	d "github.com/zeroemployeeorg/dostoevsky"
+	d "github.com/rodriveracom/dostoevsky"
 )
 
 func main() {

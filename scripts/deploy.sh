@@ -19,7 +19,7 @@ export GOOS=linux GOARCH="$ARCH" CGO_ENABLED=0
  pkg=$("$GO" list -f '{{.Name}}' "$APP_PACKAGE")
  [ "$pkg" = main ] || { echo "APP_PACKAGE must be a main package" >&2; exit 2; }
  "$GO" list -deps "$APP_PACKAGE" > "$stage/packages"
- grep -Fxq github.com/zeroemployeeorg/dostoevsky "$stage/packages" || { echo "host must import Dostoevsky" >&2; exit 2; }
+ grep -Fxq github.com/rodriveracom/dostoevsky "$stage/packages" || { echo "host must import Dostoevsky" >&2; exit 2; }
  "$GO" build -trimpath -o "$stage/$APP_NAME" "$APP_PACKAGE"
 )
 if [ "$1" = install ]; then

@@ -2,7 +2,12 @@
 
 Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream processing. Applications can start with a local directory and distribute partitions across application instances when needed. The runtime uses the Go standard library and builds with `CGO_ENABLED=0`.
 
-**Repository status.** The complete 0.2.3 source was merged into `zeroemployeeorg/dostoevsky` on **22 November 2026 at 00:28:38 UTC** through [PR #1](https://github.com/zeroemployeeorg/dostoevsky/pull/1). The versions below follow the six source packages delivered during development.
+**Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
+
+## Unreleased
+
+- **Module path is now `github.com/rodriveracom/dostoevsky`.** Dostoevsky is a standalone community project. Update your import paths and `go.mod`; GitHub redirects the old repository URL.
+- README: added install and contribute sections.
 
 ## 0.1.0 — Embedded topics, durable storage, and stream processing
 

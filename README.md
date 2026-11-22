@@ -2,6 +2,14 @@
 
 Dostoevsky is an embeddable Go library for durable topics and stateful stream processing. Start with a directory and a topic manifest. To distribute partitions, embed the same library in each participating application and mount its peer handler on the application's HTTP server. All runtime dependencies come from the Go standard library. MIT licensed.
 
+## Install
+
+```sh
+go get github.com/rodriveracom/dostoevsky@latest
+```
+
+Requires Go 1.22 or later. Import it as `github.com/rodriveracom/dostoevsky`. The module has no dependencies outside the Go standard library.
+
 ## Run a persistent word count
 
 Use Go 1.22 or later on Linux and extract the source archive. From the module directory:
@@ -119,7 +127,7 @@ Run `make help` for the command list. The Makefile targets Linux with GNU Make a
 | Build for deployment | `make deploy-build APP_DIR=../orders APP_PACKAGE=./cmd/orders APP_NAME=orders ARCH=arm64` | Builds a pure-Go Linux executable in `build/deploy/linux-arm64/` |
 | Install | `make deploy APP_DIR=../orders APP_PACKAGE=./cmd/orders APP_NAME=orders ARCH=arm64 DESTDIR=/srv/orders/bin` | Builds and atomically replaces the named executable in the selected directory |
 
-**Deployment unit.** Ship the Go application that imports Dostoevsky. Set `APP_DIR` to that application's module and `APP_PACKAGE` to its main package. The build uses the dependency version selected by the host's go.mod. To use an unpublished source release, point the host's go.mod replace directive for `github.com/zeroemployeeorg/dostoevsky` at the extracted module. Choose the target architecture explicitly for cross-compilation. The host application supplies its production journal directory, topology, credentials and process supervision. Installing a binary leaves the running process and its journal alone until your deployment system restarts it.
+**Deployment unit.** Ship the Go application that imports Dostoevsky. Set `APP_DIR` to that application's module and `APP_PACKAGE` to its main package. The build uses the dependency version selected by the host's go.mod. To use an unpublished source release, point the host's go.mod replace directive for `github.com/rodriveracom/dostoevsky` at the extracted module. Choose the target architecture explicitly for cross-compilation. The host application supplies its production journal directory, topology, credentials and process supervision. Installing a binary leaves the running process and its journal alone until your deployment system restarts it.
 
 ## Stream OpenAI events into a topic
 
@@ -154,3 +162,7 @@ Look for a SHA-256 digest on the results topic, HELLO WORLD after two attempts, 
 The jobs topic has four partitions and one consumer group. The drain command runs one goroutine per partition and exits when all available work is processed. The job ID routes every retry to the same partition. A retry appends immediately to its tail, allowing other queued work to run first. The worker publishes the result, retry or dead letter before acknowledging the original delivery by committing its offset. Inspection reads the outcome topics from the beginning on every invocation.
 
 Run drain again after interruption. An unacknowledged handler may execute again. These example handlers are deterministic, and stable IDs deduplicate repeated publications. For real handlers that send emails, charge accounts or call external APIs, use a durable idempotency key at the destination and persist the outcome before acknowledging. A different outcome on replay requires application-level reconciliation. This example assigns partitions explicitly and runs producer and drain commands sequentially because a local directory has a single owner. A running application can share one Node between its producers and workers. The example implements immediate retries and has no worker leases or scheduled delivery.
+
+## Contribute
+
+Open an issue describing the problem, with a failing test when you can. For a change, fork the repository, branch, and run `make verify` (format, vet, tests, race detector, example build) before opening a pull request. Keep changes small and focused, and add or update tests and the CHANGELOG. Contributions are accepted under the MIT license.

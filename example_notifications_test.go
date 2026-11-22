@@ -2,7 +2,7 @@ package dostoevsky_test
 
 import (
 	"fmt"
-	d "github.com/zeroemployeeorg/dostoevsky"
+	d "github.com/rodriveracom/dostoevsky"
 )
 
 func ExampleNotifications() {

@@ -9,12 +9,18 @@ DESTDIR ?=
 ARCH ?= $(shell uname -m | sed -e 's/^x86_64$$/amd64/' -e 's/^aarch64$$/arm64/')
 export GO WORDS APP_DIR APP_PACKAGE APP_NAME DESTDIR ARCH
 export GOWORK := off
-VERSION := 0.2.3
+VERSION := $(shell cat VERSION)
 
-.PHONY: help dev dev-fmt dev-fmt-check dev-vet dev-test dev-race dev-build dev-wordcount dev-mesh-a dev-mesh-b release release-check deploy-build deploy
+.PHONY: help verify build test dev dev-fmt dev-fmt-check dev-vet dev-test dev-race dev-build dev-wordcount dev-mesh-a dev-mesh-b release release-check deploy-build deploy
 
 help: ## List development, release and deployment commands
 	@awk 'BEGIN {FS=":.*## "} /^[a-z][a-z-]*:.*## / {printf "  %-18s %s\n", $$1, $$2}' Makefile
+
+verify: dev ## Run every check (format, vet, tests, race, build)
+
+build: dev-build ## Build the examples under .dev/bin
+
+test: dev-test ## Run the tests
 
 dev: dev-fmt-check dev-vet dev-test dev-race dev-build ## Run the complete development checks
 

@@ -7,17 +7,30 @@ import (
 )
 
 // Store is implemented by both Node and Mesh.
-type Store interface {
+type Publisher interface {
 	Publish(context.Context, string, Message) (Record, error)
+}
+type Reader interface {
 	Read(context.Context, Partition, int64, bool) (Record, error)
+}
+type Checkpointer interface {
 	Position(context.Context, Partition, string) (Position, error)
 	Commit(context.Context, Partition, string, int64, []byte) error
+}
+
+type Store interface {
+	Publisher
+	Reader
+	Checkpointer
 }
 
 // Fold processes a partition until cancellation or an error. Each successful
 // reduction commits its state with the input offset. Use a pure reducer. It may
 // run again after a crash or a competing consumer's commit.
-func Fold[S any](ctx context.Context, s Store, p Partition, group string, initial S, reduce func(context.Context, S, Record) (S, error)) error {
+func Fold[S any](ctx context.Context, s interface {
+	Reader
+	Checkpointer
+}, p Partition, group string, initial S, reduce func(context.Context, S, Record) (S, error)) error {
 	pos, e := s.Position(ctx, p, group)
 	if e != nil {
 		return e

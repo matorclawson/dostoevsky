@@ -10,6 +10,11 @@ import (
 	"syscall"
 )
 
+// retentionFault is a test hook called before each durable step of Retain:
+// "write" (each frame written to the temp file), "sync" (temp file), "rename"
+// and "dirsync". A non-nil result is returned as if the step had failed.
+var retentionFault = func(stage string) error { return nil }
+
 type retentionSeed struct {
 	Partition
 	Base   int64
@@ -78,6 +83,9 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 			return location{}, e
 		}
 		loc := location{at: replacement.end + 20, size: len(frame) - 20}
+		if e = retentionFault("write"); e != nil {
+			return location{}, e
+		}
 		written, e := f.WriteAt(frame, replacement.end)
 		if e != nil {
 			return location{}, e
@@ -120,10 +128,16 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 			newLocations[p] = append(newLocations[p], loc)
 		}
 	}
-	if err = f.Sync(); err != nil {
+	if err = retentionFault("sync"); err == nil {
+		err = f.Sync()
+	}
+	if err != nil {
 		return err
 	}
 	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if err = retentionFault("rename"); err != nil {
 		return err
 	}
 	if err = os.Rename(temp, n.j.file.Name()); err != nil {
@@ -169,7 +183,10 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 	if e != nil {
 		return e
 	}
-	syncErr := d.Sync()
+	syncErr := retentionFault("dirsync")
+	if syncErr == nil {
+		syncErr = d.Sync()
+	}
 	d.Close()
 	return errors.Join(closeErr, syncErr, n.j.failed)
 }

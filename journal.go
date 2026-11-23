@@ -16,13 +16,20 @@ import (
 const maxFrame = 4 << 20
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
-var signature = []byte("DOST0001")
+
+// Frames written by 0.3.0 carry signatureV2. A 0.2.x binary rejects any other
+// signature in recover() with "invalid journal header" and does not modify the
+// file, so a directory 0.3.0 has opened can never be reopened by 0.2.x. 0.3.0
+// reads both signatures.
+var signature = []byte("DOST0002")
+var signatureV1 = []byte("DOST0001")
 
 type entry struct {
 	Config *Config        `json:",omitempty"`
 	Record *Record        `json:",omitempty"`
 	Seed   *retentionSeed `json:",omitempty"`
 	Check  *checkpoint    `json:",omitempty"`
+	Fence  int            `json:",omitempty"` // marker frame written when 0.3.0 first opens a 0.2.x journal
 }
 type location struct {
 	at   int64
@@ -34,6 +41,7 @@ type journal struct {
 	lock   *os.File
 	end    int64
 	failed error
+	fenced bool // the file holds at least one signatureV2 frame
 }
 
 // One file descriptor owns the advisory lock for the lifetime of the node.
@@ -113,6 +121,7 @@ func (j *journal) writeFrames(frames []byte) error {
 		return j.failed
 	}
 	j.end += int64(len(frames))
+	j.fenced = true
 	return nil
 }
 func (j *journal) read(loc location) (entry, error) {
@@ -128,7 +137,7 @@ func (j *journal) read(loc location) (entry, error) {
 	return e, err
 }
 func validHeader(h []byte) bool {
-	return bytes.Equal(h[:8], signature) && binary.BigEndian.Uint32(h[16:]) == crc32.Checksum(h[:16], crcTable)
+	return (bytes.Equal(h[:8], signature) || bytes.Equal(h[:8], signatureV1)) && binary.BigEndian.Uint32(h[16:]) == crc32.Checksum(h[:16], crcTable)
 }
 func (j *journal) recover(apply func(entry, location) error) error {
 	info, err := j.file.Stat()
@@ -150,6 +159,9 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		size := int(binary.BigEndian.Uint32(h[8:]))
 		if size > maxFrame || size <= 0 {
 			return fmt.Errorf("invalid frame length at %d", j.end)
+		}
+		if bytes.Equal(h[:8], signature) {
+			j.fenced = true
 		}
 		loc := location{j.end + 20, size}
 		next := loc.at + int64(size)

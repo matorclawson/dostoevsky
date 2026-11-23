@@ -79,7 +79,7 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return err
 	}
-	replacement := &journal{path: n.j.path, file: f}
+	replacement := &journal{path: n.j.path, file: f, fenced: true}
 	appendFrame := func(ev entry) (location, error) {
 		frame, e := encodeFrame(ev)
 		if e != nil {

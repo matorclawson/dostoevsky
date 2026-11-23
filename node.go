@@ -159,6 +159,10 @@ func Open(dir string, c Config) (*Node, error) {
 	if e == nil && declared != len(own.Topics) {
 		_, e = j.append(entry{Config: &own})
 	}
+	if e == nil && !j.fenced {
+		// A 0.2.x journal: mark it so a 0.2.x binary refuses the directory from now on.
+		_, e = j.append(entry{Fence: 1})
+	}
 	if e != nil {
 		j.close()
 		return nil, e
@@ -306,6 +310,9 @@ func (n *Node) index(e entry, loc location) error {
 			s.groups = make(map[string]Position)
 		}
 		s.groups[c.Group] = Position{c.Next, bytes.Clone(c.State)}
+		return nil
+	}
+	if e.Fence != 0 {
 		return nil
 	}
 	return errors.New("unknown journal entry")

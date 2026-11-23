@@ -170,9 +170,6 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		if size > maxFrame || size <= 0 {
 			return fmt.Errorf("invalid frame length at %d", j.end)
 		}
-		if bytes.Equal(h[:8], signature) {
-			j.fenced = true
-		}
 		loc := location{j.end + 20, size}
 		next := loc.at + int64(size)
 		if next > info.Size() {
@@ -184,6 +181,10 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		}
 		if err = apply(e, loc); err != nil {
 			return fmt.Errorf("replay at %d: %w", j.end, err)
+		}
+		// Only a complete frame that passed its checksum and replay counts as a fence.
+		if bytes.Equal(h[:8], signature) {
+			j.fenced = true
 		}
 		j.end = next
 	}

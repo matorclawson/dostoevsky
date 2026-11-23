@@ -180,3 +180,50 @@ func TestRetiredInodeIsFencedNotEmpty(t *testing.T) {
 	read(stale1, "after Close")
 	read(stale2, "after Close")
 }
+
+// A V2 header whose payload is torn is not a fence: replay never saw a complete frame.
+func TestTornV2FrameDoesNotCountAsFence(t *testing.T) {
+	dir := t.TempDir()
+	restore := withLegacyWriter(t)
+	n := openTest(t, dir, config())
+	publish(t, n, "old")
+	n.Close()
+	restore()
+	path := filepath.Join(dir, "journal.v1")
+	frame, e := encodeFrame(entry{Fence: 1})
+	if e != nil {
+		t.Fatal(e)
+	}
+	f, e := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = f.Write(frame[:len(frame)-2]); e != nil { // valid header, payload cut short
+		t.Fatal(e)
+	}
+	f.Close()
+	if ok, at := legacyAccepts(t, path); ok || at == 0 {
+		t.Fatal("fixture should already show a V2 header", ok, at)
+	}
+	m, e := Open(dir, config())
+	if e != nil {
+		t.Fatal("reopen with a torn V2 tail:", e)
+	}
+	m.Close()
+	b, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	// The torn tail is gone and a complete fence frame was appended after the legacy frames.
+	ok, at := legacyAcceptsBytes(b)
+	if ok || at == 0 || !bytes.Equal(b[at:at+8], signature) {
+		t.Fatalf("journal not fenced on disk (accepted=%v at %d)", ok, at)
+	}
+	if int64(len(b)) != at+int64(len(frame)) {
+		t.Fatalf("expected exactly one complete fence frame after the legacy frames: %d bytes, fence at %d, frame %d", len(b), at, len(frame))
+	}
+	r, e := openTest(t, dir, config()).Read(ctx, p, 0, false)
+	if e != nil || r.ID != "old" {
+		t.Fatal(r, e)
+	}
+}

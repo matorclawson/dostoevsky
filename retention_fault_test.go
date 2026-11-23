@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -297,5 +298,37 @@ func TestRetentionGroupsFloorsAndIDs(t *testing.T) {
 	}
 	if r, e := restored.Read(ctx, p, 5, false); e != nil || r.ID != "after-empty" {
 		t.Fatal(r, e)
+	}
+}
+
+// A process that opened journal.v1 before the rename holds the old inode. It must not
+// be able to lock it afterwards, or it could acknowledge writes into an orphan.
+func TestRetentionKeepsOldInodeLocked(t *testing.T) {
+	dir := t.TempDir()
+	n := seedRetention(t, dir)
+	stale, e := os.Open(filepath.Join(dir, "journal.v1"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer stale.Close()
+	if e = syscall.Flock(int(stale.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e == nil {
+		t.Fatal("journal not locked before retention")
+	}
+	if e = n.Retain(ctx, map[Partition]int64{p: 2}); e != nil {
+		t.Fatal(e)
+	}
+	if e = syscall.Flock(int(stale.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e == nil {
+		t.Fatal("old inode lockable after retention: a 0.2.x process could write into it")
+	}
+	if info, _ := stale.Stat(); info.Size() != 0 {
+		t.Fatal("old inode space not released:", info.Size())
+	}
+	// A second retention replaces the held inode without leaking descriptors or locks.
+	if e = n.Retain(ctx, map[Partition]int64{p: 2}); e != nil {
+		t.Fatal(e)
+	}
+	n.Close()
+	if e = syscall.Flock(int(stale.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+		t.Fatal("lock still held after Close:", e)
 	}
 }

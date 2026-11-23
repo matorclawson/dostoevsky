@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"regexp"
 	"slices"
 	"sync"
@@ -88,6 +89,10 @@ type Node struct {
 	topology string
 	streams  map[Partition]*stream
 	closed   bool
+	// retired is the journal file Retain replaced. Its lock stays held, so a
+	// process that opened the path before the rename cannot lock the orphaned
+	// inode and acknowledge writes into it.
+	retired *os.File
 }
 
 func (c Config) validate() error {
@@ -173,7 +178,12 @@ func (n *Node) Close() error {
 			s.changed = nil
 		}
 	}
-	return n.j.close()
+	err := n.j.close()
+	if n.retired != nil {
+		err = errors.Join(err, n.retired.Close())
+		n.retired = nil
+	}
+	return err
 }
 func (n *Node) owner(p Partition) (string, error) {
 	count := n.partitionCount(p.Topic)

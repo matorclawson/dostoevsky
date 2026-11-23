@@ -178,7 +178,12 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 			s.changed = nil
 		}
 	}
-	closeErr := old.file.Close()
+	prev := n.retired
+	n.retired = old.file
+	closeErr := error(nil)
+	if prev != nil {
+		closeErr = prev.Close()
+	}
 	// The replacement is installed. If its directory entry may not be durable the
 	// node cannot tell whether a crash would bring the old journal back, so it
 	// stops acknowledging writes until it is reopened.
@@ -194,6 +199,10 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 	d.Close()
 	if syncErr != nil && n.j.failed == nil {
 		n.j.failed = fmt.Errorf("journal replaced but directory not synced; reopen required: %w", syncErr)
+	}
+	if n.j.failed == nil {
+		// The old inode is unreachable now; free its space but keep its lock.
+		old.file.Truncate(0)
 	}
 	return errors.Join(closeErr, n.j.failed)
 }

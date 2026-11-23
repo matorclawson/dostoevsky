@@ -261,3 +261,26 @@ func TestPublishBatchCorruptFrameStopsRecovery(t *testing.T) {
 		}
 	}
 }
+
+// Recovery of a clean journal must still sync: a crashed process may have left
+// frames in the page cache, and a duplicate-only retry would acknowledge them.
+func TestRecoverySyncsCleanTail(t *testing.T) {
+	dir := t.TempDir()
+	n := openTest(t, dir, killConfig())
+	if _, e := n.PublishBatch(ctx, killItems(0)); e != nil {
+		t.Fatal(e)
+	}
+	n.Close()
+	calls := 0
+	old := syncFile
+	syncFile = func(f *os.File) error { calls++; return old(f) }
+	defer func() { syncFile = old }()
+	m, e := Open(dir, killConfig())
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer m.Close()
+	if calls == 0 {
+		t.Fatal("clean reopen acknowledged the journal without syncing it")
+	}
+}

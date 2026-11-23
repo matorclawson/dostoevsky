@@ -167,9 +167,13 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		if err = j.file.Truncate(j.end); err != nil {
 			return err
 		}
-		return j.file.Sync()
 	}
-	return nil
+	// Frames a crashed process wrote but never synced can sit in the page cache.
+	// Make everything recovery accepted durable before any retry is acknowledged.
+	return syncFile(j.file)
 }
+
+// syncFile is a hook so tests can observe that recovery syncs.
+var syncFile = func(f *os.File) error { return f.Sync() }
 
 func (j *journal) close() error { return errors.Join(j.file.Close(), j.lock.Close()) }

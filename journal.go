@@ -1,6 +1,7 @@
 package dostoevsky
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 )
 
@@ -48,7 +50,8 @@ type journal struct {
 	lock   *os.File
 	end    int64
 	failed error
-	fenced bool // the file holds at least one signatureV2 frame
+	fenced bool   // the file holds at least one signatureV2 frame
+	frame  []byte // scratch for single appends, protected by the node lock
 }
 
 // One file descriptor owns the advisory lock for the lifetime of the node.
@@ -98,27 +101,38 @@ func (j *journal) append(e entry) (location, error) {
 	if j.failed != nil {
 		return loc, j.failed
 	}
-	frame, err := encodeFrame(e)
+	frame, err := appendEncodedFrame(j.frame[:0], e, maxFrame+20)
 	if err != nil {
 		return loc, err
+	}
+	// Avoid retaining unusually large payloads for the lifetime of the node.
+	if cap(frame) <= 16<<10 {
+		j.frame = frame[:0]
 	}
 	loc = location{j.end + 20, len(frame) - 20}
 	return loc, j.writeFrames(frame)
 }
 func encodeFrame(e entry) ([]byte, error) {
+	return appendEncodedFrame(nil, e, maxFrame+20)
+}
+
+func appendEncodedFrame(dst []byte, e entry, limit int) ([]byte, error) {
 	b, err := json.Marshal(e)
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > maxFrame {
+	if len(b) > maxFrame || len(dst)+20+len(b) > limit {
 		return nil, ErrLimit
 	}
-	h := make([]byte, 20, 20+len(b))
+	dst = slices.Grow(dst, 20+len(b))
+	start := len(dst)
+	dst = dst[:start+20]
+	h := dst[start:]
 	copy(h, signature)
 	binary.BigEndian.PutUint32(h[8:], uint32(len(b)))
 	binary.BigEndian.PutUint32(h[12:], crc32.Checksum(b, crcTable))
 	binary.BigEndian.PutUint32(h[16:], crc32.Checksum(h[:16], crcTable))
-	return append(h, b...), nil
+	return append(dst, b...), nil
 }
 func (j *journal) writeFrames(frames []byte) error {
 	if j.failed != nil {
@@ -126,7 +140,7 @@ func (j *journal) writeFrames(frames []byte) error {
 	}
 	_, err := j.file.WriteAt(frames, j.end)
 	if err == nil {
-		err = j.file.Sync()
+		err = syncJournalData(j.file)
 	}
 	if err != nil {
 		j.failed = fmt.Errorf("journal write requires reopen: %w", err)
@@ -156,10 +170,15 @@ func (j *journal) recover(apply func(entry, location) error) error {
 	if err != nil {
 		return err
 	}
+	if info.Size() == 0 {
+		return nil
+	}
+	reader := bufio.NewReaderSize(io.NewSectionReader(j.file, 0, info.Size()), int(min(info.Size(), 32<<10)))
+	var payload []byte
 	for j.end < info.Size() {
 		var h [20]byte
-		_, err = j.file.ReadAt(h[:], j.end)
-		if err == io.EOF {
+		_, err = io.ReadFull(reader, h[:])
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			break
 		}
 		if err != nil {
@@ -177,7 +196,18 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		if next > info.Size() {
 			break
 		}
-		e, err := j.read(loc)
+		if cap(payload) < size {
+			payload = make([]byte, size)
+		}
+		payload = payload[:size]
+		if _, err = io.ReadFull(reader, payload); err != nil {
+			return err
+		}
+		if crc32.Checksum(payload, crcTable) != binary.BigEndian.Uint32(h[12:]) {
+			return fmt.Errorf("journal checksum mismatch at %d", j.end)
+		}
+		var e entry
+		err = json.Unmarshal(payload, &e)
 		if err != nil {
 			return fmt.Errorf("frame at %d: %w", j.end, err)
 		}

@@ -15,13 +15,19 @@ import (
 var ErrBackupNotDurable = errors.New("backup complete but its directory entry may not be durable")
 
 // Backup writes a consistent journal snapshot into a new directory. The node
-// remains locked during the copy. The destination is created with Mkdir, which
-// fails if it exists, and the journal is written to a temporary name inside it,
-// synced, renamed to journal.v1, and the directory and then its parent are
-// synced. A crash mid-copy leaves a directory without journal.v1, which is not
-// a valid backup; a failed backup removes the directory it created. If only the
-// final parent sync fails the backup is complete and the error wraps
+// remains locked during the copy. The whole backup is built in a hidden sibling
+// of dir (.<name>.backup-<random>): journal.v1 is written and synced, the
+// sibling is synced, dir is checked not to exist, the sibling is renamed to dir
+// and the parent is synced. A crash leaves at most the hidden sibling, never a
+// visible partial or empty dir; a failed backup removes its sibling. If only
+// the final parent sync fails the backup is complete and the error wraps
 // ErrBackupNotDurable.
+//
+// Caller contract: dir must be a new path that no other process creates while
+// Backup runs. The existence check and the rename are two steps, and the
+// standard library has no portable no-replace directory rename, so a process
+// that creates an empty directory at exactly that path in between would be
+// replaced.
 func (n *Node) Backup(ctx context.Context, dir string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -35,17 +41,23 @@ func (n *Node) Backup(ctx context.Context, dir string) error {
 		return err
 	}
 	dir = filepath.Clean(dir)
-	if err := os.Mkdir(dir, 0700); err != nil {
+	parent := filepath.Dir(dir)
+	if _, err := os.Lstat(dir); err == nil {
+		return fmt.Errorf("backup destination exists: %w", os.ErrExist)
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	published := false
+	stage, err := os.MkdirTemp(parent, "."+filepath.Base(dir)+".backup-")
+	if err != nil {
+		return err
+	}
+	renamed := false
 	defer func() {
-		if !published {
-			os.RemoveAll(dir)
+		if !renamed {
+			os.RemoveAll(stage)
 		}
 	}()
-	tmp := filepath.Join(dir, ".journal.tmp")
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(filepath.Join(stage, "journal.v1"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -88,14 +100,19 @@ func (n *Node) Backup(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
-	if err = os.Rename(tmp, filepath.Join(dir, "journal.v1")); err != nil {
+	if err = syncDir(stage); err != nil {
 		return err
 	}
-	if err = syncDir(dir); err != nil {
+	if _, err = os.Lstat(dir); err == nil {
+		return fmt.Errorf("backup destination appeared during the copy: %w", os.ErrExist)
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	published = true
-	if err = syncDir(filepath.Dir(dir)); err != nil {
+	if err = os.Rename(stage, dir); err != nil {
+		return err
+	}
+	renamed = true
+	if err = syncDir(parent); err != nil {
 		return fmt.Errorf("%w: %v", ErrBackupNotDurable, err)
 	}
 	return nil

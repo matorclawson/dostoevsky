@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -169,4 +170,44 @@ func TestOpenRefusesIncompleteBackup(t *testing.T) {
 		t.Fatal(e)
 	}
 	openTest(t, good, config())
+}
+
+// A crash after the backup is staged but before it is published must leave no visible
+// destination, only the hidden sibling.
+func TestBackupStagedButNotPublishedHasNoDestination(t *testing.T) {
+	n := openTest(t, t.TempDir(), config())
+	publish(t, n, "one")
+	parent := t.TempDir()
+	dst := filepath.Join(parent, "backup")
+	var sawStage string
+	old := syncDir
+	syncDir = func(path string) error {
+		if path != parent && sawStage == "" {
+			sawStage = path
+			if _, e := os.Lstat(dst); e == nil {
+				t.Error("destination visible before publication")
+			}
+			if _, e := os.Stat(filepath.Join(path, "journal.v1")); e != nil {
+				t.Error("staged journal missing:", e)
+			}
+			if filepath.Dir(path) != parent || !strings.HasPrefix(filepath.Base(path), ".backup.backup-") {
+				t.Error("staging directory is not a hidden sibling:", path)
+			}
+			return errors.New("simulated crash")
+		}
+		return old(path)
+	}
+	defer func() { syncDir = old }()
+	if e := n.Backup(ctx, dst); e == nil {
+		t.Fatal("backup succeeded despite the failure")
+	}
+	if sawStage == "" {
+		t.Fatal("staging directory was never synced")
+	}
+	if _, e := os.Lstat(dst); e == nil {
+		t.Fatal("destination exists after a failed backup")
+	}
+	if es, _ := os.ReadDir(parent); len(es) != 0 {
+		t.Fatalf("failed backup left %s", es[0].Name())
+	}
 }

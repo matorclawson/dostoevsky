@@ -163,9 +163,23 @@ func TestRetentionFaultDirectorySync(t *testing.T) {
 		t.Fatal(e)
 	}
 	wantRetained(t, n, "same process")
+	// The directory entry may not be durable: no further write may be acknowledged.
+	if _, e := n.Publish(ctx, "words", Message{ID: "late"}); !errors.Is(e, errInjected) {
+		t.Fatal("write acknowledged after a failed directory sync:", e)
+	}
+	if e := n.Commit(ctx, p, "g", 2, nil); !errors.Is(e, errInjected) {
+		t.Fatal("commit acknowledged after a failed directory sync:", e)
+	}
+	if e := n.Retain(ctx, map[Partition]int64{p: 2}); !errors.Is(e, errInjected) {
+		t.Fatal("retain ran on a failed journal:", e)
+	}
 	n.Close()
 	withFault(t, func(string) error { return nil })
-	wantRetained(t, openTest(t, dir, config()), "after reopen")
+	m := openTest(t, dir, config())
+	wantRetained(t, m, "after reopen")
+	if r := publish(t, m, "late"); r.Offset != 4 {
+		t.Fatal(r)
+	}
 }
 
 // Copy the data directory at each durable step, as a crash would leave it, and open the copy.

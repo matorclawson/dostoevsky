@@ -179,14 +179,21 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 		}
 	}
 	closeErr := old.file.Close()
+	// The replacement is installed. If its directory entry may not be durable the
+	// node cannot tell whether a crash would bring the old journal back, so it
+	// stops acknowledging writes until it is reopened.
 	d, e := os.Open(dir)
 	if e != nil {
-		return e
+		n.j.failed = fmt.Errorf("journal replaced but directory not synced; reopen required: %w", e)
+		return errors.Join(closeErr, n.j.failed)
 	}
 	syncErr := retentionFault("dirsync")
 	if syncErr == nil {
 		syncErr = d.Sync()
 	}
 	d.Close()
-	return errors.Join(closeErr, syncErr, n.j.failed)
+	if syncErr != nil && n.j.failed == nil {
+		n.j.failed = fmt.Errorf("journal replaced but directory not synced; reopen required: %w", syncErr)
+	}
+	return errors.Join(closeErr, n.j.failed)
 }

@@ -87,3 +87,59 @@ func TestBackupSyncsParentDirectory(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestBackupInterruptedLeavesNoJournal(t *testing.T) {
+	n := openTest(t, t.TempDir(), config())
+	big := bytes.Repeat([]byte("v"), 100<<10)
+	for i := 0; i < 4; i++ {
+		if _, e := n.Publish(ctx, "words", Message{ID: fmt.Sprint(i), Value: big}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), "backup")
+	if e := n.Backup(&countdown{Context: ctx, left: 3}, dst); !errors.Is(e, context.Canceled) {
+		t.Fatal(e)
+	}
+	if _, e := os.Stat(filepath.Join(dst, "journal.v1")); e == nil {
+		t.Fatal("an interrupted backup left a journal.v1")
+	}
+}
+
+func TestBackupDirectoryEntryNotDurable(t *testing.T) {
+	n := openTest(t, t.TempDir(), config())
+	publish(t, n, "one")
+	parent := t.TempDir()
+	dst := filepath.Join(parent, "backup")
+	old := syncDir
+	syncDir = func(path string) error {
+		if path == parent {
+			return errors.New("injected parent sync failure")
+		}
+		return old(path)
+	}
+	defer func() { syncDir = old }()
+	e := n.Backup(ctx, dst)
+	if !errors.Is(e, ErrBackupNotDurable) {
+		t.Fatal("want ErrBackupNotDurable, got", e)
+	}
+	syncDir = old
+	restored := openTest(t, dst, config())
+	if r, e := restored.Read(ctx, p, 0, false); e != nil || r.ID != "one" {
+		t.Fatal("backup reported as complete is not:", r, e)
+	}
+}
+
+func TestBackupRefusesExistingDirectoryEvenIfEmpty(t *testing.T) {
+	n := openTest(t, t.TempDir(), config())
+	publish(t, n, "one")
+	dst := filepath.Join(t.TempDir(), "backup")
+	if e := os.Mkdir(dst, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := n.Backup(ctx, dst); !errors.Is(e, os.ErrExist) {
+		t.Fatal(e)
+	}
+	if _, e := os.Stat(dst); e != nil {
+		t.Fatal("a refused backup removed a directory it did not create:", e)
+	}
+}

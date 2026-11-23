@@ -8,7 +8,8 @@
 | `fsync` the temp file | sync error | same as above | `TestRetentionFaultBeforeRename` |
 | `rename` over `journal.v1` | rename error | same as above | `TestRetentionFaultBeforeRename` |
 | `fsync` the directory | directory sync error | Retention **took effect** but `Retain` returns an error; old readers get `ErrExpired`; reopening keeps the new floor | `TestRetentionFaultDirectorySync` |
-| Process death at each of the four steps | data directory copied at the step and opened | Before the rename: full old history and checkpoints. After the rename: retained history and checkpoints. Never a mix. A leftover `.retention-*` temp file does not prevent opening | `TestRetentionCrashPoints` |
+| Release the replaced file (`truncate`, after the rename and directory sync) | truncate error | Retention took effect; the journal stops acknowledging writes until reopen, like a directory sync failure; reopening keeps the new floor | `TestRetentionFaultTruncate` |
+| Process death at each of the five steps | data directory copied at the step and opened | Before the rename: full old history and checkpoints. After the rename (dirsync, truncate): retained history and checkpoints. Never a mix. A leftover `.retention-*` temp file does not prevent opening | `TestRetentionCrashPoints` |
 
 Producer behaviour (`TestRetentionGroupsFloorsAndIDs`): a group with no checkpoint starts at offset 0 and gets `ErrExpired` below the floor; repeating `Retain` with the same floor is a no-op; a lower floor is `ErrInvalid`; an ID whose record expired is accepted as a new record, while an ID still retained returns the original; an emptied partition keeps counting offsets; a backup taken before retention keeps the whole history and one taken after honours the floor.
 

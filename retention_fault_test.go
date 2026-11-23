@@ -203,7 +203,7 @@ func TestRetentionCrashPoints(t *testing.T) {
 	if e := n.Retain(ctx, map[Partition]int64{p: 2}); e != nil {
 		t.Fatal(e)
 	}
-	for _, need := range []string{"write-1", "sync", "rename", "dirsync"} {
+	for _, need := range []string{"write-1", "sync", "rename", "dirsync", "truncate"} {
 		if snaps[need] == "" {
 			t.Fatalf("crash point %s not exercised (%v)", need, len(snaps))
 		}
@@ -213,7 +213,8 @@ func TestRetentionCrashPoints(t *testing.T) {
 		if e != nil {
 			t.Fatalf("crash at %s: reopen failed: %v", label, e)
 		}
-		if label == "dirsync" {
+		// dirsync and truncate run after the rename: a crash there leaves the retained state.
+		if label == "dirsync" || label == "truncate" {
 			wantRetained(t, m, "crash at "+label)
 		} else {
 			wantOldHistory(t, m, "crash at "+label)

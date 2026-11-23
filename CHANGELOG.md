@@ -65,3 +65,17 @@ The final source package passed `make release` and `make release-check`, includi
 | Consumer coordination | Applications assign workers to partitions. The task queue example implements immediate retries. Dynamic balancing, worker leases, and scheduled delivery remain outside its scope. |
 | Batch transport | `Node.ReadBatch` and database-backed `BatchReader` implementations support pages. `Mesh` uses the single-record peer protocol. |
 | Performance evidence | The proposed **100 durable publishes/s for one hour** test, with two checkpointing consumer groups, remains an acceptance target. This changelog records no completed run of that benchmark. |
+
+## 0.3.0 candidate — Burst publishing, dynamic topics, retention and telemetry (unreleased)
+
+- Documented durable claims, recipient batching, retry scheduling and separate body storage in `docs/delivery-workload.md`.
+- Added a mergeable, fixed-memory latency histogram. The burst harness now reports percentile upper bounds using worker-local counters and avoids retaining and sorting every batch latency.
+- Added `Node.PublishBatch` for up to 1,024 local-owner records and a 4 MiB budget. New journal frames share a sync. Stable IDs support retry after a partially written batch. Success does not provide an atomic multi-record transaction.
+- Added opt-in dynamic topic names through a wildcard manifest, with independent partition offsets and topic-hashed placement. The mode is exclusive with named-topic declarations.
+- Reduced per-stream allocations by creating wake channels and checkpoint maps lazily and storing the first producer ID inline. Added concurrent read locking.
+- Added a reproducible burst, topic-cardinality, checkpointing and recovery workload through `make dev-burst`. Local measurements and limitations are recorded in `docs/burst-results.txt`.
+- Added a mergeable, versioned HyperLogLog sketch with configurable precision and binary serialization for approximate distinct-count telemetry.
+- Added `Node.Backup`, which copies and syncs a consistent journal into a new directory while holding the node lock.
+- Added explicit per-partition `Node.Retain` with checks against existing consumer checkpoints, absolute offset floors, `ErrExpired` for old reads and stable directory locking. Retention rewrites and atomically replaces the journal. Producer IDs expire with deleted records.
+- Added recovery of retained offsets and consumer state on reopen. Recovery scans the retained journal. Independent startup snapshots, an on-disk index, automatic retention scheduling, leases and delivery scheduling remain future work.
+- Added tests for sketches, backup, batch retries, partial frames, notifications, concurrent access, retention, consumer checkpoints and reopening.

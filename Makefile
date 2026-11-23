@@ -25,10 +25,10 @@ test: dev-test ## Run the tests
 dev: dev-fmt-check dev-vet dev-test dev-race dev-build ## Run the complete development checks
 
 dev-fmt: ## Format the Go source
-	@"$(GOFMT)" -w *.go examples/*/*.go
+	@"$(GOFMT)" -w *.go examples/*/*.go sketch/*.go
 
 dev-fmt-check: ## Check formatting without changing files
-	@files=$$("$(GOFMT)" -l *.go examples/*/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
+	@files=$$("$(GOFMT)" -l *.go examples/*/*.go sketch/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
 
 dev-vet: ## Run Go static analysis
 	@"$(GO)" vet ./...
@@ -88,3 +88,13 @@ dev-task-drain: ## Run one worker per partition until the queue drains
 	@"$(GO)" run ./examples/taskqueue "$$QUEUE_DIR" drain
 dev-task-inspect: ## Print completed jobs and dead letters
 	@"$(GO)" run ./examples/taskqueue "$$QUEUE_DIR" inspect
+
+BURST_GROUPS ?= 0
+BURST_DURATION ?= 0s
+BURST_RECORDS ?= 100000
+BURST_TOPICS ?= 100000
+BURST_BATCH ?= 128
+BURST_WORKERS ?= 4
+.PHONY: dev-burst
+dev-burst: ## Benchmark durable ingest and verify all record IDs after restart
+	@"$(GO)" run ./examples/burst -count "$(BURST_RECORDS)" -topics "$(BURST_TOPICS)" -batch "$(BURST_BATCH)" -workers "$(BURST_WORKERS)" -duration "$(BURST_DURATION)" -groups "$(BURST_GROUPS)"

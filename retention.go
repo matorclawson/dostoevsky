@@ -224,10 +224,19 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 		n.j.failed = fmt.Errorf("journal replaced but directory not synced; reopen required: %w", syncErr)
 	}
 	if n.j.failed == nil {
-		// The old inode is unreachable now; free its space but keep its lock.
+		// The old inode is unreachable now. Free its space but never leave it empty or
+		// unfenced: a stale 0.2.x descriptor must read a header it rejects. Overwrite
+		// offset 0 with one complete fence frame, cut the file to that frame and sync.
 		te := retentionFault("truncate")
 		if te == nil {
-			te = old.file.Truncate(0)
+			var frame []byte
+			if frame, te = encodeFrame(entry{Fence: 1}); te == nil {
+				if _, te = old.file.WriteAt(frame, 0); te == nil {
+					if te = old.file.Truncate(int64(len(frame))); te == nil {
+						te = old.file.Sync()
+					}
+				}
+			}
 		}
 		if te != nil {
 			n.j.failed = fmt.Errorf("journal replaced but the old file could not be released; reopen required: %w", te)

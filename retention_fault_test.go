@@ -323,8 +323,9 @@ func TestRetentionKeepsOldInodeLocked(t *testing.T) {
 	if e = syscall.Flock(int(stale.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e == nil {
 		t.Fatal("old inode lockable after retention: a 0.2.x process could write into it")
 	}
-	if info, _ := stale.Stat(); info.Size() != 0 {
-		t.Fatal("old inode space not released:", info.Size())
+	fence, _ := encodeFrame(entry{Fence: 1})
+	if info, _ := stale.Stat(); info.Size() != int64(len(fence)) {
+		t.Fatal("old inode should shrink to one fence frame:", info.Size())
 	}
 	// A second retention replaces the held inode without leaking descriptors or locks.
 	if e = n.Retain(ctx, map[Partition]int64{p: 2}); e != nil {

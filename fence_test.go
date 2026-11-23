@@ -18,6 +18,10 @@ func legacyAccepts(t *testing.T, path string) (bool, int64) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	return legacyAcceptsBytes(b)
+}
+
+func legacyAcceptsBytes(b []byte) (bool, int64) {
 	var at int64
 	for at+20 <= int64(len(b)) {
 		h := b[at : at+20]
@@ -130,4 +134,49 @@ func TestFenceFixture(t *testing.T) {
 		}
 		m.Close()
 	}
+}
+
+// A stale descriptor to a retired journal must always read a header 0.2.x rejects,
+// after each swap and after Close, never an empty file.
+func TestRetiredInodeIsFencedNotEmpty(t *testing.T) {
+	dir := t.TempDir()
+	n := seedRetention(t, dir)
+	path := filepath.Join(dir, "journal.v1")
+	stale1, e := os.Open(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer stale1.Close()
+	read := func(f *os.File, label string) {
+		t.Helper()
+		info, e := f.Stat()
+		if e != nil || info.Size() == 0 {
+			t.Fatalf("%s: retired file empty or unreadable (%v)", label, e)
+		}
+		buf := make([]byte, info.Size())
+		if _, e = f.ReadAt(buf, 0); e != nil {
+			t.Fatal(label, e)
+		}
+		if ok, at := legacyAcceptsBytes(buf); ok || at != 0 {
+			t.Fatalf("%s: a 0.2.x reader would accept the retired file (accepted=%v at %d)", label, ok, at)
+		}
+	}
+	if e = n.Retain(ctx, map[Partition]int64{p: 1}); e != nil {
+		t.Fatal(e)
+	}
+	read(stale1, "after first swap")
+	stale2, e := os.Open(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer stale2.Close()
+	publish(t, n, "x")
+	if e = n.Retain(ctx, map[Partition]int64{p: 2}); e != nil {
+		t.Fatal(e)
+	}
+	read(stale1, "after second swap")
+	read(stale2, "after second swap")
+	n.Close()
+	read(stale1, "after Close")
+	read(stale2, "after Close")
 }

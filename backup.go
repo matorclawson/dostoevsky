@@ -3,13 +3,16 @@ package dostoevsky
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 )
 
 // Backup writes a consistent journal snapshot into a new directory. The node
-// remains locked during the copy. A failed copy leaves a partial destination.
+// remains locked during the copy. The copy is built in a hidden sibling directory,
+// synced, renamed to dir and the parent is synced, so dir either does not exist
+// or holds a complete backup. A failed backup leaves no destination.
 func (n *Node) Backup(ctx context.Context, dir string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -22,10 +25,25 @@ func (n *Node) Backup(ctx context.Context, dir string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.Mkdir(dir, 0700); err != nil {
+	dir = filepath.Clean(dir)
+	if _, err := os.Lstat(dir); err == nil {
+		return fmt.Errorf("backup destination exists: %w", os.ErrExist)
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "journal.v1"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	// Copy into a hidden sibling so the destination name never shows a partial backup.
+	parent := filepath.Dir(dir)
+	stage, err := os.MkdirTemp(parent, ".backup-*")
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			os.RemoveAll(stage)
+		}
+	}()
+	f, err := os.OpenFile(filepath.Join(stage, "journal.v1"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -68,10 +86,23 @@ func (n *Node) Backup(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
-	d, err := os.Open(dir)
+	if err = syncDir(stage); err != nil {
+		return err
+	}
+	if err = os.Rename(stage, dir); err != nil {
+		return err
+	}
+	committed = true
+	// The new directory entry lives in the parent.
+	return syncDir(parent)
+}
+
+// syncDir is a hook so tests can see which directories are synced.
+var syncDir = func(path string) error {
+	d, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer d.Close()
-	return d.Sync()
+	err = d.Sync()
+	return errors.Join(err, d.Close())
 }

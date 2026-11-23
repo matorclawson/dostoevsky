@@ -372,3 +372,44 @@ func TestRetentionManyLargeGroups(t *testing.T) {
 	n.Close()
 	check(openTest(t, dir, config()), "after reopen")
 }
+
+// Retain, publish, Retain, publish and commit on one open node, then reopen: every
+// acknowledgement must survive. The second Retain used to rename onto the first
+// retention's temp path and leave journal.v1 stale.
+func TestRetainTwiceThenReopenKeepsEverything(t *testing.T) {
+	dir := t.TempDir()
+	n := seedRetention(t, dir)
+	if e := n.Retain(ctx, map[Partition]int64{p: 1}); e != nil {
+		t.Fatal(e)
+	}
+	publish(t, n, "e")
+	if e := n.Commit(ctx, p, "g", 2, []byte("s3")); e != nil {
+		t.Fatal(e)
+	}
+	if e := n.Retain(ctx, map[Partition]int64{p: 2}); e != nil {
+		t.Fatal(e)
+	}
+	publish(t, n, "f")
+	if e := n.Commit(ctx, p, "g", 3, []byte("s4")); e != nil {
+		t.Fatal(e)
+	}
+	n.Close()
+	if l := leftovers(t, dir); len(l) != 0 {
+		t.Fatal("temp files left:", l)
+	}
+	m := openTest(t, dir, config())
+	for off, id := range map[int64]string{2: "c", 3: "d", 4: "e", 5: "f"} {
+		if r, e := m.Read(ctx, p, off, false); e != nil || r.ID != id {
+			t.Fatalf("offset %d: %v %v", off, r, e)
+		}
+	}
+	if _, e := m.Read(ctx, p, 1, false); e != ErrExpired {
+		t.Fatal(e)
+	}
+	if pos, e := m.Position(ctx, p, "g"); e != nil || pos.Next != 4 || string(pos.State) != "s4" {
+		t.Fatal(pos, e)
+	}
+	if r := publish(t, m, "g2"); r.Offset != 6 {
+		t.Fatal(r)
+	}
+}

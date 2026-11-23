@@ -63,7 +63,7 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 			}
 		}
 	}
-	dir := filepath.Dir(n.j.file.Name())
+	dir := filepath.Dir(n.j.path)
 	f, err := os.CreateTemp(dir, ".retention-*")
 	if err != nil {
 		return err
@@ -79,7 +79,7 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return err
 	}
-	replacement := &journal{file: f}
+	replacement := &journal{path: n.j.path, file: f}
 	appendFrame := func(ev entry) (location, error) {
 		frame, e := encodeFrame(ev)
 		if e != nil {
@@ -162,7 +162,7 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 	if err = retentionFault("rename"); err != nil {
 		return err
 	}
-	if err = os.Rename(temp, n.j.file.Name()); err != nil {
+	if err = os.Rename(temp, n.j.path); err != nil {
 		return err
 	}
 	installed = true

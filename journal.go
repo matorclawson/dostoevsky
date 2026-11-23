@@ -29,6 +29,7 @@ type location struct {
 	size int
 }
 type journal struct {
+	path   string // canonical journal.v1; file.Name() is a temp name after Retain
 	file   *os.File
 	lock   *os.File
 	end    int64
@@ -48,7 +49,8 @@ func openJournal(dir string) (*journal, error) {
 		lock.Close()
 		return nil, fmt.Errorf("lock data directory: %w", err)
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "journal.v1"), os.O_RDWR|os.O_CREATE, 0600)
+	path := filepath.Join(dir, "journal.v1")
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		lock.Close()
 		return nil, err
@@ -68,7 +70,7 @@ func openJournal(dir string) (*journal, error) {
 		lock.Close()
 		return nil, err
 	}
-	return &journal{file: f, lock: lock}, nil
+	return &journal{path: path, file: f, lock: lock}, nil
 }
 
 func (j *journal) append(e entry) (location, error) {

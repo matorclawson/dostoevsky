@@ -201,10 +201,10 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		}
 		payload = payload[:size]
 		if _, err = io.ReadFull(reader, payload); err != nil {
-			return err
+			return fmt.Errorf("frame at %d: %w", j.end, err)
 		}
 		if crc32.Checksum(payload, crcTable) != binary.BigEndian.Uint32(h[12:]) {
-			return fmt.Errorf("journal checksum mismatch at %d", j.end)
+			return fmt.Errorf("frame at %d: %w", j.end, errors.New("journal checksum mismatch"))
 		}
 		var e entry
 		err = json.Unmarshal(payload, &e)

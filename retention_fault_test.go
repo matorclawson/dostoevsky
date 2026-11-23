@@ -394,8 +394,19 @@ func TestRetainTwiceThenReopenKeepsEverything(t *testing.T) {
 		t.Fatal(e)
 	}
 	n.Close()
-	if l := leftovers(t, dir); len(l) != 0 {
-		t.Fatal("temp files left:", l)
+	var names []string
+	es, e := os.ReadDir(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, f := range es {
+		names = append(names, f.Name())
+	}
+	if len(names) != 2 || names[0] != "journal.lock" || names[1] != "journal.v1" {
+		t.Fatal("directory must hold only journal.lock and journal.v1:", names)
+	}
+	if info, e := os.Stat(filepath.Join(dir, "journal.v1")); e != nil || info.Size() == 0 {
+		t.Fatal("journal.v1 empty or missing:", info, e)
 	}
 	m := openTest(t, dir, config())
 	for off, id := range map[int64]string{2: "c", 3: "d", 4: "e", 5: "f"} {

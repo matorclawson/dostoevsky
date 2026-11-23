@@ -424,3 +424,25 @@ func TestRetainTwiceThenReopenKeepsEverything(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+
+// A failure to release the replaced file is reported like the other post-rename errors.
+func TestRetentionFaultTruncate(t *testing.T) {
+	dir := t.TempDir()
+	n := seedRetention(t, dir)
+	withFault(t, func(stage string) error {
+		if stage == "truncate" {
+			return errInjected
+		}
+		return nil
+	})
+	if e := n.Retain(ctx, map[Partition]int64{p: 2}); !errors.Is(e, errInjected) {
+		t.Fatal("truncate failure not reported:", e)
+	}
+	wantRetained(t, n, "same process")
+	if _, e := n.Publish(ctx, "words", Message{ID: "late"}); !errors.Is(e, errInjected) {
+		t.Fatal("write acknowledged after a failed release:", e)
+	}
+	n.Close()
+	withFault(t, func(string) error { return nil })
+	wantRetained(t, openTest(t, dir, config()), "after reopen")
+}

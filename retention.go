@@ -11,8 +11,9 @@ import (
 )
 
 // retentionFault is a test hook called before each durable step of Retain:
-// "write" (each frame written to the temp file), "sync" (temp file), "rename"
-// and "dirsync". A non-nil result is returned as if the step had failed.
+// "write" (each frame written to the temp file), "sync" (temp file), "rename",
+// "dirsync" and "truncate" (releasing the replaced file). A non-nil result is
+// returned as if the step had failed.
 var retentionFault = func(stage string) error { return nil }
 
 // seedFrameBudget keeps a seed frame well under maxFrame (state is base64 in JSON).
@@ -224,7 +225,13 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 	}
 	if n.j.failed == nil {
 		// The old inode is unreachable now; free its space but keep its lock.
-		old.file.Truncate(0)
+		te := retentionFault("truncate")
+		if te == nil {
+			te = old.file.Truncate(0)
+		}
+		if te != nil {
+			n.j.failed = fmt.Errorf("journal replaced but the old file could not be released; reopen required: %w", te)
+		}
 	}
 	return errors.Join(closeErr, n.j.failed)
 }

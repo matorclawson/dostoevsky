@@ -13,9 +13,11 @@ import (
 	"syscall"
 )
 
-// ErrIncompleteBackup is returned by Open for a directory left by a Backup that
-// was interrupted by a crash. It is not a valid data directory: restore from a
-// complete backup, or delete the directory to start empty.
+// ErrIncompleteBackup is returned by Open for a directory that holds .journal.tmp
+// and no journal.v1. The current Backup never produces that layout (it stages in a
+// hidden sibling directory); the guard remains for directories left by an older or
+// interrupted 0.3.0 candidate, so Open does not silently start an empty node there.
+// Restore from a complete backup, or delete the directory to start empty.
 var ErrIncompleteBackup = errors.New("incomplete backup directory")
 
 const maxFrame = 4 << 20

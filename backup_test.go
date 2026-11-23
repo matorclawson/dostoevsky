@@ -145,8 +145,8 @@ func TestBackupRefusesExistingDirectoryEvenIfEmpty(t *testing.T) {
 	}
 }
 
-// A crash during Backup leaves .journal.tmp and no journal.v1. Open must not turn that
-// into a silent empty node.
+// An older or interrupted 0.3.0 candidate could leave .journal.tmp and no journal.v1
+// (the current Backup cannot). Open must not turn that into a silent empty node.
 func TestOpenRefusesIncompleteBackup(t *testing.T) {
 	dir := t.TempDir()
 	if e := os.WriteFile(filepath.Join(dir, ".journal.tmp"), []byte("partial"), 0600); e != nil {

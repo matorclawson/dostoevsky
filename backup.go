@@ -23,11 +23,12 @@ var ErrBackupNotDurable = errors.New("backup complete but its directory entry ma
 // the final parent sync fails the backup is complete and the error wraps
 // ErrBackupNotDurable.
 //
-// Caller contract: dir must be a new path that no other process creates while
-// Backup runs. The existence check and the rename are two steps, and the
-// standard library has no portable no-replace directory rename, so a process
-// that creates an empty directory at exactly that path in between would be
-// replaced.
+// Caller contract: dir must be a new path that stays under the caller's control
+// until Backup returns. No other process, and no other goroutine of this process
+// (including a concurrent Backup to the same path), may create or use that path
+// meanwhile. The existence check and the rename are two steps, and the standard
+// library has no portable no-replace directory rename, so something that creates an
+// empty directory at exactly that path in between would be replaced.
 func (n *Node) Backup(ctx context.Context, dir string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()

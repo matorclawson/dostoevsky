@@ -13,24 +13,42 @@ import (
 	"syscall"
 )
 
+// ErrIncompleteBackup is returned by Open for a directory that holds .journal.tmp
+// and no journal.v1. The current Backup never produces that layout (it stages in a
+// hidden sibling directory); the guard remains for directories left by an older or
+// interrupted 0.3.0 candidate, so Open does not silently start an empty node there.
+// Restore from a complete backup, or delete the directory to start empty.
+var ErrIncompleteBackup = errors.New("incomplete backup directory")
+
 const maxFrame = 4 << 20
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
-var signature = []byte("DOST0001")
+
+// Frames written by 0.3.0 carry signatureV2. A 0.2.x binary rejects any other
+// signature in recover() with "invalid journal header" and does not modify the
+// file, so a directory 0.3.0 has opened can never be reopened by 0.2.x. 0.3.0
+// reads both signatures.
+var signature = []byte("DOST0002")
+var signatureV1 = []byte("DOST0001")
 
 type entry struct {
-	Config *Config     `json:",omitempty"`
-	Record *Record     `json:",omitempty"`
-	Check  *checkpoint `json:",omitempty"`
+	Config *Config        `json:",omitempty"`
+	Record *Record        `json:",omitempty"`
+	Seed   *retentionSeed `json:",omitempty"`
+	Check  *checkpoint    `json:",omitempty"`
+	Fence  int            `json:",omitempty"` // marker frame written when 0.3.0 first opens a 0.2.x journal
 }
 type location struct {
 	at   int64
 	size int
 }
 type journal struct {
+	path   string // canonical journal.v1; file.Name() is a temp name after Retain
 	file   *os.File
+	lock   *os.File
 	end    int64
 	failed error
+	fenced bool // the file holds at least one signatureV2 frame
 }
 
 // One file descriptor owns the advisory lock for the lifetime of the node.
@@ -38,12 +56,28 @@ func openJournal(dir string) (*journal, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "journal.v1"), os.O_RDWR|os.O_CREATE, 0600)
+	if _, err := os.Stat(filepath.Join(dir, "journal.v1")); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(filepath.Join(dir, ".journal.tmp")); err == nil {
+			return nil, fmt.Errorf("%w: %s holds .journal.tmp and no journal.v1", ErrIncompleteBackup, dir)
+		}
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, "journal.lock"), os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("lock data directory: %w", err)
+	}
+	path := filepath.Join(dir, "journal.v1")
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		lock.Close()
 		return nil, err
 	}
 	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
+		lock.Close()
 		return nil, fmt.Errorf("lock data directory: %w", err)
 	}
 	d, err := os.Open(dir)
@@ -53,9 +87,10 @@ func openJournal(dir string) (*journal, error) {
 	}
 	if err != nil {
 		f.Close()
+		lock.Close()
 		return nil, err
 	}
-	return &journal{file: f}, nil
+	return &journal{path: path, file: f, lock: lock}, nil
 }
 
 func (j *journal) append(e entry) (location, error) {
@@ -63,29 +98,43 @@ func (j *journal) append(e entry) (location, error) {
 	if j.failed != nil {
 		return loc, j.failed
 	}
-	b, err := json.Marshal(e)
+	frame, err := encodeFrame(e)
 	if err != nil {
 		return loc, err
 	}
+	loc = location{j.end + 20, len(frame) - 20}
+	return loc, j.writeFrames(frame)
+}
+func encodeFrame(e entry) ([]byte, error) {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return nil, err
+	}
 	if len(b) > maxFrame {
-		return loc, ErrLimit
+		return nil, ErrLimit
 	}
 	h := make([]byte, 20, 20+len(b))
 	copy(h, signature)
 	binary.BigEndian.PutUint32(h[8:], uint32(len(b)))
 	binary.BigEndian.PutUint32(h[12:], crc32.Checksum(b, crcTable))
 	binary.BigEndian.PutUint32(h[16:], crc32.Checksum(h[:16], crcTable))
-	_, err = j.file.WriteAt(append(h, b...), j.end)
+	return append(h, b...), nil
+}
+func (j *journal) writeFrames(frames []byte) error {
+	if j.failed != nil {
+		return j.failed
+	}
+	_, err := j.file.WriteAt(frames, j.end)
 	if err == nil {
 		err = j.file.Sync()
 	}
 	if err != nil {
 		j.failed = fmt.Errorf("journal write requires reopen: %w", err)
-		return loc, j.failed
+		return j.failed
 	}
-	loc = location{j.end + 20, len(b)}
-	j.end += int64(20 + len(b))
-	return loc, nil
+	j.end += int64(len(frames))
+	j.fenced = true
+	return nil
 }
 func (j *journal) read(loc location) (entry, error) {
 	var e entry
@@ -100,7 +149,7 @@ func (j *journal) read(loc location) (entry, error) {
 	return e, err
 }
 func validHeader(h []byte) bool {
-	return bytes.Equal(h[:8], signature) && binary.BigEndian.Uint32(h[16:]) == crc32.Checksum(h[:16], crcTable)
+	return (bytes.Equal(h[:8], signature) || bytes.Equal(h[:8], signatureV1)) && binary.BigEndian.Uint32(h[16:]) == crc32.Checksum(h[:16], crcTable)
 }
 func (j *journal) recover(apply func(entry, location) error) error {
 	info, err := j.file.Stat()
@@ -135,13 +184,23 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		if err = apply(e, loc); err != nil {
 			return fmt.Errorf("replay at %d: %w", j.end, err)
 		}
+		// Only a complete frame that passed its checksum and replay counts as a fence.
+		if bytes.Equal(h[:8], signature) {
+			j.fenced = true
+		}
 		j.end = next
 	}
 	if j.end != info.Size() {
 		if err = j.file.Truncate(j.end); err != nil {
 			return err
 		}
-		return j.file.Sync()
 	}
-	return nil
+	// Frames a crashed process wrote but never synced can sit in the page cache.
+	// Make everything recovery accepted durable before any retry is acknowledged.
+	return syncFile(j.file)
 }
+
+// syncFile is a hook so tests can observe that recovery syncs.
+var syncFile = func(f *os.File) error { return f.Sync() }
+
+func (j *journal) close() error { return errors.Join(j.file.Close(), j.lock.Close()) }

@@ -1,0 +1,54 @@
+Go 1.24.4 linux/amd64; GOMAXPROCS=2; four concurrent producers; single owner. Independent local runs; shared host. RSS is peak across process lifetime, heap is sampled after GC.
+Sandbox workspace overlay filesystem: burst comparisons
+count=10000 topics=1 batch=1 workers=4 ingest=2.634864343s records/s=3795 liveHeapMiB=0.9 journalMiB=3.0
+reopen 48.421673ms
+verified 10000
+count=10000 topics=1 batch=128 workers=4 ingest=78.844585ms records/s=126832 liveHeapMiB=0.8 journalMiB=3.0
+reopen 44.722241ms
+verified 10000
+count=1000000 topics=1000000 batch=128 workers=4 ingest=10.416713562s records/s=96000 liveHeapMiB=193.7 journalMiB=308.6
+reopen 5.644688067s
+verified 1000000
+count=100000 topics=100000 batch=128 workers=4 ingest=833.93007ms records/s=119914 liveHeapMiB=15.9 journalMiB=30.6
+reopen 555.447652ms
+verified 100000
+Workspace overlay: one-minute scheduled arrivals
+batches=7813 scheduled-to-ack p95=8.092971ms p99=43.945377ms
+count=1000000 topics=1000000 batch=128 workers=4 ingest=59.99699924s records/s=16668 liveHeapMiB=193.8 journalMiB=308.6
+reopen 5.741885947s
+verified 1000000
+Workspace overlay: live batch readers and checkpoints
+groups=2 all checkpoints complete after 1.795581451s
+batches=782 scheduled-to-ack p95=4.993823ms p99=6.757599ms
+count=100000 topics=1 batch=128 workers=4 ingest=756.632102ms records/s=132165 liveHeapMiB=6.1 journalMiB=30.7
+reopen 464.218186ms
+verified 100000
+Tmpfs: in-memory storage comparison, not disk performance
+count=10000 topics=1 batch=1 workers=4 ingest=46.628528ms records/s=214461 liveHeapMiB=0.8 journalMiB=3.0
+reopen 59.353335ms
+verified 10000
+peakRSS_KiB= 10556
+count=10000 topics=1 batch=128 workers=4 ingest=39.928402ms records/s=250448 liveHeapMiB=0.8 journalMiB=3.0
+reopen 55.060019ms
+verified 10000
+peakRSS_KiB= 10704
+count=100000 topics=100000 batch=128 workers=4 ingest=502.246192ms records/s=199106 liveHeapMiB=15.9 journalMiB=30.6
+reopen 491.696588ms
+verified 100000
+peakRSS_KiB= 45668
+count=1000000 topics=1000000 batch=128 workers=4 ingest=5.983887024s records/s=167115 liveHeapMiB=193.8 journalMiB=308.6
+reopen 5.696604046s
+verified 1000000
+peakRSS_KiB= 472644
+count=1000000 topics=1 batch=128 workers=4 ingest=3.8907306s records/s=257021 liveHeapMiB=77.9 journalMiB=308.6
+reopen 5.786408966s
+verified 1000000
+peakRSS_KiB= 197252
+Attached baseline, tmpfs, 100000 predeclared topics with one ID each: liveHeapMiB=61.4, ingest=601.568249ms, reopen=818.443732ms; verified 100000. The new wildcard workload avoids this predeclared manifest.
+
+Fixed-memory latency histogram validation, Linux tmpfs, GOMAXPROCS=2, unpaced, 4 producers, 128 records per batch.
+Earlier latency receipts report exact nearest ranks. The following values are histogram upper bounds.
+batches=7813 scheduled-to-ack p95<=9.961471ms p99<=30.408703ms
+count=1000000 topics=1000000 batch=128 workers=4 ingest=5.838302835s records/s=171283 liveHeapMiB=193.6 journalMiB=308.6
+reopen 6.281613322s
+verified 1000000

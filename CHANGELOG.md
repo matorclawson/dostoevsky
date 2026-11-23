@@ -4,11 +4,6 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
-## Unreleased
-
-- **Module path is now `github.com/rodriveracom/dostoevsky`.** Dostoevsky is a standalone community project. Update your import paths and `go.mod`; GitHub redirects the old repository URL.
-- README: added install and contribute sections.
-
 ## 0.1.0 — Embedded topics, durable storage, and stream processing
 
 - **Added an embedded Go module.** Reviewed the supplied Faust source and its word-count example, then implemented keyed streams and recoverable processor state in Go. A single-process application opens a data directory. Kafka, Flink, RocksDB, and a separately deployed broker are unnecessary.
@@ -50,12 +45,14 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 - **Added offline replay.** `make dev-openai-replay` reads recorded events from offset zero without credentials or another billable API request. An interrupted stream leaves a replayable prefix and reports incomplete termination.
 - **Verified the HTTP behavior with local fixtures.** Tests cover both request paths, streamed event parsing, and a disconnect before completion. **Live OpenAI execution remains unverified.**
 
-## 0.2.3 — Durable background task queue example
+## 0.2.3 — Durable background task queue example (22 November 2026)
 
 - **Added `examples/taskqueue`** with `make dev-task-enqueue`, `make dev-task-drain`, and `make dev-task-inspect`. A producer can submit a named job and exit. A later worker process drains the durable queue.
 - **Demonstrated partitioned workers and acknowledgments.** Four partitions share one consumer group, with one worker goroutine per partition. The worker publishes a result, retry, or dead letter before committing the input offset.
 - **Demonstrated three job outcomes end to end.** A SHA-256 task succeeds on its first attempt. A simulated transient failure succeeds on attempt two. A persistent failure produces a dead letter on attempt three with the original input and failure reason. Unknown tasks go directly to dead letters.
 - **Tested the critical restart window.** After outcome publication and before acknowledgment, an interruption causes the handler to run again on restart. Stable IDs deduplicate the example’s retry and result publications. External effects such as sending email still require idempotency at the destination.
+- **Module path is now `github.com/rodriveracom/dostoevsky`.** Dostoevsky is a standalone community project. Update your import paths and `go.mod`; GitHub redirects the old repository URL.
+- README: added install and contribute sections.
 
 ## Verification and operating limits at 0.2.3
 
@@ -68,3 +65,21 @@ The final source package passed `make release` and `make release-check`, includi
 | Consumer coordination | Applications assign workers to partitions. The task queue example implements immediate retries. Dynamic balancing, worker leases, and scheduled delivery remain outside its scope. |
 | Batch transport | `Node.ReadBatch` and database-backed `BatchReader` implementations support pages. `Mesh` uses the single-record peer protocol. |
 | Performance evidence | The proposed **100 durable publishes/s for one hour** test, with two checkpointing consumer groups, remains an acceptance target. This changelog records no completed run of that benchmark. |
+
+## 0.3.0 candidate — Burst publishing, dynamic topics, retention and telemetry (unreleased)
+
+- Documented durable claims, recipient batching, retry scheduling and separate body storage in `docs/delivery-workload.md`.
+- Added a mergeable, fixed-memory latency histogram. The burst harness now reports percentile upper bounds using worker-local counters and avoids retaining and sorting every batch latency.
+- Added `Node.PublishBatch` for up to 1,024 local-owner records and a 4 MiB budget. New journal frames share a sync. Stable IDs support retry after a partially written batch. Success does not provide an atomic multi-record transaction.
+- Added opt-in dynamic topic names through a wildcard manifest, with independent partition offsets and topic-hashed placement. The mode is exclusive with named-topic declarations.
+- Reduced per-stream allocations by creating wake channels and checkpoint maps lazily and storing the first producer ID inline. Added concurrent read locking.
+- Added a reproducible burst, topic-cardinality, checkpointing and recovery workload through `make dev-burst`. Local measurements and limitations are recorded in `docs/burst-results.txt`.
+- Added a mergeable, versioned HyperLogLog sketch with configurable precision and binary serialization for approximate distinct-count telemetry.
+- Added `Node.Backup`, which copies and syncs a consistent journal into a new directory while holding the node lock.
+- Added explicit per-partition `Node.Retain` with checks against existing consumer checkpoints, absolute offset floors, `ErrExpired` for old reads and stable directory locking. Retention rewrites and atomically replaces the journal. Producer IDs expire with deleted records.
+- Added recovery of retained offsets and consumer state on reopen. Recovery scans the retained journal. Independent startup snapshots, an on-disk index, automatic retention scheduling, leases and delivery scheduling remain future work.
+- Added tests for sketches, backup, batch retries, partial frames, notifications, concurrent access, retention, consumer checkpoints and reopening.
+- **Storage-format and upgrade notes.** `Retain` replaces `journal.v1` with a new file. 0.2.x locks only `journal.v1` and does not know the replacement protocol, so as a second line of defence, while a 0.3.0 node runs, the replaced file stays open and locked (cut to one complete `DOST0002` fence frame, so its space is released and a stale 0.2.x descriptor reads a header it rejects) until the next `Retain` or `Close`, so a 0.2.x process that opened the old file just before a replacement cannot lock it. Upgrading is one way; keep a `Backup` taken by the old version before first running `Retain`.
+- **Mixed-version limits.** Peers speak the single-record wire protocol, and a peer running 0.2.x does not know `ErrExpired`: a read below a retention floor reaches it as an unrecognised error rather than a distinct expiry. Upgrade all peers before enabling `Retain`, and treat `ErrExpired` as end of history, not as a transient error.
+- **0.3.0 directories cannot be opened by 0.2.x.** New frames carry the signature `DOST0002`, which 0.2.x rejects with `invalid journal header` without modifying the file. A 0.2.x journal gets a marker frame the first time 0.3.0 opens it. Downgrading means restoring a backup taken before the upgrade. `sh scripts/fence-check.sh` proves this with an unmodified 0.2.3 binary.
+- **Fail-closed journal.** A failed directory sync after a retention swap, or a failed write, stops further writes until the node is reopened. Recovery now always syncs the journal before serving.

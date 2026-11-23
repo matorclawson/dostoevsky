@@ -213,3 +213,51 @@ func TestQueuedAdmissionAndCancel(t *testing.T) {
 		}
 	}
 }
+
+// Group commit and repeated compaction share one node: every acknowledged
+// record keeps its offset and payload across Retain calls and a reopen.
+func TestConcurrentPublishAcrossRetainAndReopen(t *testing.T) {
+	dir := t.TempDir()
+	n := openTest(t, dir, config())
+	const workers, each = 8, 40
+	acked := make(chan Record, workers*each)
+	done := make(chan struct{})
+	for w := 0; w < workers; w++ {
+		go func(w int) {
+			defer func() { done <- struct{}{} }()
+			for i := 0; i < each; i++ {
+				id := fmt.Sprintf("w%d-%d", w, i)
+				r, e := n.Publish(ctx, p.Topic, Message{ID: id, Value: []byte(id)})
+				if e != nil {
+					t.Errorf("publish %s: %v", id, e)
+					return
+				}
+				acked <- r
+			}
+		}(w)
+	}
+	for i := 0; i < 2; i++ {
+		if e := n.Retain(ctx, map[Partition]int64{}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	for w := 0; w < workers; w++ {
+		<-done
+	}
+	close(acked)
+	if e := n.Close(); e != nil {
+		t.Fatal(e)
+	}
+	n = openTest(t, dir, config())
+	count := 0
+	for r := range acked {
+		count++
+		got, e := n.Read(ctx, p, r.Offset, false)
+		if e != nil || got.ID != r.ID || string(got.Value) != r.ID {
+			t.Fatalf("offset %d: %v %q", r.Offset, e, got.ID)
+		}
+	}
+	if count != workers*each {
+		t.Fatalf("acknowledged %d, want %d", count, workers*each)
+	}
+}

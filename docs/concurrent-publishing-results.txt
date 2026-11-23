@@ -1,0 +1,72 @@
+5878ad62cdca7ed4a5ef0e64f39bd50329f27c8b5cf6ffa7b1cce0faf3d8f348  fast
+bb671330805e29c23080a1508be18b6eecc25d27d7c0cb43de90c378db304e1d  baseline
+05ecc083d13e610e9963a43877d6c20459ef39757286dd6106d3d1bf66d88c55  jet
+
+# final-short
+binary=baseline engine=dostoevsky workers=1 verified=4000 records/s=4426 p95_us=344 p99_us=474 liveHeap_KiB=333 peakRSS_KiB=10296 reopen_ms=13.24 verified_reads_per_s=255827
+binary=fast engine=dostoevsky workers=1 verified=4000 records/s=3661 p95_us=439 p99_us=773 liveHeap_KiB=334 peakRSS_KiB=10056 reopen_ms=29.96 verified_reads_per_s=220097
+binary=jet engine=jetstream workers=1 verified=4000 records/s=2984 p95_us=492 p99_us=1426 liveHeap_KiB=6365 peakRSS_KiB=26364 reopen_ms=3.87 verified_reads_per_s=23606
+binary=baseline engine=dostoevsky workers=8 verified=4000 records/s=3529 p95_us=3939 p99_us=8356 liveHeap_KiB=351 peakRSS_KiB=10168 reopen_ms=15.21 verified_reads_per_s=270012
+binary=fast engine=dostoevsky workers=8 verified=4000 records/s=13829 p95_us=907 p99_us=3075 liveHeap_KiB=344 peakRSS_KiB=11112 reopen_ms=12.27 verified_reads_per_s=262825
+binary=jet engine=jetstream workers=8 verified=4000 records/s=3700 p95_us=3241 p99_us=5408 liveHeap_KiB=6381 peakRSS_KiB=26364 reopen_ms=3.74 verified_reads_per_s=10686
+binary=baseline engine=dostoevsky workers=32 verified=4000 records/s=3020 p95_us=14987 p99_us=25061 liveHeap_KiB=366 peakRSS_KiB=10424 reopen_ms=13.25 verified_reads_per_s=224692
+binary=fast engine=dostoevsky workers=32 verified=4000 records/s=32161 p95_us=2550 p99_us=3644 liveHeap_KiB=356 peakRSS_KiB=11392 reopen_ms=15.63 verified_reads_per_s=240636
+binary=jet engine=jetstream workers=32 verified=4000 records/s=2647 p95_us=19076 p99_us=60174 liveHeap_KiB=6416 peakRSS_KiB=26620 reopen_ms=4.05 verified_reads_per_s=19331
+binary=fast engine=dostoevsky workers=1 verified=4000 records/s=2868 p95_us=607 p99_us=2496 liveHeap_KiB=334 peakRSS_KiB=10440 reopen_ms=16.60 verified_reads_per_s=208570
+binary=jet engine=jetstream workers=1 verified=4000 records/s=2263 p95_us=733 p99_us=2733 liveHeap_KiB=6394 peakRSS_KiB=26748 reopen_ms=3.97 verified_reads_per_s=20872
+binary=baseline engine=dostoevsky workers=1 verified=4000 records/s=3366 p95_us=436 p99_us=1792 liveHeap_KiB=334 peakRSS_KiB=10424 reopen_ms=21.21 verified_reads_per_s=126145
+binary=fast engine=dostoevsky workers=8 verified=4000 records/s=12975 p95_us=972 p99_us=3158 liveHeap_KiB=342 peakRSS_KiB=10824 reopen_ms=15.35 verified_reads_per_s=126612
+binary=jet engine=jetstream workers=8 verified=4000 records/s=3279 p95_us=4227 p99_us=7570 liveHeap_KiB=6377 peakRSS_KiB=26620 reopen_ms=3.63 verified_reads_per_s=28251
+binary=baseline engine=dostoevsky workers=8 verified=4000 records/s=3578 p95_us=4424 p99_us=7162 liveHeap_KiB=351 peakRSS_KiB=10808 reopen_ms=18.53 verified_reads_per_s=286366
+binary=fast engine=dostoevsky workers=32 verified=4000 records/s=39454 p95_us=1444 p99_us=3764 liveHeap_KiB=359 peakRSS_KiB=10692 reopen_ms=13.56 verified_reads_per_s=234805
+binary=jet engine=jetstream workers=32 verified=4000 records/s=3625 p95_us=13817 p99_us=20414 liveHeap_KiB=6408 peakRSS_KiB=26748 reopen_ms=4.53 verified_reads_per_s=24389
+binary=baseline engine=dostoevsky workers=32 verified=4000 records/s=3572 p95_us=12406 p99_us=22190 liveHeap_KiB=365 peakRSS_KiB=10552 reopen_ms=12.73 verified_reads_per_s=210152
+binary=jet engine=jetstream workers=1 verified=4000 records/s=2953 p95_us=515 p99_us=912 liveHeap_KiB=6364 peakRSS_KiB=26748 reopen_ms=13.14 verified_reads_per_s=24329
+binary=baseline engine=dostoevsky workers=1 verified=4000 records/s=3354 p95_us=484 p99_us=1111 liveHeap_KiB=333 peakRSS_KiB=10680 reopen_ms=19.50 verified_reads_per_s=187862
+binary=fast engine=dostoevsky workers=1 verified=4000 records/s=2505 p95_us=812 p99_us=2493 liveHeap_KiB=333 peakRSS_KiB=9928 reopen_ms=25.75 verified_reads_per_s=130273
+binary=jet engine=jetstream workers=8 verified=4000 records/s=2830 p95_us=5602 p99_us=8384 liveHeap_KiB=6390 peakRSS_KiB=26492 reopen_ms=4.26 verified_reads_per_s=22319
+binary=baseline engine=dostoevsky workers=8 verified=4000 records/s=3640 p95_us=3014 p99_us=4456 liveHeap_KiB=344 peakRSS_KiB=10680 reopen_ms=13.25 verified_reads_per_s=269174
+binary=fast engine=dostoevsky workers=8 verified=4000 records/s=12406 p95_us=1141 p99_us=3381 liveHeap_KiB=346 peakRSS_KiB=11032 reopen_ms=17.26 verified_reads_per_s=175428
+binary=jet engine=jetstream workers=32 verified=4000 records/s=3120 p95_us=18413 p99_us=26299 liveHeap_KiB=6414 peakRSS_KiB=26876 reopen_ms=3.39 verified_reads_per_s=23921
+binary=baseline engine=dostoevsky workers=32 verified=4000 records/s=3266 p95_us=13140 p99_us=20622 liveHeap_KiB=364 peakRSS_KiB=10808 reopen_ms=12.22 verified_reads_per_s=246751
+binary=fast engine=dostoevsky workers=32 verified=4000 records/s=40734 p95_us=1097 p99_us=3387 liveHeap_KiB=356 peakRSS_KiB=11464 reopen_ms=13.10 verified_reads_per_s=267192
+binary=jet engine=jetstream workers=1 verified=4000 records/s=2255 p95_us=875 p99_us=2868 liveHeap_KiB=5341 peakRSS_KiB=26088 reopen_ms=5.62 verified_reads_per_s=19202
+binary=fast engine=dostoevsky workers=1 verified=4000 records/s=4030 p95_us=359 p99_us=491 liveHeap_KiB=333 peakRSS_KiB=10056 reopen_ms=14.95 verified_reads_per_s=213147
+binary=baseline engine=dostoevsky workers=1 verified=4000 records/s=4040 p95_us=376 p99_us=693 liveHeap_KiB=333 peakRSS_KiB=10168 reopen_ms=14.03 verified_reads_per_s=259354
+binary=jet engine=jetstream workers=8 verified=4000 records/s=3739 p95_us=3747 p99_us=5908 liveHeap_KiB=6409 peakRSS_KiB=26748 reopen_ms=3.09 verified_reads_per_s=21126
+binary=fast engine=dostoevsky workers=8 verified=4000 records/s=10456 p95_us=1555 p99_us=4702 liveHeap_KiB=344 peakRSS_KiB=10696 reopen_ms=18.63 verified_reads_per_s=282956
+binary=baseline engine=dostoevsky workers=8 verified=4000 records/s=3464 p95_us=4176 p99_us=6993 liveHeap_KiB=351 peakRSS_KiB=10424 reopen_ms=13.10 verified_reads_per_s=268272
+binary=jet engine=jetstream workers=32 verified=4000 records/s=3379 p95_us=14103 p99_us=18815 liveHeap_KiB=6418 peakRSS_KiB=26876 reopen_ms=4.22 verified_reads_per_s=24990
+binary=fast engine=dostoevsky workers=32 verified=4000 records/s=32719 p95_us=2223 p99_us=3240 liveHeap_KiB=358 peakRSS_KiB=10796 reopen_ms=12.43 verified_reads_per_s=229066
+binary=baseline engine=dostoevsky workers=32 verified=4000 records/s=3186 p95_us=14030 p99_us=33106 liveHeap_KiB=366 peakRSS_KiB=11064 reopen_ms=45.79 verified_reads_per_s=221270
+binary=baseline engine=dostoevsky workers=1 verified=4000 records/s=3635 p95_us=434 p99_us=825 liveHeap_KiB=333 peakRSS_KiB=10168 reopen_ms=12.79 verified_reads_per_s=282023
+binary=jet engine=jetstream workers=1 verified=4000 records/s=2735 p95_us=664 p99_us=1501 liveHeap_KiB=6398 peakRSS_KiB=26620 reopen_ms=3.90 verified_reads_per_s=25955
+binary=fast engine=dostoevsky workers=1 verified=4000 records/s=3448 p95_us=452 p99_us=1117 liveHeap_KiB=334 peakRSS_KiB=10184 reopen_ms=14.68 verified_reads_per_s=201928
+binary=baseline engine=dostoevsky workers=8 verified=4000 records/s=3061 p95_us=4132 p99_us=7619 liveHeap_KiB=351 peakRSS_KiB=10936 reopen_ms=12.50 verified_reads_per_s=276899
+binary=jet engine=jetstream workers=8 verified=4000 records/s=3448 p95_us=4150 p99_us=6409 liveHeap_KiB=6377 peakRSS_KiB=26492 reopen_ms=5.75 verified_reads_per_s=20216
+binary=fast engine=dostoevsky workers=8 verified=4000 records/s=11588 p95_us=1532 p99_us=3413 liveHeap_KiB=346 peakRSS_KiB=10568 reopen_ms=15.55 verified_reads_per_s=271653
+binary=baseline engine=dostoevsky workers=32 verified=4000 records/s=3251 p95_us=14769 p99_us=24976 liveHeap_KiB=366 peakRSS_KiB=10680 reopen_ms=12.91 verified_reads_per_s=175142
+binary=jet engine=jetstream workers=32 verified=4000 records/s=3266 p95_us=15929 p99_us=20709 liveHeap_KiB=6429 peakRSS_KiB=26876 reopen_ms=4.15 verified_reads_per_s=28200
+binary=fast engine=dostoevsky workers=32 verified=4000 records/s=40129 p95_us=1189 p99_us=3661 liveHeap_KiB=357 peakRSS_KiB=11080 reopen_ms=12.21 verified_reads_per_s=264452
+
+# final-long
+binary=fast engine=dostoevsky workers=8 verified=32000 records/s=12972 p95_us=1054 p99_us=2985 liveHeap_KiB=1299 peakRSS_KiB=11324 reopen_ms=96.11 verified_reads_per_s=293542
+binary=jet engine=jetstream workers=8 verified=32000 records/s=3520 p95_us=3749 p99_us=6302 liveHeap_KiB=9867 peakRSS_KiB=44796 reopen_ms=82.12 verified_reads_per_s=23399
+binary=fast engine=dostoevsky workers=32 verified=32000 records/s=33484 p95_us=2151 p99_us=5761 liveHeap_KiB=1309 peakRSS_KiB=12012 reopen_ms=124.22 verified_reads_per_s=262009
+binary=jet engine=jetstream workers=32 verified=32000 records/s=3751 p95_us=13150 p99_us=29389 liveHeap_KiB=9993 peakRSS_KiB=45464 reopen_ms=32.56 verified_reads_per_s=27825
+binary=jet engine=jetstream workers=8 verified=32000 records/s=3652 p95_us=3628 p99_us=6697 liveHeap_KiB=9901 peakRSS_KiB=44668 reopen_ms=23.87 verified_reads_per_s=21979
+binary=fast engine=dostoevsky workers=8 verified=32000 records/s=13947 p95_us=877 p99_us=1919 liveHeap_KiB=1305 peakRSS_KiB=11336 reopen_ms=103.22 verified_reads_per_s=273259
+binary=jet engine=jetstream workers=32 verified=32000 records/s=4013 p95_us=12343 p99_us=20027 liveHeap_KiB=9940 peakRSS_KiB=45228 reopen_ms=22.70 verified_reads_per_s=25451
+binary=fast engine=dostoevsky workers=32 verified=32000 records/s=44096 p95_us=1028 p99_us=2163 liveHeap_KiB=1314 peakRSS_KiB=11420 reopen_ms=96.77 verified_reads_per_s=274523
+binary=fast engine=dostoevsky workers=8 verified=32000 records/s=12590 p95_us=1142 p99_us=2472 liveHeap_KiB=1306 peakRSS_KiB=11620 reopen_ms=96.66 verified_reads_per_s=213309
+binary=jet engine=jetstream workers=8 verified=32000 records/s=3808 p95_us=3169 p99_us=5438 liveHeap_KiB=9868 peakRSS_KiB=44716 reopen_ms=44.07 verified_reads_per_s=27155
+binary=fast engine=dostoevsky workers=32 verified=32000 records/s=45551 p95_us=1074 p99_us=2181 liveHeap_KiB=1310 peakRSS_KiB=11568 reopen_ms=110.89 verified_reads_per_s=284774
+binary=jet engine=jetstream workers=32 verified=32000 records/s=4162 p95_us=11412 p99_us=14880 liveHeap_KiB=9937 peakRSS_KiB=45236 reopen_ms=15.46 verified_reads_per_s=26345
+
+# isolated
+binary=baseline engine=dostoevsky workers=1 verified=16000 records/s=4354 p95_us=358 p99_us=489 liveHeap_KiB=736 peakRSS_KiB=10668 reopen_ms=50.54 verified_reads_per_s=144882
+binary=fast engine=dostoevsky workers=1 verified=16000 records/s=4282 p95_us=367 p99_us=491 liveHeap_KiB=739 peakRSS_KiB=10696 reopen_ms=58.34 verified_reads_per_s=258043
+binary=fast engine=dostoevsky workers=1 verified=16000 records/s=3808 p95_us=411 p99_us=630 liveHeap_KiB=738 peakRSS_KiB=10752 reopen_ms=87.59 verified_reads_per_s=171213
+binary=baseline engine=dostoevsky workers=1 verified=16000 records/s=4026 p95_us=382 p99_us=507 liveHeap_KiB=739 peakRSS_KiB=10932 reopen_ms=94.65 verified_reads_per_s=244810
+binary=baseline engine=dostoevsky workers=1 verified=16000 records/s=4022 p95_us=397 p99_us=591 liveHeap_KiB=739 peakRSS_KiB=11188 reopen_ms=90.05 verified_reads_per_s=274345
+binary=fast engine=dostoevsky workers=1 verified=16000 records/s=3682 p95_us=480 p99_us=975 liveHeap_KiB=738 peakRSS_KiB=10812 reopen_ms=56.05 verified_reads_per_s=287246

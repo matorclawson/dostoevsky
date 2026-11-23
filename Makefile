@@ -98,3 +98,15 @@ BURST_WORKERS ?= 4
 .PHONY: dev-burst
 dev-burst: ## Benchmark durable ingest and verify all record IDs after restart
 	@"$(GO)" run ./examples/burst -count "$(BURST_RECORDS)" -topics "$(BURST_TOPICS)" -batch "$(BURST_BATCH)" -workers "$(BURST_WORKERS)" -duration "$(BURST_DURATION)" -groups "$(BURST_GROUPS)"
+
+.PHONY: dev-bench-embedded
+dev-bench-embedded: ## Compare synced single-record publishes with embedded JetStream on Linux
+	@sh benchmarks/embedded/run.sh
+
+.PHONY: dev-bench-publish
+dev-bench-publish: ## Measure concurrent durable publication against embedded JetStream on Linux
+	@BENCH_SUITE=concurrent sh benchmarks/embedded/run.sh
+
+.PHONY: dev-bench-publish-gate
+dev-bench-publish-gate: ## Compare median throughput and peak RSS with JetStream at 1, 8 and 32 producers
+	@BENCH_SUITE=gate sh benchmarks/embedded/run.sh

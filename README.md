@@ -173,7 +173,7 @@ Use an ordinary named topic with many keys when consumers share an offset sequen
 
 When a producer already holds a burst, pass a slice of `Publication{Topic: ..., Message: ...}` to `Node.PublishBatch`. A successful call acknowledges all records after one sync for the newly written frames. All items must belong to the local owner. The existing peer protocol supports individual publications. Input errors are detected before writing. A crash or storage error can persist part of a batch. This is usually a prefix, but a crash with out-of-order page writeback can instead leave a frame that fails its checksum, and reopening then reports corruption instead of truncating. Retry the whole slice with stable IDs once the node reopens. This is a durability optimization for independent events; applications needing atomic multi-record transactions must supply that boundary themselves.
 
-One call accepts up to 1,024 items and 4 MiB each of input field bytes and new encoded frames. Choose smaller batches to bound writer occupancy and urgent-message latency. Existing single-message Publish sends immediately. Concurrent readers share the node lock while reading immutable offsets; appends and sync still use one writer per node. Explicit caller batching avoids a hidden unbounded producer queue.
+One call accepts up to 1,024 items and 4 MiB each of input field bytes and new encoded frames. Choose smaller batches to bound writer occupancy and urgent-message latency. An isolated single-message Publish writes immediately. Overlapping calls can share a sync. Concurrent readers share the node lock while reading immutable offsets; appends and sync still use one writer per node. Explicit caller batching avoids a hidden unbounded producer queue.
 
 ~~~sh
 # Put TMPDIR on the volume you intend to measure.
@@ -201,3 +201,11 @@ Retention rewrites the journal while holding the node lock, syncs a replacement,
 Producer IDs attached to deleted records expire at the retention floor. Retrying a deleted ID can publish a new record. Set retention no shorter than the application's producer retry horizon. Records and IDs at or above the floor remain exact. Backups taken before retention preserve the historical journal.
 
 Restart scans the compacted journal. Retention reduces the amount of history to scan. Recovery time still grows with the retained journal, and this version has no independent startup snapshot or on-disk index. Call retention regularly according to the application's storage and replay requirements.
+
+## Performance comparisons
+
+Run `make dev-bench-embedded` on Linux to compare embedded single-node publishers on your disk. Set `TMPDIR` to a directory on the intended volume. The benchmark module requires Go 1.26 or later. See [workloads and measurements](docs/embedded-performance.md).
+
+Concurrent calls to `Node.Publish` can share a journal sync. A lone producer writes immediately. Acknowledgments follow the sync, and messages from different calls keep their own receipts. Run `make dev-bench-publish` on Linux for the [concurrent publishing comparison](docs/concurrent-publishing.md).
+
+Run `make dev-bench-publish-gate` on Linux to compare synchronous publishers at one, eight and 32 producers. The command checks median throughput and peak process memory against embedded JetStream. See [measurements and reproduction](docs/publisher-gate.md).

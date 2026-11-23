@@ -13,7 +13,9 @@ type Publication struct {
 }
 
 // PublishBatch amortizes sync over an explicit burst, preserving input order.
-// A write failure can leave a recoverable prefix. Retry with stable IDs.
+// A write failure or crash can leave some of the batch. Usually that is a prefix, but
+// a crash with out-of-order page writeback can also end in a checksum error on
+// reopen, which stops recovery. Retry with stable IDs after recovery succeeds.
 func (n *Node) PublishBatch(ctx context.Context, items []Publication) ([]Record, error) {
 	if len(items) == 0 {
 		return nil, ErrInvalid

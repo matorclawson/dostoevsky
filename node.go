@@ -72,6 +72,7 @@ type stream struct {
 	groups  map[string]Position
 	changed chan struct{}
 	waiters int
+	seeded  bool // a retention seed set base; further seeds for it may add groups
 }
 
 func (s *stream) lookupID(id string) (int64, bool) {
@@ -240,11 +241,28 @@ func (n *Node) index(e entry, loc location) error {
 		if err != nil {
 			return err
 		}
-		if s.base != 0 || len(s.records) != 0 || len(s.groups) != 0 || seed.Base < 0 {
+		if seed.Base < 0 || len(s.records) != 0 {
 			return ErrConflict
 		}
+		if s.seeded {
+			if s.base != seed.Base {
+				return ErrConflict
+			}
+		} else if s.base != 0 || len(s.groups) != 0 {
+			return ErrConflict
+		}
+		// A partition's groups may arrive in several seed frames of the same base.
+		for g, pos := range seed.Groups {
+			if _, dup := s.groups[g]; dup {
+				return ErrConflict
+			}
+			if s.groups == nil {
+				s.groups = make(map[string]Position)
+			}
+			s.groups[g] = pos
+		}
 		s.base = seed.Base
-		s.groups = seed.Groups
+		s.seeded = true
 		return nil
 	}
 	if r := e.Record; r != nil {

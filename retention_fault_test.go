@@ -1,7 +1,9 @@
 package dostoevsky
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,4 +333,42 @@ func TestRetentionKeepsOldInodeLocked(t *testing.T) {
 	if e = syscall.Flock(int(stale.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
 		t.Fatal("lock still held after Close:", e)
 	}
+}
+
+// Many groups with large states must not make Retain fail on the frame size limit.
+func TestRetentionManyLargeGroups(t *testing.T) {
+	dir := t.TempDir()
+	n := openTest(t, dir, config())
+	publish(t, n, "a")
+	publish(t, n, "b")
+	state := bytes.Repeat([]byte("x"), 900<<10)
+	const groups = 6 // about 7 MB of state, far over one 4 MiB frame
+	for i := 0; i < groups; i++ {
+		if e := n.Commit(ctx, p, fmt.Sprintf("g%d", i), 0, state); e != nil {
+			t.Fatal(e)
+		}
+		if e := n.Commit(ctx, p, fmt.Sprintf("g%d", i), 1, state); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e := n.Retain(ctx, map[Partition]int64{p: 1}); e != nil {
+		t.Fatal("retain with many large group states:", e)
+	}
+	check := func(m *Node, label string) {
+		for i := 0; i < groups; i++ {
+			pos, e := m.Position(ctx, p, fmt.Sprintf("g%d", i))
+			if e != nil || pos.Next != 2 || !bytes.Equal(pos.State, state) {
+				t.Fatalf("%s: group g%d: next %d, err %v", label, i, pos.Next, e)
+			}
+		}
+		if r, e := m.Read(ctx, p, 1, false); e != nil || r.ID != "b" {
+			t.Fatal(label, r, e)
+		}
+		if _, e := m.Read(ctx, p, 0, false); e != ErrExpired {
+			t.Fatal(label, e)
+		}
+	}
+	check(n, "same process")
+	n.Close()
+	check(openTest(t, dir, config()), "after reopen")
 }

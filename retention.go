@@ -15,6 +15,9 @@ import (
 // and "dirsync". A non-nil result is returned as if the step had failed.
 var retentionFault = func(stage string) error { return nil }
 
+// seedFrameBudget keeps a seed frame well under maxFrame (state is base64 in JSON).
+const seedFrameBudget = 2 << 20
+
 type retentionSeed struct {
 	Partition
 	Base   int64
@@ -109,7 +112,26 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 			floor = requested
 		}
 		if floor > 0 || len(s.groups) > 0 {
-			if _, err = appendFrame(entry{Seed: &retentionSeed{Partition: p, Base: floor, Groups: s.groups}}); err != nil {
+			// Each frame is limited to maxFrame, so many large group states are split
+			// over several seeds of the same base; replay merges them.
+			batch := map[string]Position{}
+			size := 0
+			flush := func() error {
+				_, e := appendFrame(entry{Seed: &retentionSeed{Partition: p, Base: floor, Groups: batch}})
+				batch, size = map[string]Position{}, 0
+				return e
+			}
+			for g, pos := range s.groups {
+				cost := len(g) + len(pos.State)*4/3 + 64
+				if size > 0 && size+cost > seedFrameBudget {
+					if err = flush(); err != nil {
+						return err
+					}
+				}
+				batch[g] = pos
+				size += cost
+			}
+			if err = flush(); err != nil {
 				return err
 			}
 		}

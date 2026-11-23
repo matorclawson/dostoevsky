@@ -214,13 +214,16 @@ func TestQueuedAdmissionAndCancel(t *testing.T) {
 	}
 }
 
-// Group commit and repeated compaction share one node: every acknowledged
-// record keeps its offset and payload across Retain calls and a reopen.
+// Group commit and repeated compaction share one node. Each Retain runs only
+// after publishers have acknowledged records, so it compacts a non-empty,
+// concurrently growing journal. Every acknowledged record keeps its offset and
+// payload across both compactions and a reopen.
 func TestConcurrentPublishAcrossRetainAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	n := openTest(t, dir, config())
-	const workers, each = 8, 40
+	const workers, each = 8, 60
 	acked := make(chan Record, workers*each)
+	var progress atomic.Int64
 	done := make(chan struct{})
 	for w := 0; w < workers; w++ {
 		go func(w int) {
@@ -233,12 +236,20 @@ func TestConcurrentPublishAcrossRetainAndReopen(t *testing.T) {
 					return
 				}
 				acked <- r
+				progress.Add(1)
 			}
 		}(w)
 	}
-	for i := 0; i < 2; i++ {
+	for _, floor := range []int64{workers, 4 * workers} {
+		for progress.Load() < floor {
+			time.Sleep(time.Millisecond)
+		}
+		before := progress.Load()
 		if e := n.Retain(ctx, map[Partition]int64{}); e != nil {
 			t.Fatal(e)
+		}
+		if before < floor {
+			t.Fatalf("retained after only %d acknowledgments", before)
 		}
 	}
 	for w := 0; w < workers; w++ {
@@ -249,15 +260,18 @@ func TestConcurrentPublishAcrossRetainAndReopen(t *testing.T) {
 		t.Fatal(e)
 	}
 	n = openTest(t, dir, config())
-	count := 0
+	seen := map[int64]string{}
 	for r := range acked {
-		count++
+		if prev, dup := seen[r.Offset]; dup {
+			t.Fatalf("offset %d acknowledged for %s and %s", r.Offset, prev, r.ID)
+		}
+		seen[r.Offset] = r.ID
 		got, e := n.Read(ctx, p, r.Offset, false)
 		if e != nil || got.ID != r.ID || string(got.Value) != r.ID {
 			t.Fatalf("offset %d: %v %q", r.Offset, e, got.ID)
 		}
 	}
-	if count != workers*each {
-		t.Fatalf("acknowledged %d, want %d", count, workers*each)
+	if len(seen) != workers*each {
+		t.Fatalf("acknowledged %d, want %d", len(seen), workers*each)
 	}
 }

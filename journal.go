@@ -52,6 +52,9 @@ type journal struct {
 	failed error
 	fenced bool   // the file holds at least one signatureV2 frame
 	frame  []byte // scratch for single appends, protected by the node lock
+	// synced is true once the file's size and metadata were made durable with a
+	// full sync. Until then appends use full sync; afterwards fdatasync.
+	synced bool
 }
 
 // One file descriptor owns the advisory lock for the lifetime of the node.
@@ -140,7 +143,11 @@ func (j *journal) writeFrames(frames []byte) error {
 	}
 	_, err := j.file.WriteAt(frames, j.end)
 	if err == nil {
-		err = syncJournalData(j.file)
+		if j.synced {
+			err = syncData(j.file)
+		} else if err = syncFile(j.file); err == nil {
+			j.synced = true
+		}
 	}
 	if err != nil {
 		j.failed = fmt.Errorf("journal write requires reopen: %w", err)
@@ -227,10 +234,19 @@ func (j *journal) recover(apply func(entry, location) error) error {
 	}
 	// Frames a crashed process wrote but never synced can sit in the page cache.
 	// Make everything recovery accepted durable before any retry is acknowledged.
-	return syncFile(j.file)
+	if err = syncFile(j.file); err != nil {
+		return err
+	}
+	j.synced = true
+	return nil
 }
 
-// syncFile is a hook so tests can observe that recovery syncs.
-var syncFile = func(f *os.File) error { return f.Sync() }
+// syncFile is a hook so tests can observe full syncs; syncData is the
+// append-only data sync (fdatasync on Linux) used only once the journal exists
+// durably.
+var (
+	syncFile = func(f *os.File) error { return f.Sync() }
+	syncData = syncJournalData
+)
 
 func (j *journal) close() error { return errors.Join(j.file.Close(), j.lock.Close()) }

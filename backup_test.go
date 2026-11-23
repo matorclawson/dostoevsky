@@ -143,3 +143,30 @@ func TestBackupRefusesExistingDirectoryEvenIfEmpty(t *testing.T) {
 		t.Fatal("a refused backup removed a directory it did not create:", e)
 	}
 }
+
+// A crash during Backup leaves .journal.tmp and no journal.v1. Open must not turn that
+// into a silent empty node.
+func TestOpenRefusesIncompleteBackup(t *testing.T) {
+	dir := t.TempDir()
+	if e := os.WriteFile(filepath.Join(dir, ".journal.tmp"), []byte("partial"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	n, e := Open(dir, config())
+	if !errors.Is(e, ErrIncompleteBackup) {
+		if e == nil {
+			n.Close()
+		}
+		t.Fatal("want ErrIncompleteBackup, got", e)
+	}
+	if _, e := os.Stat(filepath.Join(dir, "journal.v1")); e == nil {
+		t.Fatal("refused open created a journal")
+	}
+	// A directory with a journal is not affected by a stray temp file.
+	good := t.TempDir()
+	m := openTest(t, good, config())
+	m.Close()
+	if e := os.WriteFile(filepath.Join(good, ".journal.tmp"), nil, 0600); e != nil {
+		t.Fatal(e)
+	}
+	openTest(t, good, config())
+}

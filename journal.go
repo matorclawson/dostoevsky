@@ -13,6 +13,11 @@ import (
 	"syscall"
 )
 
+// ErrIncompleteBackup is returned by Open for a directory left by a Backup that
+// was interrupted by a crash. It is not a valid data directory: restore from a
+// complete backup, or delete the directory to start empty.
+var ErrIncompleteBackup = errors.New("incomplete backup directory")
+
 const maxFrame = 4 << 20
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
@@ -48,6 +53,11 @@ type journal struct {
 func openJournal(dir string) (*journal, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
+	}
+	if _, err := os.Stat(filepath.Join(dir, "journal.v1")); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(filepath.Join(dir, ".journal.tmp")); err == nil {
+			return nil, fmt.Errorf("%w: %s holds .journal.tmp and no journal.v1", ErrIncompleteBackup, dir)
+		}
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, "journal.lock"), os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {

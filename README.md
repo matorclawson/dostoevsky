@@ -190,7 +190,7 @@ The workload assigns every 128-byte record a distinct producer ID. It reports in
 
 The standard-library-only `sketch` package provides HyperLogLog with configurable precision from 4 to 18, merge, and versioned binary encoding. It estimates cardinality and is suitable for telemetry. Keep records, producer IDs and delivery decisions exact. The burst harness uses a mergeable `sketch.LatencyHistogram` per producer to report upper bounds for p95 and p99 scheduled-to-ack latency. Each histogram uses 7,688 bytes regardless of run length. Positive percentile bounds have less than 6.25% upward error. Historical receipts used exact sample sorting. Sketches need external synchronization when shared by goroutines.
 
-`Node.Backup(ctx, newDirectory)` copies a consistent journal while holding the node lock. It requires a new directory and syncs the copied journal before returning. Open the resulting directory with the same Config to recover it. Remove any partially created backup after an error. This operation pauses node reads and writes while copying.
+`Node.Backup(ctx, newDirectory)` copies a consistent journal while holding the node lock. It requires a new directory and syncs the copied journal before returning. Open the resulting directory with the same Config to recover it. Remove any partially created backup after an error. This operation pauses node reads and writes while copying. An interrupted copy can leave a directory with `.journal.tmp` and no `journal.v1`; `Open` refuses it with `ErrIncompleteBackup`. Restore from a complete backup, or delete that directory to start empty.
 
 ## Retention and restart recovery
 

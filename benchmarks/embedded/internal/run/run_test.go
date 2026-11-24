@@ -273,3 +273,59 @@ func TestCloseFailureAfterVerificationPrintsNoReceipt(t *testing.T) {
 		t.Error("trial data was not removed")
 	}
 }
+
+// The guard's last sample can return after verification has finished. Success
+// must wait for the guard to exit and then see its result.
+func TestLateGuardSampleStillFailsTheTrial(t *testing.T) {
+	left := withTemp(t)
+	var low atomic.Bool
+	release := make(chan struct{})
+	setMemory(t, func() (uint64, error) {
+		if low.Load() {
+			<-release // this sample is in flight when verification returns
+			return 100 << 10, nil
+		}
+		return 1 << 30, nil
+	})
+	f := newFake()
+	var once sync.Once
+	f.onRead = func() {
+		once.Do(func() {
+			low.Store(true)
+			time.Sleep(150 * time.Millisecond)                              // the guard starts a sample and blocks in it
+			time.AfterFunc(300*time.Millisecond, func() { close(release) }) // delivered only after verification
+		})
+	}
+	var out bytes.Buffer
+	err := execute("fake", opener(f, false), 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "low-memory abort") {
+		t.Fatalf("a late low-memory sample was not reported: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a success line was printed before the guard was joined: %q", out.String())
+	}
+	if left() != 0 || atomic.LoadInt32(f.closeCount) != 2 {
+		t.Errorf("cleanup incomplete: %d entries left, %d closes", left(), atomic.LoadInt32(f.closeCount))
+	}
+}
+
+func TestReceiptStatesTheMemoryCutoff(t *testing.T) {
+	withTemp(t)
+	setMemory(t, func() (uint64, error) { return 1 << 30, nil })
+	var out bytes.Buffer
+	if err := execute("fake", opener(newFake(), false), 5, 1, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), " mem_cutoff_KiB=307200") {
+		t.Errorf("line %q lacks the cutoff", out.String())
+	}
+	// Where available memory is not measured the cutoff did not apply, and the line says so.
+	setMemory(t, func() (uint64, error) { return 0, errNoMeminfo })
+	out.Reset()
+	if err := execute("fake", opener(newFake(), false), 5, 1, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), " mem_cutoff_KiB=unavailable") {
+		t.Errorf("line %q does not say the cutoff was unavailable", out.String())
+	}
+}

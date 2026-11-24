@@ -1,6 +1,6 @@
 // Command redis runs the publisher workload against Redis or Valkey (XADD with
-// the append-only file synced on every write) as a separate server process on
-// loopback. The server binary comes from BENCH_SERVER_BIN and the label on the
+// the append-only file synced on every write) as a separate server process
+// reached over a unix socket in the trial's private directory. The server binary comes from BENCH_SERVER_BIN and the label on the
 // receipt line from BENCH_ENGINE_LABEL (default "redis").
 package main
 

@@ -76,6 +76,16 @@ func checkMemory() error {
 	return nil
 }
 
+// cutoffStatus is recorded on every receipt line: the abort threshold in KiB, or
+// "unavailable" where the platform cannot report available memory (the cutoff
+// then did not apply to the trial).
+func cutoffStatus() string {
+	if _, err := memAvailable(); errors.Is(err, errNoMeminfo) {
+		return "unavailable"
+	}
+	return strconv.FormatUint(minFreeKiB, 10)
+}
+
 func Main(engine string, open func(string, bool) (Store, error)) {
 	count := flag.Int("count", 2000, "records per run")
 	workers := flag.Int("workers", 1, "concurrent synchronous producers")
@@ -96,6 +106,7 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	if err = checkMemory(); err != nil {
 		return err
 	}
+	cutoff := cutoffStatus()
 	dir, err := os.MkdirTemp("", "embedded-bench-")
 	if err != nil {
 		return err
@@ -258,14 +269,16 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		// and count shared pages once per process.
 		line += fmt.Sprintf(" server_rss_KiB=%d total_rss_KiB=%d arch=server", server, uint64(usage.Maxrss)+server)
 	}
-	// A receipt line is printed only for a trial that closed cleanly and saw no
-	// low-memory event up to that point.
-	if err = closeStore(); err != nil {
-		return err
-	}
+	// Success is printed only after the guard goroutine has exited (so a sample
+	// still in flight cannot arrive after the last check) and the final Close
+	// succeeded. Every worker was joined by wg.Wait above.
+	stop()
 	if err = tripped(); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, line)
+	if err = closeStore(); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, line+" mem_cutoff_KiB="+cutoff)
 	return nil
 }

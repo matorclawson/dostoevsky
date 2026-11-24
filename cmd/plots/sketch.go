@@ -41,7 +41,8 @@ func renderSketch(trials []trial, footer []string) string {
 	top := step * float64(steps)
 	const rowH, labelW = 30, 440
 	h := 96 + rowH*len(rows) + 20 + 15*len(footer)
-	plotW := float64(width - labelW - right)
+	// Leave room to the right of the longest bar for its value label.
+	plotW := float64(width - labelW - right - 64)
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
 	b.WriteString(`<title id="t">Sketch accuracy</title><desc id="d">Horizontal bars of relative error against the exact value for HyperLogLog estimates and latency histogram percentile upper bounds, each labeled with the sketch memory in bytes.</desc>` + "\n" + style + "\n")

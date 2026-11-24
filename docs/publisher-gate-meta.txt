@@ -1,0 +1,12 @@
+# Describes the run that produced docs/publisher-gate-results.txt (see docs/publisher-gate.md).
+machine=shared Linux AMD64, overlay filesystem
+os=Linux
+go=1.27.4
+gomaxprocs=2
+cgo=0
+payload_bytes=512
+records=16000
+sync=synchronous acknowledgments, Dostoevsky fdatasync, JetStream SyncAlways
+jetstream=2.15.3
+command=GOMAXPROCS=2 make dev-bench-publish-gate
+sketch_command=make sketch-report

@@ -22,7 +22,7 @@ func renderArchitecture() string {
 		{184, 70, 170, 110, "Group commit", []string{"idle: write inline", "busy: share one write", "up to 64 calls, 1 MiB"}, 0},
 		{374, 70, 200, 110, "Journal", []string{"checksummed frames", "ack only after sync", "Linux: fdatasync per group", "first write: full fsync"}, 1},
 		{594, 70, 142, 110, "Partition index", []string{"contiguous offsets", "in RAM: locations", "payloads stay on disk"}, 0},
-		{560, 250, 176, 110, "Consumer groups", []string{"Fold and Pipe", "state and offset in", "one journal frame"}, 1},
+		{580, 250, 156, 110, "Consumer groups", []string{"Fold and Pipe", "state and offset in", "one journal frame"}, 1},
 		{380, 250, 140, 110, "Notifier", []string{"any key, not just", "partitions"}, 0},
 	}
 	var b strings.Builder
@@ -46,8 +46,8 @@ func renderArchitecture() string {
 	b.WriteString(`<text class="m" x="484" y="220" font-size="11">after sync</text>` + "\n")
 	b.WriteString(`<path class="arrow" d="M665 180V250"/>` + "\n")
 	b.WriteString(`<text class="m" x="675" y="220" font-size="11">read by offset</text>` + "\n")
-	b.WriteString(`<path class="arrow" d="M560 330H520"/>` + "\n")
-	b.WriteString(`<text class="m" x="522" y="322" font-size="11">commit</text>` + "\n")
+	b.WriteString(`<path class="arrow" d="M580 330H520"/>` + "\n")
+	b.WriteString(`<text class="m" x="526" y="322" font-size="11">commit</text>` + "\n")
 	b.WriteString(`<text class="m" x="24" y="385" font-size="10.5">Orange borders mark the durability boundary: the journal write and the co-committed checkpoint.</text>` + "\n")
 	b.WriteString("</svg>\n")
 	return withBackground(b.String())

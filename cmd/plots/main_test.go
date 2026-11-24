@@ -274,3 +274,40 @@ func TestWinnersAreDerivedFromTheData(t *testing.T) {
 		t.Fatalf("a tie produced a winner: %q", got)
 	}
 }
+
+// A chart metric missing from a group must stop the plotter, not leave a
+// single engine to "win" without an opponent.
+func TestMissingMetricStopsThePlotterAndNeverAwardsAWin(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# gate\n")
+	for _, e := range expectedEngines {
+		for _, w := range expectedProducers {
+			for i := 1; i <= 2; i++ {
+				fields := "records/s=10 p99_us=5 peakRSS_KiB=1024 reopen_ms=3"
+				if e == "jetstream" && w == 32 {
+					fields = "records/s=10 p99_us=5 peakRSS_KiB=1024" // reopen_ms removed
+				}
+				b.WriteString("trial=" + strconv.Itoa(i) + " engine=" + e + " workers=" + strconv.Itoa(w) + " " + fields + "\n")
+			}
+		}
+	}
+	dir := t.TempDir()
+	r := write(t, dir, "r.txt", b.String())
+	m := write(t, dir, "m.txt", meta)
+	out := filepath.Join(dir, "out")
+	err := run(r, "gate", m, filepath.Join(dir, "none"), out, 2)
+	if err == nil || !strings.Contains(err.Error(), "reopen_ms") {
+		t.Fatalf("missing reopen_ms accepted: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(out, "reopen.svg")); statErr == nil {
+		t.Fatal("a chart was written before validation failed")
+	}
+	// Even when validation is off, a producer count without an opponent has no winner.
+	data := []series{
+		{engine: "dostoevsky", values: map[int][]float64{1: {1}, 32: {1}}},
+		{engine: "jetstream", values: map[int][]float64{1: {5}}},
+	}
+	if got := winners(data, true); strings.Contains(got, "32") {
+		t.Fatalf("a winner was awarded at 32 producers without an opponent: %q", got)
+	}
+}

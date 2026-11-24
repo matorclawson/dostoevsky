@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 484" width="760" height="484" role="img" aria-labelledby="t d">
+<title id="t">Reopen and verify time</title><desc id="d">Grouped bars of median reopen time in milliseconds at 1, 8 and 32 producers. Embedded JetStream reopens faster than Dostoevsky.</desc>
+<style>
+:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--grid:#d1d9e0;--a:#0b6bcb;--b:#c2410c}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#9198a1;--grid:#3d444d;--a:#58a6ff;--b:#f0883e}}
+rect.bg{fill:var(--bg)}
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:var(--fg)}
+.m{fill:var(--muted)}.g{stroke:var(--grid);stroke-width:1}
+.s0{fill:var(--a)}.s1{fill:var(--b)}.d0{fill:var(--fg);stroke:var(--a);stroke-width:1.5}.d1{fill:var(--fg);stroke:var(--b);stroke-width:1.5}
+</style>
+<rect class="bg" width="100%" height="100%"/>
+<text x="72" y="26" font-size="18" font-weight="600">Reopen and verify time</text>
+<text x="72" y="46" font-size="12" class="m">milliseconds. Bars are medians; dots are trials.</text>
+<text x="72" y="61" font-size="12" class="m">Lower is better. JetStream is faster here: Dostoevsky scans its journal on open.</text>
+<line class="g" x1="72" x2="736" y1="340.0" y2="340.0"/><text class="m" x="64" y="344.0" font-size="11" text-anchor="end">0</text>
+<line class="g" x1="72" x2="736" y1="253.3" y2="253.3"/><text class="m" x="64" y="257.3" font-size="11" text-anchor="end">50</text>
+<line class="g" x1="72" x2="736" y1="166.7" y2="166.7"/><text class="m" x="64" y="170.7" font-size="11" text-anchor="end">100</text>
+<line class="g" x1="72" x2="736" y1="80.0" y2="80.0"/><text class="m" x="64" y="84.0" font-size="11" text-anchor="end">150</text>
+<text x="182.7" y="362" font-size="13" text-anchor="middle">1 producer</text>
+<rect class="s0" x="113.3" y="190.0" width="66.4" height="150.0"><title>Dostoevsky, 1 producers: median 86.5</title></rect>
+<text x="146.5" y="144.4" font-size="12" text-anchor="middle" font-weight="600">86.5</text>
+<circle class="d0" cx="132.5" cy="248.4" r="3"/>
+<circle class="d0" cx="139.5" cy="225.5" r="3"/>
+<circle class="d0" cx="146.5" cy="190.0" r="3"/>
+<circle class="d0" cx="153.5" cy="176.0" r="3"/>
+<circle class="d0" cx="160.5" cy="152.4" r="3"/>
+<rect class="s1" x="185.7" y="321.4" width="66.4" height="18.6"><title>Embedded JetStream, 1 producers: median 10.7</title></rect>
+<text x="218.9" y="301.7" font-size="12" text-anchor="middle" font-weight="600">10.7</text>
+<circle class="d1" cx="204.9" cy="324.5" r="3"/>
+<circle class="d1" cx="211.9" cy="323.1" r="3"/>
+<circle class="d1" cx="218.9" cy="321.4" r="3"/>
+<circle class="d1" cx="225.9" cy="320.9" r="3"/>
+<circle class="d1" cx="232.9" cy="309.7" r="3"/>
+<text x="404.0" y="362" font-size="13" text-anchor="middle">8 producers</text>
+<rect class="s0" x="334.6" y="256.5" width="66.4" height="83.5"><title>Dostoevsky, 8 producers: median 48.2</title></rect>
+<text x="367.8" y="238.4" font-size="12" text-anchor="middle" font-weight="600">48.2</text>
+<circle class="d0" cx="353.8" cy="262.8" r="3"/>
+<circle class="d0" cx="360.8" cy="258.6" r="3"/>
+<circle class="d0" cx="367.8" cy="256.5" r="3"/>
+<circle class="d0" cx="374.8" cy="252.8" r="3"/>
+<circle class="d0" cx="381.8" cy="246.4" r="3"/>
+<rect class="s1" x="407.0" y="308.1" width="66.4" height="31.9"><title>Embedded JetStream, 8 producers: median 18.4</title></rect>
+<text x="440.2" y="292.4" font-size="12" text-anchor="middle" font-weight="600">18.4</text>
+<circle class="d1" cx="426.2" cy="324.0" r="3"/>
+<circle class="d1" cx="433.2" cy="316.5" r="3"/>
+<circle class="d1" cx="440.2" cy="308.1" r="3"/>
+<circle class="d1" cx="447.2" cy="305.8" r="3"/>
+<circle class="d1" cx="454.2" cy="300.4" r="3"/>
+<text x="625.3" y="362" font-size="13" text-anchor="middle">32 producers</text>
+<rect class="s0" x="555.9" y="262.8" width="66.4" height="77.2"><title>Dostoevsky, 32 producers: median 44.5</title></rect>
+<text x="589.1" y="123.7" font-size="12" text-anchor="middle" font-weight="600">44.5</text>
+<circle class="d0" cx="575.1" cy="265.4" r="3"/>
+<circle class="d0" cx="582.1" cy="264.4" r="3"/>
+<circle class="d0" cx="589.1" cy="262.8" r="3"/>
+<circle class="d0" cx="596.1" cy="253.0" r="3"/>
+<circle class="d0" cx="603.1" cy="131.7" r="3"/>
+<rect class="s1" x="628.3" y="314.5" width="66.4" height="25.5"><title>Embedded JetStream, 32 producers: median 14.7</title></rect>
+<text x="661.5" y="292.9" font-size="12" text-anchor="middle" font-weight="600">14.7</text>
+<circle class="d1" cx="647.5" cy="323.1" r="3"/>
+<circle class="d1" cx="654.5" cy="321.2" r="3"/>
+<circle class="d1" cx="661.5" cy="314.5" r="3"/>
+<circle class="d1" cx="668.5" cy="304.4" r="3"/>
+<circle class="d1" cx="675.5" cy="300.9" r="3"/>
+<rect class="s0" x="72" y="380" width="12" height="12"/><text x="90" y="390" font-size="12">Dostoevsky</text>
+<rect class="s1" x="262" y="380" width="12" height="12"/><text x="280" y="390" font-size="12">Embedded JetStream</text>
+<text class="m" x="72" y="414" font-size="10.5">shared Linux AMD64, overlay filesystem; Linux; Go 1.27.4; GOMAXPROCS=2; CGO_ENABLED=0</text>
+<text class="m" x="72" y="429" font-size="10.5">Payload 512 bytes; 16000 records per trial; synchronous acknowledgments, Dostoevsky fdatasync, JetStream</text>
+<text class="m" x="72" y="444" font-size="10.5">SyncAlways; one topic, one replica; JetStream 2.15.3</text>
+<text class="m" x="72" y="459" font-size="10.5">Receipt: docs/publisher-gate-results.txt. Command: GOMAXPROCS=2 make dev-bench-publish-gate</text>
+</svg>

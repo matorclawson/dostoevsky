@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"sort"
 	"time"
+	"unsafe"
 
 	"github.com/rodriveracom/dostoevsky/sketch"
 )
@@ -57,8 +58,8 @@ func main() {
 			if !ok {
 				panic("empty histogram")
 			}
-			fmt.Printf("kind=latency shape=%s percentile=%d n=%d exact_us=%.1f upper_us=%.1f rel_err_pct=%.3f bytes=7688\n",
-				shape, pct, count, float64(exact)/1e3, float64(upper)/1e3, 100*(float64(upper)-float64(exact))/float64(exact))
+			fmt.Printf("kind=latency shape=%s percentile=%d n=%d exact_us=%.1f upper_us=%.1f rel_err_pct=%.3f bytes=%d\n",
+				shape, pct, count, float64(exact)/1e3, float64(upper)/1e3, 100*(float64(upper)-float64(exact))/float64(exact), unsafe.Sizeof(*h))
 		}
 	}
 }

@@ -44,6 +44,10 @@ Host: production-03, Ubuntu 26.04.1 (codename resolute) arm64, 2 Neoverse-N1 vCP
 
 ## Trial hygiene
 
+- Verification is sequential: Dostoevsky, SQLite and Redis read each acknowledged record back by its offset or ID after the restart; Kafka consumes the partition from the start; RabbitMQ fetches the queue one message at a time. The memory guard is checked between reads.
+- Kafka's topic (one partition, replication factor one) is created, and its leader confirmed, before the timed span; auto-creation is off. RabbitMQ's EPMD is started by the harness on the trial's private port, stopped with the trial and included in the memory total; messages are published `mandatory`, and a returned message is a failure.
+- `result.sh` fails closed: it refuses a log with a malformed line, a repeated trial number, a FAILED trial or a missing engine and producer group, unless `RESULT_ALLOW_INCOMPLETE=1` lists those problems first.
+
 - Every trial removes its data directory and stops its server on every path, including failures; a failed trial is printed as FAILED and never retried.
 - Redis and Valkey listen on a unix socket inside the trial's private directory (no TCP port), the harness checks that the process answering is the launched child, and go-redis command retries are disabled so an ambiguous `XADD` is a failure, not a second entry.
 - The harness aborts a trial, as a failure, when the host's available memory falls below 300 MiB before or during the trial.

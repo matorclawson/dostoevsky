@@ -48,19 +48,20 @@ func brokerConfig(dir string, port, controllerPort int) string {
 		"transaction.state.log.min.isr=1",
 		"group.initial.rebalance.delay.ms=0",
 		"log.flush.interval.messages=1",
+		"auto.create.topics.enable=false",
 		"",
 	}, "\n")
 }
 
 // clientOptions: acks=all, no idempotent producer and no record retries, so an
-// ambiguous produce fails the trial instead of being sent again.
+// ambiguous produce fails the trial instead of being sent again. Topics are never
+// auto-created: the harness creates the topic before the timed span.
 func clientOptions(addr string) []kgo.Opt {
 	return []kgo.Opt{
 		kgo.SeedBrokers(addr),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.DisableIdempotentWrite(),
 		kgo.RecordRetries(0),
-		kgo.AllowAutoTopicCreation(),
 	}
 }
 
@@ -120,6 +121,50 @@ func (s *store) Close() {
 	s.client.Close()
 	if err := s.proc.Stop(60 * time.Second); err != nil {
 		panic(err)
+	}
+}
+
+// ensureTopic creates the topic (when fresh) with one partition and a replication
+// factor of one, then waits until its leader is ready. It runs before the timed
+// publish span so topic creation can never land inside a measured publish.
+func ensureTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
+	if fresh {
+		req := kmsg.NewPtrCreateTopicsRequest()
+		t := kmsg.NewCreateTopicsRequestTopic()
+		t.Topic, t.NumPartitions, t.ReplicationFactor = topic, 1, 1
+		req.Topics = append(req.Topics, t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		resp, err := client.Request(ctx, req)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("create topic: %w", err)
+		}
+		for _, rt := range resp.(*kmsg.CreateTopicsResponse).Topics {
+			if rt.ErrorCode != 0 {
+				return fmt.Errorf("create topic %s: error code %d", rt.Topic, rt.ErrorCode)
+			}
+		}
+	}
+	for {
+		md := kmsg.NewPtrMetadataRequest()
+		mt := kmsg.NewMetadataRequestTopic()
+		name := topic
+		mt.Topic = &name
+		md.Topics = append(md.Topics, mt)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		resp, err := client.Request(ctx, md)
+		cancel()
+		if err == nil {
+			for _, rt := range resp.(*kmsg.MetadataResponse).Topics {
+				if rt.ErrorCode == 0 && len(rt.Partitions) == 1 && rt.Partitions[0].ErrorCode == 0 && rt.Partitions[0].Leader >= 0 {
+					return nil
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("topic %s has no ready leader: %v", topic, err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
@@ -200,6 +245,10 @@ func main() {
 				return fail(fmt.Errorf("broker did not become ready: %v", e))
 			}
 			time.Sleep(200 * time.Millisecond)
+		}
+		if err = ensureTopic(client, fresh, time.Now().Add(120*time.Second)); err != nil {
+			client.Close()
+			return fail(err)
 		}
 		return &store{client: client, proc: proc, addr: addr}, nil
 	})

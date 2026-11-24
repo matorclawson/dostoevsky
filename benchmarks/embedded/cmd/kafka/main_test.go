@@ -16,6 +16,7 @@ func TestBrokerConfigIsPrivateAndDurable(t *testing.T) {
 		"default.replication.factor=1\n",
 		"min.insync.replicas=1\n",
 		"process.roles=broker,controller\n",
+		"auto.create.topics.enable=false\n",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("server.properties lacks %q", want)
@@ -28,7 +29,7 @@ func TestBrokerConfigIsPrivateAndDurable(t *testing.T) {
 
 func TestClientDoesNotRetryOrDeduplicate(t *testing.T) {
 	// franz-go's options are opaque; at least check we pass the set the ruling needs.
-	if n := len(clientOptions("127.0.0.1:1")); n != 5 {
-		t.Fatalf("%d client options, want seeds, acks=all, no idempotence, no retries, auto topic creation", n)
+	if n := len(clientOptions("127.0.0.1:1")); n != 4 {
+		t.Fatalf("%d client options, want seeds, acks=all, no idempotence, no retries (and no auto topic creation)", n)
 	}
 }

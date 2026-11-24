@@ -13,6 +13,7 @@ func TestNodeIsPrivateToTheTrial(t *testing.T) {
 		"RABBITMQ_NODE_PORT=35672",
 		"RABBITMQ_DIST_PORT=35673",
 		"ERL_EPMD_PORT=34369",
+		"ERL_EPMD_ADDRESS=127.0.0.1",
 		"RABBITMQ_MNESIA_BASE=/data/trial-1/mnesia",
 		"HOME=/data/trial-1/home",
 	} {

@@ -1,0 +1,12 @@
+# Describes the run in explicit-2.log (zeo-rt delivery 4596, canonical commit 8b5953ac794889d1e151a6f85fdf30855f5d9224). See HOST.log and RESULT.md.
+machine=production-03: 2 Neoverse-N1 vCPUs, ext4 on a QEMU virtual disk
+os=Linux 7.0.0-34 aarch64
+go=1.26.0
+gomaxprocs=2
+cgo=0
+payload_bytes=512
+records=16000
+sync=synchronous acknowledgments, Dostoevsky fdatasync, JetStream SyncAlways
+jetstream=2.15.3
+command=GOMAXPROCS=2 make dev-bench-publish-gate
+sketch_command=make sketch-report

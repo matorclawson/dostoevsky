@@ -35,10 +35,15 @@ func parseTrials(path, section string) ([]trial, error) {
 	var out []trial
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	in := section == ""
+	in := section == "" || section == "*"
 	for sc.Scan() {
 		line := sc.Text()
-		if section != "" {
+		if section == "*" {
+			// Raw benchmark output: every trial= line, whatever surrounds it.
+			if !strings.HasPrefix(line, "trial=") {
+				continue
+			}
+		} else if section != "" {
 			if strings.HasPrefix(line, "# ") {
 				in = strings.TrimPrefix(line, "# ") == section
 				continue
@@ -147,21 +152,26 @@ var gateCharts = []chart{
 		explain: "Dostoevsky scans its journal on open."},
 }
 
+// writeArchitecture is cleared by -architecture=false for secondary hosts.
+var writeArchitecture = true
+
 func main() {
 	receipt := flag.String("receipt", "docs/publisher-gate-results.txt", "raw trial lines of the publisher gate")
 	metaPath := flag.String("meta", "docs/publisher-gate-meta.txt", "key=value description of the run that produced the receipt")
 	sketchPath := flag.String("sketch", "docs/sketch-accuracy-results.txt", "sketch accuracy receipt; skipped when absent")
 	out := flag.String("out", "docs/img", "output directory")
+	section := flag.String("section", "gate", `receipt section to chart; "*" charts every trial= line of a raw log`)
 	trialsPerPoint := flag.Int("trials", 5, "required trials per engine and producer count (0 disables the check)")
+	flag.BoolVar(&writeArchitecture, "architecture", true, "also write architecture.svg")
 	flag.Parse()
-	if err := run(*receipt, *metaPath, *sketchPath, *out, *trialsPerPoint); err != nil {
+	if err := run(*receipt, *section, *metaPath, *sketchPath, *out, *trialsPerPoint); err != nil {
 		fmt.Fprintln(os.Stderr, "plots:", err)
 		os.Exit(1)
 	}
 }
 
-func run(receipt, metaPath, sketchPath, out string, want int) error {
-	trials, err := parseTrials(receipt, "gate")
+func run(receipt, section, metaPath, sketchPath, out string, want int) error {
+	trials, err := parseTrials(receipt, section)
 	if err != nil {
 		return err
 	}
@@ -187,8 +197,10 @@ func run(receipt, metaPath, sketchPath, out string, want int) error {
 			return err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(out, "architecture.svg"), []byte(renderArchitecture()), 0o644); err != nil {
-		return err
+	if writeArchitecture {
+		if err := os.WriteFile(filepath.Join(out, "architecture.svg"), []byte(renderArchitecture()), 0o644); err != nil {
+			return err
+		}
 	}
 	if sk, err := parseTrials(sketchPath, ""); err == nil {
 		svg := renderSketch(sk, []string{"Receipt: " + sketchPath, "Command: " + meta["sketch_command"]})

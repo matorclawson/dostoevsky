@@ -269,14 +269,15 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		// and count shared pages once per process.
 		line += fmt.Sprintf(" server_rss_KiB=%d total_rss_KiB=%d arch=server", server, uint64(usage.Maxrss)+server)
 	}
-	// Success is printed only after the guard goroutine has exited (so a sample
-	// still in flight cannot arrive after the last check) and the final Close
-	// succeeded. Every worker was joined by wg.Wait above.
-	stop()
-	if err = tripped(); err != nil {
+	// The guard keeps running through the final Close, so server shutdown is
+	// monitored too. Success is printed only after the Close succeeded, the guard
+	// goroutine has exited (a sample still in flight cannot arrive after the last
+	// check) and it reported clean. Every worker was joined by wg.Wait above.
+	if err = closeStore(); err != nil {
 		return err
 	}
-	if err = closeStore(); err != nil {
+	stop()
+	if err = tripped(); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, line+" mem_cutoff_KiB="+cutoff)

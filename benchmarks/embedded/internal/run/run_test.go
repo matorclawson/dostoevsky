@@ -23,8 +23,9 @@ type fake struct {
 	slow       time.Duration
 	serverErr  error
 	closeCount *int32
-	onRead     func() // called at the start of every Read
-	panicAt    int32  // Close number that panics (0 = never)
+	onRead     func()        // called at the start of every Read
+	panicAt    int32         // Close number that panics (0 = never)
+	onClose    func(n int32) // called at the start of every Close with its number
 }
 
 func (f *fake) Publish(b []byte) (uint64, error) {
@@ -51,7 +52,11 @@ func (f *fake) Read(o uint64) ([]byte, error) {
 }
 
 func (f *fake) Close() {
-	if n := atomic.AddInt32(f.closeCount, 1); f.panicAt != 0 && n == f.panicAt {
+	n := atomic.AddInt32(f.closeCount, 1)
+	if f.onClose != nil {
+		f.onClose(n)
+	}
+	if f.panicAt != 0 && n == f.panicAt {
 		panic("injected close failure")
 	}
 }
@@ -327,5 +332,36 @@ func TestReceiptStatesTheMemoryCutoff(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), " mem_cutoff_KiB=unavailable") {
 		t.Errorf("line %q does not say the cutoff was unavailable", out.String())
+	}
+}
+
+// Server shutdown is part of the trial: a low-memory event while the final Close
+// runs fails it, and no receipt is printed.
+func TestLowMemoryDuringTheFinalCloseFailsTheTrial(t *testing.T) {
+	left := withTemp(t)
+	var low atomic.Bool
+	setMemory(t, func() (uint64, error) {
+		if low.Load() {
+			return 100 << 10, nil
+		}
+		return 1 << 30, nil
+	})
+	f := newFake()
+	f.onClose = func(n int32) {
+		if n == 2 { // the Close after verification
+			low.Store(true)
+			time.Sleep(350 * time.Millisecond) // the guard samples every 100 ms
+		}
+	}
+	var out bytes.Buffer
+	err := execute("fake", opener(f, false), 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "low-memory abort") {
+		t.Fatalf("a low-memory event during Close was not reported: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a receipt was printed although shutdown ran under memory pressure: %q", out.String())
+	}
+	if left() != 0 {
+		t.Error("trial data was not removed")
 	}
 }

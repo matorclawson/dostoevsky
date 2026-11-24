@@ -53,6 +53,18 @@ func Start(bin string, args []string, env []string, logPath string, interval tim
 	return p, nil
 }
 
+// FreePort returns a loopback TCP port that was free a moment ago. Another
+// process could still take it before the server binds, which makes the server
+// fail to start; the harness then reports a failed trial.
+func FreePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
 // Pid is the launched server's process ID.
 func (p *Proc) Pid() int { return p.cmd.Process.Pid }
 

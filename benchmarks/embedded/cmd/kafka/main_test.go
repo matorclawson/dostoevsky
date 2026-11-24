@@ -1,0 +1,34 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestBrokerConfigIsPrivateAndDurable(t *testing.T) {
+	conf := brokerConfig("/data/trial-1", 39092, 39093)
+	for _, want := range []string{
+		"listeners=PLAINTEXT://127.0.0.1:39092,CONTROLLER://127.0.0.1:39093\n",
+		"advertised.listeners=PLAINTEXT://127.0.0.1:39092\n",
+		"controller.quorum.bootstrap.servers=127.0.0.1:39093\n",
+		"log.dirs=/data/trial-1/kafka-logs\n",
+		"log.flush.interval.messages=1\n",
+		"default.replication.factor=1\n",
+		"min.insync.replicas=1\n",
+		"process.roles=broker,controller\n",
+	} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("server.properties lacks %q", want)
+		}
+	}
+	if strings.Contains(conf, "0.0.0.0") || strings.Contains(conf, ":9092") {
+		t.Error("a fixed or wildcard listener is configured")
+	}
+}
+
+func TestClientDoesNotRetryOrDeduplicate(t *testing.T) {
+	// franz-go's options are opaque; at least check we pass the set the ruling needs.
+	if n := len(clientOptions("127.0.0.1:1")); n != 5 {
+		t.Fatalf("%d client options, want seeds, acks=all, no idempotence, no retries, auto topic creation", n)
+	}
+}

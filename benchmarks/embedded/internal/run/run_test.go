@@ -399,3 +399,27 @@ func TestLowMemoryDuringTheFirstOpenFailsTheTrial(t *testing.T) {
 		t.Errorf("cleanup incomplete: %d entries left, %d closes", left(), atomic.LoadInt32(f.closeCount))
 	}
 }
+
+// A trial directory that cannot be removed is a failed trial: no receipt line.
+func TestRemovalFailureIsAFailedTrial(t *testing.T) {
+	withTemp(t)
+	setMemory(t, func() (uint64, error) { return 1 << 30, nil })
+	old := removeAll
+	var calls atomic.Int32
+	removeAll = func(path string) error {
+		calls.Add(1)
+		return errors.New("injected removal failure")
+	}
+	t.Cleanup(func() { removeAll = old })
+	var out bytes.Buffer
+	err := execute("fake", opener(newFake(), false), 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "injected removal failure") {
+		t.Fatalf("error %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a receipt was printed although the trial directory could not be removed: %q", out.String())
+	}
+	if calls.Load() < 1 {
+		t.Error("removal was never attempted")
+	}
+}

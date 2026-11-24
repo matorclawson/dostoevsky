@@ -41,6 +41,9 @@ var minFreeKiB uint64 = 300 << 10
 // memAvailable is a hook so tests can simulate memory pressure.
 var memAvailable = readMemAvailableKiB
 
+// removeAll is a hook so tests can simulate a trial directory that cannot be removed.
+var removeAll = os.RemoveAll
+
 var errNoMeminfo = errors.New("available memory is not measured on this platform")
 
 func readMemAvailableKiB() (uint64, error) {
@@ -147,7 +150,7 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		return err
 	}
 	defer func() {
-		if rerr := os.RemoveAll(dir); rerr != nil && err == nil {
+		if rerr := removeAll(dir); rerr != nil && err == nil {
 			err = rerr
 		}
 	}()
@@ -281,6 +284,11 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	// goroutine has exited (a sample still in flight cannot arrive after the last
 	// check) and it reported clean. Every worker was joined by wg.Wait above.
 	if err = closeStore(); err != nil {
+		return err
+	}
+	// The trial directory goes before the guard is joined and before any receipt,
+	// so a removal failure is a failed trial, not a success followed by an error.
+	if err = removeAll(dir); err != nil {
 		return err
 	}
 	stop()

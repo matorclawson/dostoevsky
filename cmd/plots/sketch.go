@@ -15,6 +15,7 @@ func renderSketch(trials []trial, footer []string) string {
 		name  string
 		err   float64
 		bytes float64
+		how   string
 	}
 	var rows []row
 	for _, t := range trials {
@@ -25,9 +26,9 @@ func renderSketch(trials []trial, footer []string) string {
 		}
 		switch t["kind"] {
 		case "hll":
-			rows = append(rows, row{fmt.Sprintf("HyperLogLog p=%s, %s keys", t["precision"], commas(t["n"])), e, by})
+			rows = append(rows, row{fmt.Sprintf("HyperLogLog p=%s, %s keys", t["precision"], commas(t["n"])), e, by, "serialized"})
 		case "latency":
-			rows = append(rows, row{fmt.Sprintf("Latency p%s upper bound, %s", t["percentile"], t["shape"]), e, by})
+			rows = append(rows, row{fmt.Sprintf("Latency p%s upper bound, %s", t["percentile"], t["shape"]), e, by, "in memory"})
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
@@ -41,12 +42,13 @@ func renderSketch(trials []trial, footer []string) string {
 	top := step * float64(steps)
 	const rowH, labelW = 30, 440
 	h := 96 + rowH*len(rows) + 20 + 15*len(footer)
-	plotW := float64(width - labelW - right)
+	// Leave room to the right of the longest bar for its value label.
+	plotW := float64(width - labelW - right - 64)
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
-	b.WriteString(`<title id="t">Sketch accuracy</title><desc id="d">Horizontal bars of relative error against the exact value for HyperLogLog estimates and latency histogram percentile upper bounds, each labeled with the sketch memory in bytes.</desc>` + "\n" + style + "\n")
+	b.WriteString(`<title id="t">Sketch accuracy</title><desc id="d">Horizontal bars of relative error against the exact value for HyperLogLog estimates and latency histogram percentile upper bounds, each labeled with its size in bytes: serialized for HyperLogLog, in memory for the histogram.</desc>` + "\n" + style + "\n")
 	b.WriteString(`<text x="24" y="26" font-size="18" font-weight="600">Sketch accuracy against exact values</text>` + "\n")
-	b.WriteString(`<text x="24" y="46" font-size="12" class="m">Relative error in percent. Lower is better. Memory cost in bytes follows each label.</text>` + "\n")
+	b.WriteString(`<text x="24" y="46" font-size="12" class="m">Relative error in percent. Lower is better. Sizes: HyperLogLog serialized, histogram in memory.</text>` + "\n")
 	for i := 0; i <= steps; i++ {
 		v := step * float64(i)
 		x := float64(labelW) + plotW*float64(i)/float64(steps)
@@ -56,7 +58,7 @@ func renderSketch(trials []trial, footer []string) string {
 	for i, r := range rows {
 		y := 64 + i*rowH
 		w := r.err / top * plotW
-		fmt.Fprintf(&b, `<text x="%d" y="%d" font-size="12" text-anchor="end">%s (%s B)</text>`+"\n", labelW-8, y+18, html.EscapeString(r.name), commas(fmt.Sprintf("%.0f", r.bytes)))
+		fmt.Fprintf(&b, `<text x="%d" y="%d" font-size="12" text-anchor="end">%s (%s B %s)</text>`+"\n", labelW-8, y+18, html.EscapeString(r.name), commas(fmt.Sprintf("%.0f", r.bytes)), r.how)
 		fmt.Fprintf(&b, `<rect class="s0" x="%d" y="%d" width="%.1f" height="18"><title>%s: %.3f%%</title></rect>`+"\n", labelW, y+5, w, html.EscapeString(r.name), r.err)
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="11" font-weight="600">%.3f%%</text>`+"\n", float64(labelW)+w+5, y+18, r.err)
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -107,8 +108,17 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 	if !strings.Contains(first["architecture.svg"], "ack only after sync") || !strings.Contains(first["architecture.svg"], "<desc id=\"d\">") {
 		t.Error("architecture.svg missing durability text or description")
 	}
-	if !strings.Contains(first["reopen.svg"], "JetStream is faster here") {
-		t.Error("reopen.svg must say where JetStream wins")
+	if !strings.Contains(first["reopen.svg"], "JetStream wins at 1 and 8 producers.") || !strings.Contains(first["reopen.svg"], "Dostoevsky scans its journal on open.") {
+		t.Error("reopen.svg must derive and state where JetStream wins")
+	}
+	if strings.Contains(first["reopen.svg"], "Reopen and verify") || !strings.Contains(first["reopen.svg"], "Reopen time") {
+		t.Error("reopen.svg title must say it measures reopen time only")
+	}
+	if !strings.Contains(first["throughput.svg"], "Dostoevsky wins at 1 and 8 producers.") || strings.Contains(first["throughput.svg"], "scans its journal") {
+		t.Error("throughput.svg verdict wrong")
+	}
+	if !strings.Contains(first["sketch-accuracy.svg"], "4,100 B serialized") || !strings.Contains(first["sketch-accuracy.svg"], "7,688 B in memory") {
+		t.Error("sketch sizes must say serialized or in memory")
 	}
 	if !strings.Contains(first["sketch-accuracy.svg"], "4.000%") || !strings.Contains(first["sketch-accuracy.svg"], "7,688 B") {
 		t.Error("sketch-accuracy.svg missing error and memory")
@@ -198,5 +208,106 @@ func TestWrapKeepsLinesShort(t *testing.T) {
 		if len(l) > 40 {
 			t.Fatalf("line of %d characters", len(l))
 		}
+	}
+}
+
+func TestCheckGroupsFailsLoudly(t *testing.T) {
+	line := func(engine string, w, trial int) string {
+		return "trial=" + strconv.Itoa(trial) + " engine=" + engine + " workers=" + strconv.Itoa(w) + " records/s=1\n"
+	}
+	build := func(skip string, dup bool) []trial {
+		var b strings.Builder
+		b.WriteString("# gate\n")
+		for _, e := range expectedEngines {
+			for _, w := range expectedProducers {
+				if e+strconv.Itoa(w) == skip {
+					continue
+				}
+				for i := 1; i <= 2; i++ {
+					b.WriteString(line(e, w, i))
+				}
+			}
+		}
+		if dup {
+			b.WriteString(line("dostoevsky", 1, 1))
+		}
+		p := write(t, t.TempDir(), "r.txt", b.String())
+		trials, err := parseTrials(p, "gate")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return trials
+	}
+	if err := checkGroups(build("", false), 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGroups(build("jetstream32", false), 2); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing group accepted: %v", err)
+	}
+	if err := checkGroups(build("", true), 2); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate trial accepted: %v", err)
+	}
+	if err := checkGroups(build("", false), 3); err == nil || !strings.Contains(err.Error(), "trials") {
+		t.Fatalf("wrong count accepted: %v", err)
+	}
+}
+
+func TestWinnersAreDerivedFromTheData(t *testing.T) {
+	data := []series{
+		{engine: "dostoevsky", values: map[int][]float64{1: {5}, 8: {1}, 32: {1}}},
+		{engine: "jetstream", values: map[int][]float64{1: {1}, 8: {5}, 32: {5}}},
+	}
+	if got := winners(data, true); got != "Dostoevsky wins at 8 and 32 producers. Embedded JetStream wins at 1 producer." {
+		t.Fatal(got)
+	}
+	if got := winners(data, false); got != "Dostoevsky wins at 1 producer. Embedded JetStream wins at 8 and 32 producers." {
+		t.Fatal(got)
+	}
+	if !losing(data, true) {
+		t.Fatal("JetStream wins at 1 producer, so Dostoevsky is losing somewhere")
+	}
+	tie := []series{
+		{engine: "dostoevsky", values: map[int][]float64{1: {3}}},
+		{engine: "jetstream", values: map[int][]float64{1: {3}}},
+	}
+	if got := winners(tie, true); got != "" {
+		t.Fatalf("a tie produced a winner: %q", got)
+	}
+}
+
+// A chart metric missing from a group must stop the plotter, not leave a
+// single engine to "win" without an opponent.
+func TestMissingMetricStopsThePlotterAndNeverAwardsAWin(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# gate\n")
+	for _, e := range expectedEngines {
+		for _, w := range expectedProducers {
+			for i := 1; i <= 2; i++ {
+				fields := "records/s=10 p99_us=5 peakRSS_KiB=1024 reopen_ms=3"
+				if e == "jetstream" && w == 32 {
+					fields = "records/s=10 p99_us=5 peakRSS_KiB=1024" // reopen_ms removed
+				}
+				b.WriteString("trial=" + strconv.Itoa(i) + " engine=" + e + " workers=" + strconv.Itoa(w) + " " + fields + "\n")
+			}
+		}
+	}
+	dir := t.TempDir()
+	r := write(t, dir, "r.txt", b.String())
+	m := write(t, dir, "m.txt", meta)
+	out := filepath.Join(dir, "out")
+	err := run(r, m, filepath.Join(dir, "none"), out, 2)
+	if err == nil || !strings.Contains(err.Error(), "reopen_ms") {
+		t.Fatalf("missing reopen_ms accepted: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(out, "reopen.svg")); statErr == nil {
+		t.Fatal("a chart was written before validation failed")
+	}
+	// Even when validation is off, a producer count without an opponent has no winner.
+	data := []series{
+		{engine: "dostoevsky", values: map[int][]float64{1: {1}, 32: {1}}},
+		{engine: "jetstream", values: map[int][]float64{1: {5}}},
+	}
+	if got := winners(data, true); strings.Contains(got, "32") {
+		t.Fatalf("a winner was awarded at 32 producers without an opponent: %q", got)
 	}
 }

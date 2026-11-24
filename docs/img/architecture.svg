@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 400" width="760" height="400" role="img" aria-labelledby="t d">
+<title id="t">Dostoevsky architecture</title><desc id="d">Producers publish to a group commit queue. The queue writes checksummed frames to the journal with one sync per group (fdatasync on Linux, a full fsync for the first write), and only then acknowledges. The partition index records offsets in memory. Consumer groups read from the index and commit state and offset together as one journal frame. A notifier wakes subscribers after a commit.</desc>
+<style>
+:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--grid:#d1d9e0;--a:#0b6bcb;--b:#c2410c}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#9198a1;--grid:#3d444d;--a:#58a6ff;--b:#f0883e}}
+rect.bg{fill:var(--bg)}
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:var(--fg)}
+.m{fill:var(--muted)}.g{stroke:var(--grid);stroke-width:1}
+.s0{fill:var(--a)}.s1{fill:var(--b)}.d0{fill:var(--fg);stroke:var(--a);stroke-width:1.5}.d1{fill:var(--fg);stroke:var(--b);stroke-width:1.5}
+</style>
+<rect class="bg" width="100%" height="100%"/>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>
+<style>.arrow{stroke:var(--muted);stroke-width:1.6;fill:none;marker-end:url(#arrow)}.box{fill:none;stroke-width:2}.b0{stroke:var(--a)}.b1{stroke:var(--b)}</style>
+<text x="24" y="30" font-size="18" font-weight="600">One node: the write path and the read path</text>
+<text x="24" y="50" font-size="12" class="m">An application embeds this in its own process. A mesh of nodes routes each partition to its owner over HTTP.</text>
+<rect class="box b0" x="24" y="70" width="140" height="110" rx="8"/>
+<text x="36" y="96" font-size="14" font-weight="600">Producers</text>
+<text class="m" x="36" y="120" font-size="11.5">Publish, PublishBatch</text>
+<text class="m" x="36" y="138" font-size="11.5">optional message ID</text>
+<text class="m" x="36" y="156" font-size="11.5">key picks the partition</text>
+<rect class="box b0" x="184" y="70" width="170" height="110" rx="8"/>
+<text x="196" y="96" font-size="14" font-weight="600">Group commit</text>
+<text class="m" x="196" y="120" font-size="11.5">idle: write inline</text>
+<text class="m" x="196" y="138" font-size="11.5">busy: share one write</text>
+<text class="m" x="196" y="156" font-size="11.5">up to 64 calls, 1 MiB</text>
+<rect class="box b1" x="374" y="70" width="200" height="110" rx="8"/>
+<text x="386" y="96" font-size="14" font-weight="600">Journal</text>
+<text class="m" x="386" y="120" font-size="11.5">checksummed frames</text>
+<text class="m" x="386" y="138" font-size="11.5">ack only after sync</text>
+<text class="m" x="386" y="156" font-size="11.5">Linux: fdatasync per group</text>
+<text class="m" x="386" y="174" font-size="11.5">first write: full fsync</text>
+<rect class="box b0" x="594" y="70" width="142" height="110" rx="8"/>
+<text x="606" y="96" font-size="14" font-weight="600">Partition index</text>
+<text class="m" x="606" y="120" font-size="11.5">contiguous offsets</text>
+<text class="m" x="606" y="138" font-size="11.5">in RAM: locations</text>
+<text class="m" x="606" y="156" font-size="11.5">payloads stay on disk</text>
+<rect class="box b1" x="580" y="250" width="156" height="110" rx="8"/>
+<text x="592" y="276" font-size="14" font-weight="600">Consumer groups</text>
+<text class="m" x="592" y="300" font-size="11.5">Fold and Pipe</text>
+<text class="m" x="592" y="318" font-size="11.5">state and offset in</text>
+<text class="m" x="592" y="336" font-size="11.5">one journal frame</text>
+<rect class="box b0" x="380" y="250" width="140" height="110" rx="8"/>
+<text x="392" y="276" font-size="14" font-weight="600">Notifier</text>
+<text class="m" x="392" y="300" font-size="11.5">any key, not just</text>
+<text class="m" x="392" y="318" font-size="11.5">partitions</text>
+<path class="arrow" d="M164 125H184"/><path class="arrow" d="M354 125H374"/><path class="arrow" d="M574 125H594"/>
+<path class="arrow" d="M474 180V250"/>
+<text class="m" x="484" y="220" font-size="11">after sync</text>
+<path class="arrow" d="M665 180V250"/>
+<text class="m" x="675" y="220" font-size="11">read by offset</text>
+<path class="arrow" d="M580 330H520"/>
+<text class="m" x="526" y="322" font-size="11">commit</text>
+<text class="m" x="24" y="385" font-size="10.5">Orange borders mark the durability boundary: the journal write and the co-committed checkpoint.</text>
+</svg>

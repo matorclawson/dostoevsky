@@ -110,3 +110,12 @@ dev-bench-publish: ## Measure concurrent durable publication against embedded Je
 .PHONY: dev-bench-publish-gate
 dev-bench-publish-gate: ## Compare median throughput and peak RSS with JetStream at 1, 8 and 32 producers
 	@BENCH_SUITE=gate sh benchmarks/embedded/run.sh
+
+.PHONY: plots
+plots: ## Regenerate docs/img/*.svg from the raw receipts (standard library only)
+	@"$(GO)" run ./cmd/plots
+
+.PHONY: sketch-report
+sketch-report: ## Measure sketch accuracy against exact values and write docs/sketch-accuracy-results.txt
+	@"$(GO)" run ./cmd/sketchreport > docs/sketch-accuracy-results.txt
+	@echo wrote docs/sketch-accuracy-results.txt

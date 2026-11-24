@@ -1,0 +1,10 @@
+kind=hll precision=10 n=1000 exact=1000 estimate=983.3 rel_err_pct=1.674 bytes=1029
+kind=hll precision=10 n=100000 exact=100000 estimate=100126.6 rel_err_pct=0.127 bytes=1029
+kind=hll precision=12 n=1000 exact=1000 estimate=988.2 rel_err_pct=1.184 bytes=4101
+kind=hll precision=12 n=100000 exact=100000 estimate=99638.9 rel_err_pct=0.361 bytes=4101
+kind=hll precision=14 n=1000 exact=1000 estimate=997.8 rel_err_pct=0.223 bytes=16389
+kind=hll precision=14 n=100000 exact=100000 estimate=100330.9 rel_err_pct=0.331 bytes=16389
+kind=latency shape=lognormal percentile=50 n=200000 exact_us=404.6 upper_us=409.6 rel_err_pct=1.247 bytes=7688
+kind=latency shape=lognormal percentile=99 n=200000 exact_us=2606.0 upper_us=2621.4 rel_err_pct=0.593 bytes=7688
+kind=latency shape=bimodal percentile=50 n=200000 exact_us=410.5 upper_us=426.0 rel_err_pct=3.781 bytes=7688
+kind=latency shape=bimodal percentile=99 n=200000 exact_us=24493.7 upper_us=25165.8 rel_err_pct=2.744 bytes=7688

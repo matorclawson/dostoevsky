@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -69,5 +70,95 @@ func TestNextDeliveryNeverWaitsPastItsBounds(t *testing.T) {
 	ready <- amqp.Delivery{Body: []byte("x")}
 	if m, err := nextDelivery(context.Background(), ready, time.Second); err != nil || string(m.Body) != "x" {
 		t.Fatalf("delivery: %v %v", m, err)
+	}
+}
+
+// A send blocked on a peer that never reads must end when the tracker closes the
+// raw connection, not when the library next looks at its context.
+func TestClosingTrackedConnectionsUnblocksAStuckSend(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // accepted and never read
+		}
+	}()
+	c, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &connTracker{}
+	tr.add(c)
+	done := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1<<20)
+		for { // fills the socket buffers, then blocks
+			if _, err := c.Write(buf); err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+	time.Sleep(300 * time.Millisecond) // let the writer block
+	select {
+	case err := <-done:
+		t.Fatalf("the write ended on its own: %v", err)
+	default:
+	}
+	tr.closeAll()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a write error after the connection was closed")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("closing the raw connection did not unblock the stuck send")
+	}
+	if tr.count() != 0 {
+		t.Fatalf("%d connections still tracked", tr.count())
+	}
+}
+
+// A dial attempt owns its result: a failed attempt leaves nothing tracked, so a
+// late attempt can never replace the accepted connection.
+func TestFailedDialLeavesNothingTracked(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // accepts, never speaks AMQP
+		}
+	}()
+	tr := &connTracker{}
+	start := time.Now()
+	if conn, err := dialBroker(context.Background(), l.Addr().String(), 200*time.Millisecond, tr); err == nil {
+		conn.Close()
+		t.Fatal("a server that never speaks AMQP was accepted")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("the attempt ignored its handshake deadline")
+	}
+	if tr.count() != 0 {
+		t.Fatalf("a failed attempt left %d connections tracked", tr.count())
+	}
+	// A cancelled context ends the attempt without a connection.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := dialBroker(ctx, l.Addr().String(), time.Second, tr); err == nil || tr.count() != 0 {
+		t.Fatalf("cancelled dial: %v, %d tracked", err, tr.count())
 	}
 }

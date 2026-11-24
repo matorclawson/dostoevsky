@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,7 +56,10 @@ const config = "vm_memory_high_watermark.absolute = 1GiB\nloopback_users = none\
 // the broker's process group even if a close hung.
 //
 //	WaitReady (epmd, broker)    run.Within, timeout + 5 s
-//	amqp.Dial                   run.Within, 10 s per attempt
+//	amqp.Dial                   amqp.DialConfig with a net.Dialer on the trial context;
+//	                            10 s connect, handshake deadline, one synchronous attempt
+//	raw TCP connections         closed first on a guard trip, a publish deadline and cleanup
+//	                            (connTracker), which unblocks any send stuck in the library
 //	Connection.Channel          run.Within, 10 s
 //	Channel.Confirm             run.Within, 10 s
 //	Channel.QueueDeclare        run.Within, 30 s
@@ -69,6 +73,76 @@ const config = "vm_memory_high_watermark.absolute = 1GiB\nloopback_users = none\
 //	Connection.Close            run.Within, 5 s, after the broker has stopped
 //	proc.Stop, epmd.Stop        SIGTERM then SIGKILL after the grace period
 
+// connTracker owns every raw TCP connection the harness dialed to the broker.
+// Closing them first is what unblocks a send stuck inside the AMQP library (which
+// checks its context only before the write), so workers return, the AMQP-level
+// closes and the broker stop then run on a quiet connection.
+type connTracker struct {
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func (t *connTracker) add(c net.Conn) {
+	t.mu.Lock()
+	t.conns = append(t.conns, c)
+	t.mu.Unlock()
+}
+
+func (t *connTracker) remove(c net.Conn) {
+	t.mu.Lock()
+	for i, x := range t.conns {
+		if x == c {
+			t.conns = append(t.conns[:i], t.conns[i+1:]...)
+			break
+		}
+	}
+	t.mu.Unlock()
+}
+
+func (t *connTracker) count() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.conns)
+}
+
+func (t *connTracker) closeAll() {
+	t.mu.Lock()
+	conns := t.conns
+	t.conns = nil
+	t.mu.Unlock()
+	for _, c := range conns {
+		c.Close()
+	}
+}
+
+// dialBroker makes one attempt, synchronously: the net.Dialer carries the trial
+// context (native cancellation) and the handshake has its own deadline, so there is
+// no wrapper goroutine and no late result. The attempt owns its raw connection and
+// closes it if the attempt fails; only an accepted connection stays tracked.
+func dialBroker(ctx context.Context, addr string, handshake time.Duration, t *connTracker) (*amqp.Connection, error) {
+	var raw net.Conn
+	cfg := amqp.Config{Dial: func(network, a string) (net.Conn, error) {
+		d := net.Dialer{Timeout: 10 * time.Second}
+		c, err := d.DialContext(ctx, network, a)
+		if err != nil {
+			return nil, err
+		}
+		_ = c.SetDeadline(time.Now().Add(handshake)) // the library clears it once the handshake is done
+		t.add(c)
+		raw = c
+		return c, nil
+	}}
+	conn, err := amqp.DialConfig("amqp://guest:guest@"+addr+"/", cfg)
+	if err != nil {
+		if raw != nil {
+			t.remove(raw)
+			raw.Close()
+		}
+		return nil, err
+	}
+	return conn, nil
+}
+
 // publisher is one confirm channel and the channel on which the broker returns
 // messages it could not route.
 type publisher struct {
@@ -78,6 +152,8 @@ type publisher struct {
 
 type store struct {
 	conn         *amqp.Connection
+	tracker      *connTracker
+	stopWatch    func() bool // unregisters the guard watcher; see main
 	pool         chan publisher
 	proc         *serverproc.Proc // the broker
 	epmd         *serverproc.Proc // the node's EPMD, started by the harness
@@ -98,6 +174,11 @@ func (s *store) Publish(data []byte) (uint64, error) {
 	defer func() { s.pool <- p }()
 	ctx, cancel := context.WithTimeout(run.Context(), 60*time.Second)
 	defer cancel()
+	// The library checks ctx only before it writes, so a send blocked on a stalled
+	// broker would outlive it: after the publish deadline the raw connection is closed,
+	// which unblocks the send and fails this trial.
+	deadline := time.AfterFunc(60*time.Second, s.tracker.closeAll)
+	defer deadline.Stop()
 	conf, err := p.ch.PublishWithDeferredConfirmWithContext(ctx, "", queue, true, false, amqp.Publishing{DeliveryMode: amqp.Persistent, Body: data})
 	if err != nil {
 		return 0, err
@@ -199,10 +280,15 @@ func (s *store) ServerPeakKiB() (uint64, error) {
 	return b + e, nil
 }
 
-// Close shuts down in order: stop the consumer and close the channels (in parallel,
+// Close shuts down in order: drop the raw TCP connections, stop the consumer and close the channels (in parallel,
 // 10 s in all), stop the broker, then the node's EPMD, and only then drop the
 // connection. A close that hangs never keeps the broker alive: Stop kills it.
 func (s *store) Close() {
+	// Raw connections first: a send stuck in the library cannot outlive this.
+	s.tracker.closeAll()
+	if s.stopWatch != nil {
+		s.stopWatch()
+	}
 	s.mu.Lock()
 	if s.stopConsumer != nil {
 		s.stopConsumer()
@@ -305,35 +391,40 @@ func main() {
 			return fail(err)
 		}
 		var conn *amqp.Connection
+		tracker := &connTracker{}
+		// A guard trip closes every raw connection at once.
+		stopWatch := context.AfterFunc(run.Context(), tracker.closeAll)
+		failAll := func(err error) (run.Store, error) {
+			tracker.closeAll()
+			stopWatch()
+			return fail(err)
+		}
 		deadline := time.Now().Add(180 * time.Second)
 		for {
-			if err = run.Within(run.Context(), 10*time.Second, func() (e error) {
-				conn, e = amqp.Dial("amqp://guest:guest@" + addr + "/")
-				return e
-			}); err == nil {
+			if conn, err = dialBroker(run.Context(), addr, 10*time.Second, tracker); err == nil {
 				break
 			}
 			if cerr := run.Context().Err(); cerr != nil {
-				return fail(fmt.Errorf("broker connection stopped: %w", cerr))
+				return failAll(fmt.Errorf("broker connection stopped: %w", cerr))
 			}
 			if time.Now().After(deadline) {
-				return fail(fmt.Errorf("broker did not accept an AMQP connection: %v", err))
+				return failAll(fmt.Errorf("broker did not accept an AMQP connection: %v", err))
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
 		// Tie readiness to the launched node: the cluster name carries its private name.
 		if name, _ := conn.Properties["cluster_name"].(string); name != node {
-			return fail(fmt.Errorf("broker reports node %q, not this trial's %q", name, node))
+			return failAll(fmt.Errorf("broker reports node %q, not this trial's %q", name, node))
 		}
 		const channels = 64
 		pool := make(chan publisher, channels)
 		for i := 0; i < channels; i++ {
 			var ch *amqp.Channel
 			if err = run.Within(run.Context(), 10*time.Second, func() (e error) { ch, e = conn.Channel(); return e }); err != nil {
-				return fail(err)
+				return failAll(err)
 			}
 			if err = run.Within(run.Context(), 10*time.Second, func() error { return ch.Confirm(false) }); err != nil {
-				return fail(err)
+				return failAll(err)
 			}
 			pool <- publisher{ch: ch, returns: ch.NotifyReturn(make(chan amqp.Return, 8))}
 		}
@@ -345,9 +436,9 @@ func main() {
 			})
 			pool <- p
 			if err != nil {
-				return fail(err)
+				return failAll(err)
 			}
 		}
-		return &store{conn: conn, pool: pool, proc: proc, epmd: epmd}, nil
+		return &store{conn: conn, tracker: tracker, stopWatch: stopWatch, pool: pool, proc: proc, epmd: epmd}, nil
 	})
 }

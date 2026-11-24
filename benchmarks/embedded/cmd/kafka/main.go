@@ -72,10 +72,12 @@ func clientOptions(addr string) []kgo.Opt {
 //
 //	exec kafka-storage.sh       exec.CommandContext, 120 s
 //	WaitReady (TCP)             run.Within, timeout + 5 s
-//	kgo.NewClient               run.Within, 30 s
+//	kgo.NewClient               called directly: it only builds the client and dials
+//	                            lazily, so no wrapper goroutine writes shared state
 //	Request (CreateTopics,
 //	  Metadata)                 context with a 10 to 30 s deadline
-//	ProduceSync                 context with a 60 s deadline
+//	ProduceSync                 context with a 60 s deadline (franz-go stops waiting when
+//	                            it ends; Client.Close below aborts anything still buffered)
 //	PollFetches                 context with the verification deadline
 //	Client.Close                run.Within, 10 s
 //	proc.Stop                   SIGTERM then SIGKILL after the grace period
@@ -117,11 +119,9 @@ func (s *store) Read(offset uint64) ([]byte, error) {
 		parent = context.Background()
 	}
 	if s.reader == nil {
-		var r *kgo.Client
-		err := run.Within(parent, 30*time.Second, func() (err error) {
-			r, err = kgo.NewClient(kgo.SeedBrokers(s.addr), kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
-			return err
-		})
+		// kgo.NewClient only builds the client (it dials lazily), so it is called
+		// directly: no wrapper goroutine writes shared state after a timeout.
+		r, err := kgo.NewClient(kgo.SeedBrokers(s.addr), kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
 		if err != nil {
 			return nil, err
 		}
@@ -269,11 +269,8 @@ func main() {
 		if err = run.Within(run.Context(), ready+5*time.Second, func() error { return proc.WaitReady("tcp", addr, ready) }); err != nil {
 			return fail(err)
 		}
-		var client *kgo.Client
-		if err = run.Within(run.Context(), 30*time.Second, func() (e error) {
-			client, e = kgo.NewClient(clientOptions(addr)...)
-			return e
-		}); err != nil {
+		client, err := kgo.NewClient(clientOptions(addr)...) // builds the client; it dials lazily
+		if err != nil {
 			return fail(err)
 		}
 		// Readiness is tied to our broker: it must report the cluster ID that this

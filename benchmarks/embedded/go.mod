@@ -7,10 +7,11 @@ replace github.com/rodriveracom/dostoevsky => ../..
 require (
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.56.0
-	github.com/redis/go-redis/v9 v9.24.0
 	github.com/rabbitmq/amqp091-go v1.17.0
+	github.com/redis/go-redis/v9 v9.24.0
 	github.com/rodriveracom/dostoevsky v0.0.0
 	github.com/twmb/franz-go v1.22.3
+	github.com/twmb/franz-go/pkg/kmsg v1.15.1
 	modernc.org/sqlite v1.63.0
 )
 
@@ -27,6 +28,7 @@ require (
 	github.com/nats-io/nkeys v0.4.17 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.uber.org/atomic v1.12.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect

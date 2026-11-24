@@ -121,6 +121,6 @@ sketch-report: ## Measure sketch accuracy against exact values and write docs/sk
 	@echo wrote docs/sketch-accuracy-results.txt
 
 .PHONY: result
-result: ## Validate a comparison log and print medians: make result LOG=comparison.log [TRIALS=5]
-	@test -n "$(LOG)" || { echo "usage: make result LOG=comparison.log" >&2; exit 2; }
-	@"$(GO)" run ./cmd/plots -summary -receipt "$(LOG)" -trials "$(or $(TRIALS),5)"
+result: ## Validate a comparison log and print medians: make result LOG=comparison.log ENGINES=a,b,c [TRIALS=5]
+	@test -n "$(LOG)" -a -n "$(ENGINES)" || { echo "usage: make result LOG=comparison.log ENGINES=dostoevsky,jetstream,..." >&2; exit 2; }
+	@"$(GO)" run ./cmd/plots -summary -receipt "$(LOG)" -expect-engines "$(ENGINES)" -trials "$(or $(TRIALS),5)"

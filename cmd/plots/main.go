@@ -156,12 +156,17 @@ func main() {
 	trialsPerPoint := flag.Int("trials", 5, "required trials per engine and producer count (0 disables the check)")
 	summary := flag.Bool("summary", false, "print validated medians of a comparison log (-receipt) instead of drawing charts")
 	producers := flag.String("expect-producers", "1,8,32", "producer counts every engine must have in -summary mode")
+	engineList := flag.String("expect-engines", "", "engines that must each appear in -summary mode, comma separated (required)")
 	allowIncomplete := flag.Bool("allow-incomplete", false, "in -summary mode, list problems and still print the medians")
 	flag.Parse()
 	if *summary {
 		counts, err := parseProducers(*producers)
+		var engines []string
 		if err == nil {
-			err = summarize(os.Stdout, *receipt, *trialsPerPoint, counts, *allowIncomplete)
+			engines, err = parseEngines(*engineList)
+		}
+		if err == nil {
+			err = summarize(os.Stdout, *receipt, *trialsPerPoint, counts, engines, *allowIncomplete)
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plots:", err)

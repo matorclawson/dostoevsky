@@ -49,6 +49,26 @@ func serverEnv(dir, node string, amqpPort, distPort, epmdPort int) []string {
 // config bounds memory the same way for every run (the 1 GiB watermark is stated on the chart).
 const config = "vm_memory_high_watermark.absolute = 1GiB\nloopback_users = none\n"
 
+// Every blocking call to the broker runs under the trial context (cancelled when
+// the memory guard trips) with its own deadline; where amqp091-go has no context
+// form the call goes through run.Within. Cleanup ends with proc.Stop, which kills
+// the broker's process group even if a close hung.
+//
+//	WaitReady (epmd, broker)    run.Within, timeout + 5 s
+//	amqp.Dial                   run.Within, 10 s per attempt
+//	Connection.Channel          run.Within, 10 s
+//	Channel.Confirm             run.Within, 10 s
+//	Channel.QueueDeclare        run.Within, 30 s
+//	Channel.NotifyReturn        local registration, does not block
+//	PublishWithDeferredConfirm  context with a 60 s deadline
+//	DeferredConfirmation.Wait   WaitContext with the same context
+//	Channel.ConsumeWithContext  run.Within, 10 s (waits for consume-ok)
+//	delivery wait               nextDelivery: 10 s and the trial context
+//	consumer cancel             context cancel; the library sends basic.cancel itself
+//	Channel.Close (all)         run.Within, 10 s in total, closed in parallel
+//	Connection.Close            run.Within, 5 s, after the broker has stopped
+//	proc.Stop, epmd.Stop        SIGTERM then SIGKILL after the grace period
+
 // publisher is one confirm channel and the channel on which the broker returns
 // messages it could not route.
 type publisher struct {
@@ -76,7 +96,7 @@ type store struct {
 func (s *store) Publish(data []byte) (uint64, error) {
 	p := <-s.pool
 	defer func() { s.pool <- p }()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(run.Context(), 60*time.Second)
 	defer cancel()
 	conf, err := p.ch.PublishWithDeferredConfirmWithContext(ctx, "", queue, true, false, amqp.Publishing{DeliveryMode: amqp.Persistent, Body: data})
 	if err != nil {
@@ -141,7 +161,11 @@ func (s *store) Read(index uint64) ([]byte, error) {
 		p := <-s.pool
 		s.reader = p.ch
 		ctx, cancel := context.WithCancel(parent)
-		d, err := p.ch.ConsumeWithContext(ctx, queue, "verify", true, false, false, false, nil)
+		var d <-chan amqp.Delivery
+		err := run.Within(parent, 10*time.Second, func() (e error) {
+			d, e = p.ch.ConsumeWithContext(ctx, queue, "verify", true, false, false, false, nil)
+			return e
+		})
 		if err != nil {
 			cancel()
 			return nil, err
@@ -175,30 +199,41 @@ func (s *store) ServerPeakKiB() (uint64, error) {
 	return b + e, nil
 }
 
-// Close shuts down in order: stop the consumer and close the channels, stop the
-// broker, then the node's EPMD, and only then drop the connection (which the
-// broker's exit has already ended).
+// Close shuts down in order: stop the consumer and close the channels (in parallel,
+// 10 s in all), stop the broker, then the node's EPMD, and only then drop the
+// connection. A close that hangs never keeps the broker alive: Stop kills it.
 func (s *store) Close() {
 	s.mu.Lock()
 	if s.stopConsumer != nil {
 		s.stopConsumer()
 	}
 	s.mu.Unlock()
+	var chans []*amqp.Channel
 	if s.reader != nil {
-		s.reader.Close()
+		chans = append(chans, s.reader)
 	}
 	for i := 0; i < cap(s.pool); i++ {
 		select {
 		case p := <-s.pool:
-			p.ch.Close()
+			chans = append(chans, p.ch)
 		default:
 		}
 	}
+	run.Within(context.Background(), 10*time.Second, func() error {
+		var wg sync.WaitGroup
+		for _, ch := range chans {
+			wg.Add(1)
+			go func() { defer wg.Done(); ch.Close() }()
+		}
+		wg.Wait()
+		return nil
+	})
 	err := s.proc.Stop(60 * time.Second)
 	if e := s.epmd.Stop(10 * time.Second); e != nil && err == nil {
 		err = e
 	}
-	s.conn.Close() // already ended by the broker's exit; the error is not a trial failure
+	// The broker's exit has already ended the connection; the error is not a trial failure.
+	run.Within(context.Background(), 5*time.Second, func() error { return s.conn.Close() })
 	if err != nil {
 		panic(err)
 	}
@@ -214,17 +249,20 @@ func main() {
 	if epmdBin == "" {
 		epmdBin = "epmd"
 	}
+	// The ports belong to the trial: chosen at the first open and reused by the reopen.
+	var ports [3]int
 	run.Main(label, func(dir string, fresh bool) (run.Store, error) {
 		if home == "" {
 			return nil, fmt.Errorf("BENCH_RABBIT_HOME is not set")
 		}
-		var ports [3]int
-		for i := range ports {
-			p, err := serverproc.FreePort()
-			if err != nil {
-				return nil, err
+		if fresh || ports[0] == 0 {
+			for i := range ports {
+				p, err := serverproc.FreePort()
+				if err != nil {
+					return nil, err
+				}
+				ports[i] = p
 			}
-			ports[i] = p
 		}
 		node := fmt.Sprintf("bench%d@localhost", os.Getpid())
 		for _, d := range []string{"home", "conf.d", "mnesia", "logs"} {
@@ -246,7 +284,9 @@ func main() {
 		if err != nil {
 			return nil, err
 		}
-		if err = epmd.WaitReady("tcp", "127.0.0.1:"+strconv.Itoa(ports[2]), 30*time.Second); err != nil {
+		if err = run.Within(run.Context(), 35*time.Second, func() error {
+			return epmd.WaitReady("tcp", "127.0.0.1:"+strconv.Itoa(ports[2]), 30*time.Second)
+		}); err != nil {
 			epmd.Stop(10 * time.Second)
 			return nil, err
 		}
@@ -261,14 +301,20 @@ func main() {
 			return nil, err
 		}
 		addr := "127.0.0.1:" + strconv.Itoa(ports[0])
-		if err = proc.WaitReady("tcp", addr, 180*time.Second); err != nil {
+		if err = run.Within(run.Context(), 185*time.Second, func() error { return proc.WaitReady("tcp", addr, 180*time.Second) }); err != nil {
 			return fail(err)
 		}
 		var conn *amqp.Connection
 		deadline := time.Now().Add(180 * time.Second)
 		for {
-			if conn, err = amqp.Dial("amqp://guest:guest@" + addr + "/"); err == nil {
+			if err = run.Within(run.Context(), 10*time.Second, func() (e error) {
+				conn, e = amqp.Dial("amqp://guest:guest@" + addr + "/")
+				return e
+			}); err == nil {
 				break
+			}
+			if cerr := run.Context().Err(); cerr != nil {
+				return fail(fmt.Errorf("broker connection stopped: %w", cerr))
 			}
 			if time.Now().After(deadline) {
 				return fail(fmt.Errorf("broker did not accept an AMQP connection: %v", err))
@@ -277,29 +323,28 @@ func main() {
 		}
 		// Tie readiness to the launched node: the cluster name carries its private name.
 		if name, _ := conn.Properties["cluster_name"].(string); name != node {
-			conn.Close()
 			return fail(fmt.Errorf("broker reports node %q, not this trial's %q", name, node))
 		}
 		const channels = 64
 		pool := make(chan publisher, channels)
 		for i := 0; i < channels; i++ {
-			ch, err := conn.Channel()
-			if err != nil {
-				conn.Close()
+			var ch *amqp.Channel
+			if err = run.Within(run.Context(), 10*time.Second, func() (e error) { ch, e = conn.Channel(); return e }); err != nil {
 				return fail(err)
 			}
-			if err = ch.Confirm(false); err != nil {
-				conn.Close()
+			if err = run.Within(run.Context(), 10*time.Second, func() error { return ch.Confirm(false) }); err != nil {
 				return fail(err)
 			}
 			pool <- publisher{ch: ch, returns: ch.NotifyReturn(make(chan amqp.Return, 8))}
 		}
 		if fresh {
 			p := <-pool
-			_, err = p.ch.QueueDeclare(queue, true, false, false, false, amqp.Table{"x-queue-type": "quorum"})
+			err = run.Within(run.Context(), 30*time.Second, func() error {
+				_, e := p.ch.QueueDeclare(queue, true, false, false, false, amqp.Table{"x-queue-type": "quorum"})
+				return e
+			})
 			pool <- p
 			if err != nil {
-				conn.Close()
 				return fail(err)
 			}
 		}

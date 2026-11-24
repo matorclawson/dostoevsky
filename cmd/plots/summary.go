@@ -16,10 +16,11 @@ import (
 // producer count, after validating it strictly: this is the one validator for
 // benchmark receipts, shared with the plotter's group checks. It fails, naming
 // every problem, on empty input, a stray token, a duplicate or non-canonical
-// number, a FAILED trial, a missing engine and producer group or the wrong trial
-// count. With allowIncomplete it prints the problems first and still prints the
+// number, a FAILED trial, a trial outside the expected schedule (the exact set
+// engine x producer count x trial 1..want must each appear once) or a missing
+// member of that set. With allowIncomplete it prints the problems first and still prints the
 // medians of the valid trials. Medians only: no ranking and no verdict.
-func summarize(w io.Writer, path string, want int, producers []int, allowIncomplete bool) error {
+func summarize(w io.Writer, path string, want int, producers []int, expectEngines []string, allowIncomplete bool) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -37,7 +38,13 @@ func summarize(w io.Writer, path string, want int, producers []int, allowIncompl
 	groups := map[key]*metrics{}
 	var order []key
 	engines := map[string]bool{}
-	var engineOrder []string
+	for _, e := range expectEngines {
+		engines[e] = true
+	}
+	producerSet := map[int]bool{}
+	for _, p := range producers {
+		producerSet[p] = true
+	}
 	var problems []string
 	problem := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	lines, failed := 0, 0
@@ -75,10 +82,6 @@ func summarize(w io.Writer, path string, want int, producers []int, allowIncompl
 		}
 		if containsWord(fields, "FAILED") {
 			failed++
-			if e := kv["engine"]; e != "" && !engines[e] {
-				engines[e] = true
-				engineOrder = append(engineOrder, e)
-			}
 			problem("line %d: FAILED trial (%s, %s producers): %.120s", n, kv["engine"], kv["workers"], line)
 			continue
 		}
@@ -111,9 +114,16 @@ func summarize(w io.Writer, path string, want int, producers []int, allowIncompl
 			problem("line %d: malformed trial line (%s): %.120s", n, malformed, line)
 			continue
 		}
-		if !engines[engine] {
-			engines[engine] = true
-			engineOrder = append(engineOrder, engine)
+		switch {
+		case !engines[engine]:
+			problem("line %d: engine %q is not in the expected set: %.120s", n, engine, line)
+			continue
+		case !producerSet[workers]:
+			problem("line %d: workers=%d is not an expected producer count: %.120s", n, workers, line)
+			continue
+		case trial < 1 || trial > want:
+			problem("line %d: trial %d is outside the expected 1..%d: %.120s", n, trial, want, line)
+			continue
 		}
 		k := key{engine, workers}
 		m := groups[k]
@@ -135,14 +145,13 @@ func summarize(w io.Writer, path string, want int, producers []int, allowIncompl
 	if lines == 0 {
 		problem("no trial lines in %s", path)
 	}
-	for _, e := range engineOrder {
+	for _, e := range expectEngines {
 		for _, p := range producers {
 			m := groups[key{e, p}]
-			switch {
-			case m == nil:
-				problem("missing: %s at %d producers has no valid trial", e, p)
-			case len(m.trials) != want:
-				problem("%s at %d producers has %d valid trials, want %d", e, p, len(m.trials), want)
+			for t := 1; t <= want; t++ {
+				if m == nil || !m.trials[t] {
+					problem("missing: %s at %d producers lacks trial %d", e, p, t)
+				}
 			}
 		}
 	}
@@ -185,6 +194,21 @@ func med(v []float64) string {
 		return "NA"
 	}
 	return strconv.FormatFloat(median(v), 'f', -1, 64)
+}
+
+// parseEngines reads a comma separated list of engine names, without repeats.
+func parseEngines(s string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		e := strings.TrimSpace(part)
+		if e == "" || strings.ContainsAny(e, " =\t") || seen[e] {
+			return nil, fmt.Errorf("-expect-engines: %q is empty, repeated or not an engine name", part)
+		}
+		seen[e] = true
+		out = append(out, e)
+	}
+	return out, nil
 }
 
 // parseProducers reads a comma separated list such as "1,8,32".

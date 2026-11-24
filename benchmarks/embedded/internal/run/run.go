@@ -42,6 +42,46 @@ type Cancelable interface {
 	BindContext(context.Context)
 }
 
+// trialCtx is the current trial's context: cancelled when the memory guard trips
+// and when the trial ends. A process runs one trial, so one package variable is
+// enough; commands use it for every blocking call to a server, including open.
+var (
+	trialMu  sync.Mutex
+	trialCtx = context.Background()
+)
+
+// Context returns the current trial's context.
+func Context() context.Context {
+	trialMu.Lock()
+	defer trialMu.Unlock()
+	return trialCtx
+}
+
+func setContext(ctx context.Context) {
+	trialMu.Lock()
+	trialCtx = ctx
+	trialMu.Unlock()
+}
+
+// Within runs f, which has no context form, in a goroutine and waits for it for at
+// most d and never past ctx. When the wait ends first the goroutine is left to
+// finish on its own (it is released when the server's process is killed); the
+// caller gets an error and must not rely on f having run to completion.
+func Within(ctx context.Context, d time.Duration, f func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("stopped: %w", ctx.Err())
+	case <-timer.C:
+		return fmt.Errorf("no answer within %v", d)
+	}
+}
+
 // minFreeKiB is the approved low-memory abort: a trial stops, as a failure, when
 // the host's available memory falls below 300 MiB before or during the trial.
 var minFreeKiB uint64 = 300 << 10
@@ -122,7 +162,8 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	// joined, so every phase (open, publish, reopen, verify, close) is inside one
 	// monitored span. tripped() is checked after each phase.
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	setContext(ctx)
+	defer func() { cancel(); setContext(context.Background()) }()
 	var guardErr atomic.Pointer[error]
 	stopGuard := make(chan struct{})
 	guardDone := make(chan struct{})

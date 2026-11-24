@@ -65,6 +65,20 @@ func clientOptions(addr string) []kgo.Opt {
 	}
 }
 
+// Every blocking call to the broker below runs under the trial context (cancelled
+// when the memory guard trips) with its own deadline; where franz-go has no
+// context form the call goes through run.Within. Cleanup always ends with
+// proc.Stop, which kills the broker's process group even if a close hung.
+//
+//	exec kafka-storage.sh       exec.CommandContext, 120 s
+//	WaitReady (TCP)             run.Within, timeout + 5 s
+//	kgo.NewClient               run.Within, 30 s
+//	Request (CreateTopics,
+//	  Metadata)                 context with a 10 to 30 s deadline
+//	ProduceSync                 context with a 60 s deadline
+//	PollFetches                 context with the verification deadline
+//	Client.Close                run.Within, 10 s
+//	proc.Stop                   SIGTERM then SIGKILL after the grace period
 type store struct {
 	client *kgo.Client
 	proc   *serverproc.Proc
@@ -84,7 +98,9 @@ func (s *store) BindContext(ctx context.Context) {
 }
 
 func (s *store) Publish(data []byte) (uint64, error) {
-	res := s.client.ProduceSync(context.Background(), &kgo.Record{Topic: topic, Value: data})
+	ctx, cancel := context.WithTimeout(run.Context(), 60*time.Second)
+	defer cancel()
+	res := s.client.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: data})
 	if err := res.FirstErr(); err != nil {
 		return 0, err
 	}
@@ -96,8 +112,16 @@ func (s *store) Publish(data []byte) (uint64, error) {
 func (s *store) Read(offset uint64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	parent := s.parent
+	if parent == nil {
+		parent = context.Background()
+	}
 	if s.reader == nil {
-		r, err := kgo.NewClient(kgo.SeedBrokers(s.addr), kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+		var r *kgo.Client
+		err := run.Within(parent, 30*time.Second, func() (err error) {
+			r, err = kgo.NewClient(kgo.SeedBrokers(s.addr), kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+			return err
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -107,10 +131,6 @@ func (s *store) Read(offset uint64) ([]byte, error) {
 	for {
 		if v, ok := s.loaded[offset]; ok {
 			return v, nil
-		}
-		parent := s.parent
-		if parent == nil {
-			parent = context.Background()
 		}
 		ctx, cancel := context.WithDeadline(parent, deadline)
 		fetches := s.reader.PollFetches(ctx)
@@ -127,11 +147,16 @@ func (s *store) Read(offset uint64) ([]byte, error) {
 
 func (s *store) ServerPeakKiB() (uint64, error) { return s.proc.PeakKiB() }
 
-func (s *store) Close() {
-	if s.reader != nil {
-		s.reader.Close()
+func closeClient(c *kgo.Client) {
+	if c != nil {
+		// A close that hangs must not hold cleanup open; the broker is killed next.
+		run.Within(context.Background(), 10*time.Second, func() error { c.Close(); return nil })
 	}
-	s.client.Close()
+}
+
+func (s *store) Close() {
+	closeClient(s.reader)
+	closeClient(s.client)
 	if err := s.proc.Stop(60 * time.Second); err != nil {
 		panic(err)
 	}
@@ -146,7 +171,7 @@ func ensureTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
 		t := kmsg.NewCreateTopicsRequestTopic()
 		t.Topic, t.NumPartitions, t.ReplicationFactor = topic, 1, 1
 		req.Topics = append(req.Topics, t)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(run.Context(), 30*time.Second)
 		resp, err := client.Request(ctx, req)
 		cancel()
 		if err != nil {
@@ -164,7 +189,7 @@ func ensureTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
 		name := topic
 		mt.Topic = &name
 		md.Topics = append(md.Topics, mt)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(run.Context(), 10*time.Second)
 		resp, err := client.Request(ctx, md)
 		cancel()
 		if err == nil {
@@ -173,6 +198,9 @@ func ensureTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
 					return nil
 				}
 			}
+		}
+		if err := run.Context().Err(); err != nil {
+			return fmt.Errorf("topic readiness stopped: %w", err)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("topic %s has no ready leader: %v", topic, err)
@@ -189,26 +217,33 @@ func main() {
 		label = "kafka"
 	}
 	home, java := os.Getenv("BENCH_KAFKA_HOME"), os.Getenv("BENCH_JAVA_HOME")
+	// The cluster ID and both ports belong to the trial: they are chosen when the
+	// store is first opened and reused by the reopen, so the reopened broker listens
+	// where the trial's clients expect it and no other listener can stand in.
 	var clusterID string
+	var port, controller int
 	run.Main(label, func(dir string, fresh bool) (run.Store, error) {
 		if home == "" || java == "" {
 			return nil, fmt.Errorf("BENCH_KAFKA_HOME and BENCH_JAVA_HOME must be set")
 		}
 		env := []string{"JAVA_HOME=" + java, "KAFKA_HEAP_OPTS=-Xms1g -Xmx1g", "LOG_DIR=" + filepath.Join(dir, "logs")}
-		port, err := serverproc.FreePort()
-		if err != nil {
-			return nil, err
-		}
-		controller, err := serverproc.FreePort()
-		if err != nil {
-			return nil, err
+		var err error
+		if fresh || port == 0 {
+			if port, err = serverproc.FreePort(); err != nil {
+				return nil, err
+			}
+			if controller, err = serverproc.FreePort(); err != nil {
+				return nil, err
+			}
 		}
 		conf := filepath.Join(dir, "server.properties")
 		if err = os.WriteFile(conf, []byte(brokerConfig(dir, port, controller)), 0o600); err != nil {
 			return nil, err
 		}
 		storage := func(args ...string) (string, error) {
-			cmd := exec.Command(script(home, "kafka-storage.sh"), args...)
+			ctx, cancel := context.WithTimeout(run.Context(), 120*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, script(home, "kafka-storage.sh"), args...)
 			cmd.Env = append(os.Environ(), env...)
 			out, err := cmd.CombinedOutput()
 			return strings.TrimSpace(string(out)), err
@@ -230,37 +265,45 @@ func main() {
 			proc.Stop(30 * time.Second)
 			return nil, err
 		}
-		if err = proc.WaitReady("tcp", addr, 180*time.Second); err != nil {
+		const ready = 180 * time.Second
+		if err = run.Within(run.Context(), ready+5*time.Second, func() error { return proc.WaitReady("tcp", addr, ready) }); err != nil {
 			return fail(err)
 		}
-		client, err := kgo.NewClient(clientOptions(addr)...)
-		if err != nil {
+		var client *kgo.Client
+		if err = run.Within(run.Context(), 30*time.Second, func() (e error) {
+			client, e = kgo.NewClient(clientOptions(addr)...)
+			return e
+		}); err != nil {
 			return fail(err)
 		}
 		// Readiness is tied to our broker: it must report the cluster ID that this
 		// trial formatted, and it must answer before the deadline.
-		deadline := time.Now().Add(180 * time.Second)
+		deadline := time.Now().Add(ready)
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(run.Context(), 5*time.Second)
 			resp, e := client.Request(ctx, kmsg.NewPtrMetadataRequest())
 			cancel()
 			if e == nil {
-				if md, ok := resp.(*kmsg.MetadataResponse); ok && md.ClusterID != nil && *md.ClusterID == clusterID {
-					break
-				}
 				if md, ok := resp.(*kmsg.MetadataResponse); ok && md.ClusterID != nil {
-					client.Close()
+					if *md.ClusterID == clusterID {
+						break
+					}
+					closeClient(client)
 					return fail(fmt.Errorf("broker reports cluster %q, not this trial's %q", *md.ClusterID, clusterID))
 				}
 			}
+			if cerr := run.Context().Err(); cerr != nil {
+				closeClient(client)
+				return fail(fmt.Errorf("broker readiness stopped: %w", cerr))
+			}
 			if time.Now().After(deadline) {
-				client.Close()
+				closeClient(client)
 				return fail(fmt.Errorf("broker did not become ready: %v", e))
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
 		if err = ensureTopic(client, fresh, time.Now().Add(120*time.Second)); err != nil {
-			client.Close()
+			closeClient(client)
 			return fail(err)
 		}
 		return &store{client: client, proc: proc, addr: addr}, nil

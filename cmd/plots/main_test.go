@@ -17,6 +17,10 @@ trial=2 engine=jetstream workers=1 records/s=3200 p99_us=950 peakRSS_KiB=45056 r
 trial=3 engine=jetstream workers=1 records/s=3100 p99_us=920 peakRSS_KiB=45056 reopen_ms=12
 trial=1 engine=dostoevsky workers=8 records/s=13000 p99_us=2000 peakRSS_KiB=11264 reopen_ms=50
 trial=1 engine=jetstream workers=8 records/s=4000 p99_us=5000 peakRSS_KiB=45056 reopen_ms=13
+
+# history
+trial=9 engine=dostoevsky workers=1 records/s=999999 p99_us=1 peakRSS_KiB=1 reopen_ms=1
+engine=dostoevsky workers=1 records/s=999999
 `
 
 const meta = "machine=test box\nos=Linux\ngo=1.0\ngomaxprocs=2\ncgo=0\npayload_bytes=512\nrecords=16000\nsync=sync\njetstream=2.15.3\ncommand=make x\nsketch_command=make y\n"
@@ -70,11 +74,11 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 	var first map[string]string
 	for round := 0; round < 2; round++ {
 		out := filepath.Join(dir, "out")
-		if err := run(r, m, s, out); err != nil {
+		if err := run(r, m, s, out, 0); err != nil {
 			t.Fatal(err)
 		}
 		got := map[string]string{}
-		for _, name := range []string{"throughput.svg", "memory.svg", "p99-latency.svg", "reopen.svg", "sketch-accuracy.svg"} {
+		for _, name := range []string{"throughput.svg", "memory.svg", "p99-latency.svg", "reopen.svg", "sketch-accuracy.svg", "architecture.svg"} {
 			b, err := os.ReadFile(filepath.Join(out, name))
 			if err != nil {
 				t.Fatal(err)
@@ -100,6 +104,9 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 	if !strings.Contains(first["memory.svg"], "10.0") || !strings.Contains(first["memory.svg"], "44.0") {
 		t.Error("memory.svg should show medians 10.0 and 44.0 MiB")
 	}
+	if !strings.Contains(first["architecture.svg"], "ack only after sync") || !strings.Contains(first["architecture.svg"], "<desc id=\"d\">") {
+		t.Error("architecture.svg missing durability text or description")
+	}
 	if !strings.Contains(first["reopen.svg"], "JetStream is faster here") {
 		t.Error("reopen.svg must say where JetStream wins")
 	}
@@ -113,7 +120,7 @@ func TestRunWithoutSketchReceiptSkipsThatChart(t *testing.T) {
 	r := write(t, dir, "r.txt", receipt)
 	m := write(t, dir, "m.txt", meta)
 	out := filepath.Join(dir, "out")
-	if err := run(r, m, filepath.Join(dir, "missing.txt"), out); err != nil {
+	if err := run(r, m, filepath.Join(dir, "missing.txt"), out, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(out, "sketch-accuracy.svg")); err == nil {
@@ -125,7 +132,71 @@ func TestRunRejectsReceiptWithoutTrials(t *testing.T) {
 	dir := t.TempDir()
 	r := write(t, dir, "r.txt", "nothing here\n")
 	m := write(t, dir, "m.txt", meta)
-	if err := run(r, m, filepath.Join(dir, "none"), filepath.Join(dir, "out")); err == nil {
+	if err := run(r, m, filepath.Join(dir, "none"), filepath.Join(dir, "out"), 0); err == nil {
 		t.Fatal("empty receipt accepted")
+	}
+}
+
+func TestOnlyTheGateSectionIsCharted(t *testing.T) {
+	dir := t.TempDir()
+	r := write(t, dir, "r.txt", receipt)
+	trials, err := parseTrials(r, "gate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trials) != 8 {
+		t.Fatalf("parsed %d gate trials, want 8", len(trials))
+	}
+}
+
+func TestRunRequiresTheExpectedTrialCount(t *testing.T) {
+	dir := t.TempDir()
+	r := write(t, dir, "r.txt", receipt)
+	m := write(t, dir, "m.txt", meta)
+	if err := run(r, m, filepath.Join(dir, "none"), filepath.Join(dir, "out"), 5); err == nil || !strings.Contains(err.Error(), "trials") {
+		t.Fatalf("receipt with 3 trials accepted for 5: %v", err)
+	}
+}
+
+// The medians the charts show must equal the summary the receipt itself records
+// and docs/publisher-gate.md publishes.
+func TestRealReceiptMediansMatchPublishedTable(t *testing.T) {
+	trials, err := parseTrials("../../docs/publisher-gate-results.txt", "gate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[int]float64{
+		"dostoevsky": {1: 4005, 8: 13252, 32: 36422},
+		"jetstream":  {1: 3185, 8: 3384, 32: 4020},
+	}
+	for _, s := range collect(trials, "records/s", 1) {
+		for w, vs := range s.values {
+			if len(vs) != 5 {
+				t.Errorf("%s at %d producers: %d trials, want 5", s.engine, w, len(vs))
+			}
+			if got := median(vs); got != want[s.engine][w] {
+				t.Errorf("%s at %d producers: median %v, published %v", s.engine, w, got, want[s.engine][w])
+			}
+		}
+	}
+	if len(trials) != 30 {
+		t.Errorf("gate section has %d trials, want 30", len(trials))
+	}
+}
+
+func TestTicksAreRound(t *testing.T) {
+	for in, want := range map[float64][2]float64{4.0: {1, 4}, 4.8: {1, 5}, 0.3: {0.05, 6}, 48645: {10000, 5}} {
+		step, n := ticks(in)
+		if step != want[0] || float64(n) != want[1] {
+			t.Errorf("ticks(%v) = %v, %d; want %v, %v", in, step, n, want[0], want[1])
+		}
+	}
+}
+
+func TestWrapKeepsLinesShort(t *testing.T) {
+	for _, l := range wrap([]string{strings.Repeat("word ", 60)}, 40) {
+		if len(l) > 40 {
+			t.Fatalf("line of %d characters", len(l))
+		}
 	}
 }

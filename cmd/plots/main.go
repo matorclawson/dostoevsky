@@ -23,8 +23,10 @@ func (t trial) num(key string) (float64, bool) {
 	return v, err == nil
 }
 
-// parseTrials reads every line that contains an engine= field.
-func parseTrials(path string) ([]trial, error) {
+// parseTrials reads the key=value lines of one receipt. With a section name it
+// keeps only the lines under that "# section" header (up to the next header) that
+// start with trial=; with an empty name it keeps every line that has key=value pairs.
+func parseTrials(path, section string) ([]trial, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -33,9 +35,20 @@ func parseTrials(path string) ([]trial, error) {
 	var out []trial
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	in := section == ""
 	for sc.Scan() {
+		line := sc.Text()
+		if section != "" {
+			if strings.HasPrefix(line, "# ") {
+				in = strings.TrimPrefix(line, "# ") == section
+				continue
+			}
+			if !in || !strings.HasPrefix(line, "trial=") {
+				continue
+			}
+		}
 		t := trial{}
-		for _, field := range strings.Fields(sc.Text()) {
+		for _, field := range strings.Fields(line) {
 			if k, v, ok := strings.Cut(field, "="); ok {
 				t[k] = v
 			}
@@ -137,15 +150,16 @@ func main() {
 	metaPath := flag.String("meta", "docs/publisher-gate-meta.txt", "key=value description of the run that produced the receipt")
 	sketchPath := flag.String("sketch", "docs/sketch-accuracy-results.txt", "sketch accuracy receipt; skipped when absent")
 	out := flag.String("out", "docs/img", "output directory")
+	trialsPerPoint := flag.Int("trials", 5, "required trials per engine and producer count (0 disables the check)")
 	flag.Parse()
-	if err := run(*receipt, *metaPath, *sketchPath, *out); err != nil {
+	if err := run(*receipt, *metaPath, *sketchPath, *out, *trialsPerPoint); err != nil {
 		fmt.Fprintln(os.Stderr, "plots:", err)
 		os.Exit(1)
 	}
 }
 
-func run(receipt, metaPath, sketchPath, out string) error {
-	trials, err := parseTrials(receipt)
+func run(receipt, metaPath, sketchPath, out string, want int) error {
+	trials, err := parseTrials(receipt, "gate")
 	if err != nil {
 		return err
 	}
@@ -160,13 +174,25 @@ func run(receipt, metaPath, sketchPath, out string) error {
 	for _, c := range gateCharts {
 		data := collect(trials, c.key, c.scale)
 		if len(data) == 0 {
-			return fmt.Errorf("%s: no %q values in %s", c.file, c.key, receipt)
+			return fmt.Errorf("%s: no %q values in the gate section of %s", c.file, c.key, receipt)
+		}
+		if want > 0 {
+			for _, s := range data {
+				for w, vs := range s.values {
+					if len(vs) != want {
+						return fmt.Errorf("%s: %s at %d producers has %d trials, want %d", c.file, s.engine, w, len(vs), want)
+					}
+				}
+			}
 		}
 		if err := os.WriteFile(filepath.Join(out, c.file), []byte(renderBars(c, data, footer)), 0o644); err != nil {
 			return err
 		}
 	}
-	if sk, err := parseTrials(sketchPath); err == nil {
+	if err := os.WriteFile(filepath.Join(out, "architecture.svg"), []byte(renderArchitecture()), 0o644); err != nil {
+		return err
+	}
+	if sk, err := parseTrials(sketchPath, ""); err == nil {
 		svg := renderSketch(sk, []string{"Receipt: " + sketchPath, "Command: " + meta["sketch_command"]})
 		return os.WriteFile(filepath.Join(out, "sketch-accuracy.svg"), []byte(svg), 0o644)
 	} else if !os.IsNotExist(err) {
@@ -185,14 +211,15 @@ func footerLines(meta map[string]string, receipt string) []string {
 }
 
 const (
-	width, height          = 760, 460
+	width                  = 760
 	left, right, top, base = 72, 24, 64, 340
 )
 
 // Colors are CSS custom properties so the same file works in light and dark.
 const style = `<style>
-:root{--fg:#1f2328;--muted:#59636e;--grid:#d1d9e0;--a:#0b6bcb;--b:#c2410c}
-@media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--muted:#9198a1;--grid:#3d444d;--a:#58a6ff;--b:#f0883e}}
+:root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--grid:#d1d9e0;--a:#0b6bcb;--b:#c2410c}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#9198a1;--grid:#3d444d;--a:#58a6ff;--b:#f0883e}}
+rect.bg{fill:var(--bg)}
 text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:var(--fg)}
 .m{fill:var(--muted)}.g{stroke:var(--grid);stroke-width:1}
 .s0{fill:var(--a)}.s1{fill:var(--b)}.d0{fill:var(--fg);stroke:var(--a);stroke-width:1.5}.d1{fill:var(--fg);stroke:var(--b);stroke-width:1.5}
@@ -274,7 +301,9 @@ func renderBars(c chart, data []series, footer []string) string {
 	y := func(v float64) float64 { return float64(base) - v/top1*plotH }
 
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, height, width, height)
+	footer = wrap(footer, 112)
+	h := base + 74 + 15*len(footer) + 10
+	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
 	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
 	fmt.Fprintf(&b, `<text x="%d" y="46" font-size="12" class="m">%s. Bars are medians; dots are trials. %s</text>`+"\n", left, html.EscapeString(c.unit), html.EscapeString(c.note))
@@ -297,7 +326,7 @@ func renderBars(c chart, data []series, footer []string) string {
 			x := gx + groupW/2 + (float64(si)-float64(len(data))/2)*(barW+6) + 3
 			fmt.Fprintf(&b, `<rect class="s%d" x="%.1f" y="%.1f" width="%.1f" height="%.1f"><title>%s, %d producers: median %s</title></rect>`+"\n",
 				si, x, y(m), barW, float64(base)-y(m), label(s.engine), w, format(m, c.decimals))
-			fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" font-weight="600">%s</text>`+"\n", x+barW/2, y(m)-6-dotRoom(vs, y, m), format(m, c.decimals))
+			fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" font-weight="600">%s</text>`+"\n", x+barW/2, y(m)-8-dotRoom(vs, y, m), format(m, c.decimals))
 			sorted := append([]float64(nil), vs...)
 			sort.Float64s(sorted)
 			for ti, v := range sorted {
@@ -314,7 +343,53 @@ func renderBars(c chart, data []series, footer []string) string {
 		fmt.Fprintf(&b, `<text class="m" x="%d" y="%d" font-size="10.5">%s</text>`+"\n", left, base+74+i*15, html.EscapeString(line))
 	}
 	b.WriteString("</svg>\n")
-	return b.String()
+	return withBackground(b.String())
+}
+
+// withBackground paints a page-colored rectangle behind everything, so text
+// stays readable on a page whose theme differs from the viewer's color scheme.
+func withBackground(svg string) string {
+	return strings.Replace(svg, "</style>\n", "</style>\n<rect class=\"bg\" width=\"100%\" height=\"100%\"/>\n", 1)
+}
+
+// ticks returns a round step (1, 2 or 5 times a power of ten) and the number of
+// steps needed to cover max, with at most six steps.
+func ticks(max float64) (step float64, n int) {
+	if max <= 0 {
+		return 1, 1
+	}
+	p := 1.0
+	for p*10 <= max {
+		p *= 10
+	}
+	for p > max {
+		p /= 10
+	}
+	for _, mult := range []float64{0.2, 0.5, 1, 2, 5, 10} {
+		step = mult * p
+		n = int(max/step + 0.999999)
+		if n <= 6 {
+			return step, n
+		}
+	}
+	return 10 * p, 1
+}
+
+// wrap breaks each line at spaces so none exceeds max characters.
+func wrap(lines []string, max int) []string {
+	var out []string
+	for _, l := range lines {
+		for len(l) > max {
+			cut := strings.LastIndex(l[:max], " ")
+			if cut <= 0 {
+				cut = max
+			}
+			out = append(out, strings.TrimSpace(l[:cut]))
+			l = strings.TrimSpace(l[cut:])
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 // dotRoom lifts the value label above the highest trial dot.

@@ -25,9 +25,9 @@ func renderSketch(trials []trial, footer []string) string {
 		}
 		switch t["kind"] {
 		case "hll":
-			rows = append(rows, row{fmt.Sprintf("HyperLogLog p=%s, %s distinct keys", t["precision"], commas(t["n"])), e, by})
+			rows = append(rows, row{fmt.Sprintf("HyperLogLog p=%s, %s keys", t["precision"], commas(t["n"])), e, by})
 		case "latency":
-			rows = append(rows, row{fmt.Sprintf("Latency histogram p%s upper bound, %s", t["percentile"], t["shape"]), e, by})
+			rows = append(rows, row{fmt.Sprintf("Latency p%s upper bound, %s", t["percentile"], t["shape"]), e, by})
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
@@ -37,8 +37,9 @@ func renderSketch(trials []trial, footer []string) string {
 			maxV = r.err
 		}
 	}
-	top := niceMax(maxV)
-	const rowH, labelW = 30, 330
+	step, steps := ticks(maxV)
+	top := step * float64(steps)
+	const rowH, labelW = 30, 440
 	h := 96 + rowH*len(rows) + 20 + 15*len(footer)
 	plotW := float64(width - labelW - right)
 	var b strings.Builder
@@ -46,11 +47,11 @@ func renderSketch(trials []trial, footer []string) string {
 	b.WriteString(`<title id="t">Sketch accuracy</title><desc id="d">Horizontal bars of relative error against the exact value for HyperLogLog estimates and latency histogram percentile upper bounds, each labeled with the sketch memory in bytes.</desc>` + "\n" + style + "\n")
 	b.WriteString(`<text x="24" y="26" font-size="18" font-weight="600">Sketch accuracy against exact values</text>` + "\n")
 	b.WriteString(`<text x="24" y="46" font-size="12" class="m">Relative error in percent. Lower is better. Memory cost in bytes follows each label.</text>` + "\n")
-	for i := 0; i <= 4; i++ {
-		v := top * float64(i) / 4
-		x := float64(labelW) + plotW*float64(i)/4
+	for i := 0; i <= steps; i++ {
+		v := step * float64(i)
+		x := float64(labelW) + plotW*float64(i)/float64(steps)
 		fmt.Fprintf(&b, `<line class="g" x1="%.1f" x2="%.1f" y1="64" y2="%d"/><text class="m" x="%.1f" y="%d" font-size="11" text-anchor="middle">%s%%</text>`+"\n",
-			x, x, 64+rowH*len(rows), x, 64+rowH*len(rows)+16, format(v, tickDecimals(top)))
+			x, x, 64+rowH*len(rows), x, 64+rowH*len(rows)+16, format(v, stepDecimals(step)))
 	}
 	for i, r := range rows {
 		y := 64 + i*rowH
@@ -63,5 +64,15 @@ func renderSketch(trials []trial, footer []string) string {
 		fmt.Fprintf(&b, `<text class="m" x="24" y="%d" font-size="10.5">%s</text>`+"\n", 64+rowH*len(rows)+40+i*15, html.EscapeString(line))
 	}
 	b.WriteString("</svg>\n")
-	return b.String()
+	return withBackground(b.String())
+}
+
+func stepDecimals(step float64) int {
+	if step >= 1 {
+		return 0
+	}
+	if step >= 0.1 {
+		return 1
+	}
+	return 2
 }

@@ -19,14 +19,14 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 <line class="g" x1="72" x2="736" y1="132.0" y2="132.0"/><text class="m" x="64" y="136.0" font-size="11" text-anchor="end">80</text>
 <line class="g" x1="72" x2="736" y1="80.0" y2="80.0"/><text class="m" x="64" y="84.0" font-size="11" text-anchor="end">100</text>
 <text x="182.7" y="362" font-size="13" text-anchor="middle">1 producer</text>
-<rect class="s0" x="113.3" y="331.7" width="66.4" height="8.3"><title>Dostoevsky, 1 producers: median 3.19</title></rect>
+<rect class="s0" x="113.3" y="331.7" width="66.4" height="8.3"><title>Dostoevsky, 1 producer: median 3.19</title></rect>
 <text x="146.5" y="321.2" font-size="12" text-anchor="middle" font-weight="600">3.19</text>
 <circle class="d0" cx="132.5" cy="332.7" r="3"/>
 <circle class="d0" cx="139.5" cy="332.5" r="3"/>
 <circle class="d0" cx="146.5" cy="331.7" r="3"/>
 <circle class="d0" cx="153.5" cy="330.6" r="3"/>
 <circle class="d0" cx="160.5" cy="329.2" r="3"/>
-<rect class="s1" x="185.7" y="328.9" width="66.4" height="11.1"><title>Embedded JetStream, 1 producers: median 4.27</title></rect>
+<rect class="s1" x="185.7" y="328.9" width="66.4" height="11.1"><title>Embedded JetStream, 1 producer: median 4.27</title></rect>
 <text x="218.9" y="320.2" font-size="12" text-anchor="middle" font-weight="600">4.27</text>
 <circle class="d1" cx="204.9" cy="332.2" r="3"/>
 <circle class="d1" cx="211.9" cy="331.9" r="3"/>

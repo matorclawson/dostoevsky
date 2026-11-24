@@ -124,25 +124,27 @@ func collect(trials []trial, key string, scale float64) []series {
 }
 
 type chart struct {
-	file, title, unit, alt, note string
-	key                          string
-	scale                        float64
-	decimals                     int
+	file, title, unit, alt, note, explain string
+	lower                                 bool
+	key                                   string
+	scale                                 float64
+	decimals                              int
 }
 
 var gateCharts = []chart{
 	{file: "throughput.svg", title: "Synchronous publish throughput", unit: "messages per second", key: "records/s", scale: 1, decimals: 0,
 		alt:  "Grouped bars of median messages per second at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot.",
 		note: "Higher is better."},
-	{file: "memory.svg", title: "Peak process memory", unit: "MiB peak RSS", key: "peakRSS_KiB", scale: 1.0 / 1024, decimals: 1,
+	{file: "memory.svg", title: "Peak process memory", unit: "MiB peak RSS", key: "peakRSS_KiB", scale: 1.0 / 1024, decimals: 1, lower: true,
 		alt:  "Grouped bars of median peak resident memory in MiB at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot.",
 		note: "Lower is better."},
-	{file: "p99-latency.svg", title: "p99 publish latency", unit: "milliseconds", key: "p99_us", scale: 1.0 / 1000, decimals: 2,
+	{file: "p99-latency.svg", title: "p99 publish latency", unit: "milliseconds", key: "p99_us", scale: 1.0 / 1000, decimals: 2, lower: true,
 		alt:  "Grouped bars of median p99 publish-to-acknowledgement latency in milliseconds at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot.",
 		note: "Lower is better."},
-	{file: "reopen.svg", title: "Reopen and verify time", unit: "milliseconds", key: "reopen_ms", scale: 1, decimals: 1,
-		alt:  "Grouped bars of median reopen time in milliseconds at 1, 8 and 32 producers. Embedded JetStream reopens faster than Dostoevsky.",
-		note: "Lower is better. JetStream is faster here: Dostoevsky scans its journal on open."},
+	{file: "reopen.svg", title: "Reopen time", unit: "milliseconds", key: "reopen_ms", scale: 1, decimals: 1, lower: true,
+		alt:     "Grouped bars of median time to reopen the store, in milliseconds, at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot. The time stops before the records are verified.",
+		note:    "Lower is better.",
+		explain: "Dostoevsky scans its journal on open."},
 }
 
 func main() {
@@ -170,20 +172,16 @@ func run(receipt, metaPath, sketchPath, out string, want int) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
+	if want > 0 {
+		if err := checkGroups(trials, want); err != nil {
+			return fmt.Errorf("%s: %w", receipt, err)
+		}
+	}
 	footer := footerLines(meta, receipt)
 	for _, c := range gateCharts {
 		data := collect(trials, c.key, c.scale)
 		if len(data) == 0 {
 			return fmt.Errorf("%s: no %q values in the gate section of %s", c.file, c.key, receipt)
-		}
-		if want > 0 {
-			for _, s := range data {
-				for w, vs := range s.values {
-					if len(vs) != want {
-						return fmt.Errorf("%s: %s at %d producers has %d trials, want %d", c.file, s.engine, w, len(vs), want)
-					}
-				}
-			}
 		}
 		if err := os.WriteFile(filepath.Join(out, c.file), []byte(renderBars(c, data, footer)), 0o644); err != nil {
 			return err
@@ -305,9 +303,14 @@ func renderBars(c chart, data []series, footer []string) string {
 	footer = wrap(footer, 112)
 	h := base + 74 + 15*len(footer) + 10
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
-	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt), style)
+	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
-	for i, line := range wrap([]string{c.unit + ". Bars are medians; dots are trials.", c.note}, 100) {
+	verdict := winners(data, c.lower)
+	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", c.note + " " + verdict}
+	if c.explain != "" && losing(data, c.lower) {
+		subtitle[1] += " " + c.explain
+	}
+	for i, line := range wrap(subtitle, 100) {
 		fmt.Fprintf(&b, `<text x="%d" y="%d" font-size="12" class="m">%s</text>`+"\n", left, 46+i*15, html.EscapeString(line))
 	}
 	for i := 0; i <= steps; i++ {
@@ -411,4 +414,141 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// medians returns each engine's median at each producer count.
+func medians(data []series) map[string]map[int]float64 {
+	out := map[string]map[int]float64{}
+	for _, s := range data {
+		out[s.engine] = map[int]float64{}
+		for w, vs := range s.values {
+			out[s.engine][w] = median(vs)
+		}
+	}
+	return out
+}
+
+// bestAt returns the engine with the best median at each producer count,
+// leaving out counts where the two best medians are equal.
+func bestAt(data []series, lower bool) map[int]string {
+	med := medians(data)
+	counts := map[int]bool{}
+	for _, s := range data {
+		for w := range s.values {
+			counts[w] = true
+		}
+	}
+	best := map[int]string{}
+	for w := range counts {
+		var name string
+		var value float64
+		tie := false
+		for _, s := range data {
+			v, ok := med[s.engine][w]
+			if !ok {
+				continue
+			}
+			switch {
+			case name == "" || (lower && v < value) || (!lower && v > value):
+				name, value, tie = s.engine, v, false
+			case v == value:
+				tie = true
+			}
+		}
+		if name != "" && !tie {
+			best[w] = name
+		}
+	}
+	return best
+}
+
+// winners states, from the data, which engine has the better median at which
+// producer counts, for example "Dostoevsky wins at 1 and 8 producers."
+func winners(data []series, lower bool) string {
+	best := bestAt(data, lower)
+	var parts []string
+	for _, s := range data {
+		var ws []int
+		for w, name := range best {
+			if name == s.engine {
+				ws = append(ws, w)
+			}
+		}
+		if len(ws) == 0 {
+			continue
+		}
+		sort.Ints(ws)
+		parts = append(parts, fmt.Sprintf("%s wins at %s.", label(s.engine), producerList(ws)))
+	}
+	return strings.Join(parts, " ")
+}
+
+// losing reports whether Dostoevsky is not the best engine at some producer count.
+func losing(data []series, lower bool) bool {
+	best := bestAt(data, lower)
+	for _, name := range best {
+		if name != "dostoevsky" {
+			return true
+		}
+	}
+	return false
+}
+
+func producerList(ws []int) string {
+	var s []string
+	for _, w := range ws {
+		s = append(s, strconv.Itoa(w))
+	}
+	list := s[0]
+	switch len(s) {
+	case 1:
+		return list + " producer" + plural(ws[0])
+	case 2:
+		list = s[0] + " and " + s[1]
+	default:
+		list = strings.Join(s[:len(s)-1], ", ") + " and " + s[len(s)-1]
+	}
+	return list + " producers"
+}
+
+var (
+	expectedEngines   = []string{"dostoevsky", "jetstream"}
+	expectedProducers = []int{1, 8, 32}
+)
+
+// checkGroups fails loudly when a chart would draw fewer bars or dots than the
+// receipt promises: every engine at every producer count must have exactly want
+// distinct trials.
+func checkGroups(trials []trial, want int) error {
+	type group struct {
+		engine  string
+		workers int
+	}
+	ids := map[group]map[string]bool{}
+	for _, t := range trials {
+		w, err := strconv.Atoi(t["workers"])
+		if t["engine"] == "" || err != nil {
+			continue
+		}
+		g := group{t["engine"], w}
+		if ids[g] == nil {
+			ids[g] = map[string]bool{}
+		}
+		if ids[g][t["trial"]] {
+			return fmt.Errorf("duplicate trial %s for %s at %d producers", t["trial"], g.engine, g.workers)
+		}
+		ids[g][t["trial"]] = true
+	}
+	for _, e := range expectedEngines {
+		for _, w := range expectedProducers {
+			n, ok := ids[group{e, w}]
+			if !ok {
+				return fmt.Errorf("missing trials for %s at %d producers", e, w)
+			}
+			if len(n) != want {
+				return fmt.Errorf("%s at %d producers has %d trials, want %d", e, w, len(n), want)
+			}
+		}
+	}
+	return nil
 }

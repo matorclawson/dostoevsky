@@ -212,7 +212,7 @@ func footerLines(meta map[string]string, receipt string) []string {
 
 const (
 	width                  = 760
-	left, right, top, base = 72, 24, 64, 340
+	left, right, top, base = 72, 24, 80, 340
 )
 
 // Colors are CSS custom properties so the same file works in light and dark.
@@ -296,7 +296,8 @@ func renderBars(c chart, data []series, footer []string) string {
 		ws = append(ws, w)
 	}
 	sort.Ints(ws)
-	top1 := niceMax(maxV)
+	step, steps := ticks(maxV)
+	top1 := step * float64(steps)
 	plotW, plotH := float64(width-left-right), float64(base-top)
 	y := func(v float64) float64 { return float64(base) - v/top1*plotH }
 
@@ -306,11 +307,13 @@ func renderBars(c chart, data []series, footer []string) string {
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
 	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
-	fmt.Fprintf(&b, `<text x="%d" y="46" font-size="12" class="m">%s. Bars are medians; dots are trials. %s</text>`+"\n", left, html.EscapeString(c.unit), html.EscapeString(c.note))
-	for i := 0; i <= 4; i++ {
-		v := top1 * float64(i) / 4
+	for i, line := range wrap([]string{c.unit + ". Bars are medians; dots are trials.", c.note}, 100) {
+		fmt.Fprintf(&b, `<text x="%d" y="%d" font-size="12" class="m">%s</text>`+"\n", left, 46+i*15, html.EscapeString(line))
+	}
+	for i := 0; i <= steps; i++ {
+		v := step * float64(i)
 		fmt.Fprintf(&b, `<line class="g" x1="%d" x2="%d" y1="%.1f" y2="%.1f"/><text class="m" x="%d" y="%.1f" font-size="11" text-anchor="end">%s</text>`+"\n",
-			left, width-right, y(v), y(v), left-8, y(v)+4, format(v, tickDecimals(top1)))
+			left, width-right, y(v), y(v), left-8, y(v)+4, format(v, stepDecimals(step)))
 	}
 	groupW := plotW / float64(len(ws))
 	barW := groupW * 0.3
@@ -401,16 +404,6 @@ func dotRoom(vs []float64, y func(float64) float64, m float64) float64 {
 		}
 	}
 	return y(m) - y(hi)
-}
-
-func tickDecimals(top float64) int {
-	if top >= 10 {
-		return 0
-	}
-	if top >= 1 {
-		return 1
-	}
-	return 2
 }
 
 func plural(n int) string {

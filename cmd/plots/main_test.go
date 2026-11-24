@@ -306,6 +306,8 @@ func TestProduction03MediansMatchResult(t *testing.T) {
 				t.Errorf("%s at %d producers: median RSS %v KiB, RESULT.md says %v", s.engine, w, got, rss[s.engine][w])
 			}
 		}
+	}
+}
 
 // A chart metric missing from a group must stop the plotter, not leave a
 // single engine to "win" without an opponent.

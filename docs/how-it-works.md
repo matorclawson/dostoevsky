@@ -82,9 +82,9 @@ The `sketch` package (standard library only) is for telemetry, not for decisions
 - **HyperLogLog** counts distinct values in `2^p` bytes for precision `p` from 4 to 18. It hashes with SHA-256, merges across workers and has a versioned binary encoding.
 - **LatencyHistogram** keeps 960 fixed buckets, 7,688 bytes, however long the run. `PercentileUpper` returns the upper bound of the nearest-rank percentile, which is exact through 31 ns and exceeds a positive sample by less than 6.25%.
 
-![Relative error against exact values for HyperLogLog and the latency histogram, with each sketch's memory in bytes.](img/sketch-accuracy.svg)
+![Relative error against exact values for HyperLogLog and the latency histogram, with HyperLogLog's serialized size and the histogram's in-memory size in bytes.](img/sketch-accuracy.svg)
 
-The chart is generated from [the accuracy receipt](sketch-accuracy-results.txt) (`make sketch-report`). In that run HyperLogLog error was 0.13% to 1.7% at precision 10 to 14 and the histogram's upper-bound error was 0.6% to 3.8%. **Do not** use a sketch where an answer must be exact: records, producer IDs, offsets and delivery decisions stay exact.
+The chart is generated from [the accuracy receipt](sketch-accuracy-results.txt) (`make sketch-report`). Sizes differ in kind: the chart labels a HyperLogLog by its serialized bytes (`2^p` plus a 5-byte header) and the histogram by its bytes in memory. In that run HyperLogLog error was 0.13% to 1.7% at precision 10 to 14 and the histogram's upper-bound error was 0.6% to 3.8%. **Do not** use a sketch where an answer must be exact: records, producer IDs, offsets and delivery decisions stay exact.
 
 ## Memory: what is in RAM and what is not
 
@@ -93,4 +93,4 @@ The chart is generated from [the accuracy receipt](sketch-accuracy-results.txt) 
 - **In the gate run:** 16,000 records and one topic, peak RSS for the whole process was 9.7 to 11.3 MiB across trials against 42.9 to 43.9 MiB for embedded JetStream ([receipt](publisher-gate-results.txt)). Per-record index cost grows with the number of retained records, so a large retained journal costs memory, and one million single-record topics measured 163 MiB of live heap ([notes](embedded-performance.md)).
 - **Limits you should plan for:** startup scans the whole retained journal, so reopen time grows with it (43 to 120 ms across the gate's trials of 16,000 records, against 9 to 23 ms for JetStream: see the chart below). There is no startup snapshot and no on-disk index yet. `Retain` shortens the journal, rewrites it under the node lock and needs room for a second copy while it runs.
 
-![Median reopen time in milliseconds at 1, 8 and 32 producers; embedded JetStream reopens faster.](img/reopen.svg)
+![Median time to reopen the store, in milliseconds, at 1, 8 and 32 producers. The time stops before the records are verified; embedded JetStream reopens faster.](img/reopen.svg)

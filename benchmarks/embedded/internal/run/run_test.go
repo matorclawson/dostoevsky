@@ -23,6 +23,8 @@ type fake struct {
 	slow       time.Duration
 	serverErr  error
 	closeCount *int32
+	onRead     func() // called at the start of every Read
+	panicAt    int32  // Close number that panics (0 = never)
 }
 
 func (f *fake) Publish(b []byte) (uint64, error) {
@@ -40,12 +42,19 @@ func (f *fake) Publish(b []byte) (uint64, error) {
 }
 
 func (f *fake) Read(o uint64) ([]byte, error) {
+	if f.onRead != nil {
+		f.onRead()
+	}
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
 	return f.s.data[o], nil
 }
 
-func (f *fake) Close() { atomic.AddInt32(f.closeCount, 1) }
+func (f *fake) Close() {
+	if n := atomic.AddInt32(f.closeCount, 1); f.panicAt != 0 && n == f.panicAt {
+		panic("injected close failure")
+	}
+}
 
 type measuredFake struct{ *fake }
 
@@ -211,5 +220,56 @@ func TestMeasuredServerReportsTotals(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "server_rss_KiB=0 total_rss_KiB=") || !strings.Contains(out.String(), "arch=server") {
 		t.Fatalf("line %q", out.String())
+	}
+}
+
+// A low-memory event while the reopened store is being verified fails the
+// trial even though every record verifies.
+func TestLowMemoryDuringVerificationFailsTheTrial(t *testing.T) {
+	left := withTemp(t)
+	var low atomic.Bool
+	setMemory(t, func() (uint64, error) {
+		if low.Load() {
+			return 100 << 10, nil
+		}
+		return 1 << 30, nil
+	})
+	f := newFake()
+	var once sync.Once
+	f.onRead = func() {
+		once.Do(func() {
+			low.Store(true)
+			time.Sleep(400 * time.Millisecond) // the guard samples every 100 ms
+		})
+	}
+	var out bytes.Buffer
+	err := execute("fake", opener(f, false), 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "low-memory abort") {
+		t.Fatalf("error %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a failed trial printed a receipt line: %q", out.String())
+	}
+	if left() != 0 || atomic.LoadInt32(f.closeCount) != 2 {
+		t.Errorf("cleanup incomplete: %d entries left, %d closes", left(), atomic.LoadInt32(f.closeCount))
+	}
+}
+
+// A failure of the final Close must not follow a success line.
+func TestCloseFailureAfterVerificationPrintsNoReceipt(t *testing.T) {
+	left := withTemp(t)
+	setMemory(t, func() (uint64, error) { return 1 << 30, nil })
+	f := newFake()
+	f.panicAt = 2 // the Close after verification
+	var out bytes.Buffer
+	err := execute("fake", opener(f, false), 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "injected close failure") {
+		t.Fatalf("error %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a receipt line was printed before the final Close failed: %q", out.String())
+	}
+	if left() != 0 {
+		t.Error("trial data was not removed")
 	}
 }

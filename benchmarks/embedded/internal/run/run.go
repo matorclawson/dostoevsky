@@ -226,6 +226,17 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	}
 	closed = false
 	reopen := time.Since(start)
+	// The guard keeps watching through the reopen and the verification: a
+	// low-memory event anywhere in the trial makes it a failed trial.
+	tripped := func() error {
+		if ge := guardErr.Load(); ge != nil {
+			return *ge
+		}
+		return nil
+	}
+	if err = tripped(); err != nil {
+		return err
+	}
 	want := make([]byte, 512)
 	readStart := time.Now()
 	for i, offset := range seq {
@@ -233,6 +244,9 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		got, e := s.Read(offset)
 		if e != nil || !bytes.Equal(got, want) {
 			return fmt.Errorf("record %d at %d: %v", i, offset, e)
+		}
+		if err = tripped(); err != nil {
+			return err
 		}
 	}
 	readElapsed := time.Since(readStart)
@@ -243,6 +257,14 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		// tree: a sum of sampled per-process peaks that can occur at different times
 		// and count shared pages once per process.
 		line += fmt.Sprintf(" server_rss_KiB=%d total_rss_KiB=%d arch=server", server, uint64(usage.Maxrss)+server)
+	}
+	// A receipt line is printed only for a trial that closed cleanly and saw no
+	// low-memory event up to that point.
+	if err = closeStore(); err != nil {
+		return err
+	}
+	if err = tripped(); err != nil {
+		return err
 	}
 	fmt.Fprintln(out, line)
 	return nil

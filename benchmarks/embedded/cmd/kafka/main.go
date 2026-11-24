@@ -72,6 +72,15 @@ type store struct {
 	mu     sync.Mutex
 	loaded map[uint64][]byte
 	reader *kgo.Client
+	parent context.Context
+}
+
+// BindContext receives the harness's context, cancelled when the memory guard
+// trips and when the trial ends; verification polls stop when it is done.
+func (s *store) BindContext(ctx context.Context) {
+	s.mu.Lock()
+	s.parent = ctx
+	s.mu.Unlock()
 }
 
 func (s *store) Publish(data []byte) (uint64, error) {
@@ -99,7 +108,11 @@ func (s *store) Read(offset uint64) ([]byte, error) {
 		if v, ok := s.loaded[offset]; ok {
 			return v, nil
 		}
-		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		parent := s.parent
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx, cancel := context.WithDeadline(parent, deadline)
 		fetches := s.reader.PollFetches(ctx)
 		cancel()
 		if err := fetches.Err0(); err != nil {

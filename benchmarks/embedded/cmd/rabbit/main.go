@@ -57,13 +57,16 @@ type publisher struct {
 }
 
 type store struct {
-	conn    *amqp.Connection
-	pool    chan publisher
-	proc    *serverproc.Proc // the broker
-	epmd    *serverproc.Proc // the node's EPMD, started by the harness
-	mu      sync.Mutex
-	reader  *amqp.Channel
-	fetched map[uint64][]byte
+	conn         *amqp.Connection
+	pool         chan publisher
+	proc         *serverproc.Proc // the broker
+	epmd         *serverproc.Proc // the node's EPMD, started by the harness
+	mu           sync.Mutex
+	parent       context.Context
+	reader       *amqp.Channel
+	deliveries   <-chan amqp.Delivery
+	stopConsumer context.CancelFunc
+	fetched      map[uint64][]byte
 }
 
 // Publish sends one persistent, mandatory message on its own confirm channel and
@@ -94,51 +97,64 @@ func (s *store) Publish(data []byte) (uint64, error) {
 	return binary.BigEndian.Uint64(data), nil
 }
 
-type fetchResult struct {
-	msg amqp.Delivery
-	ok  bool
-	err error
+// BindContext receives the harness's context, cancelled when the memory guard
+// trips and when the trial ends. Verification stops waiting when it is done.
+func (s *store) BindContext(ctx context.Context) {
+	s.mu.Lock()
+	s.parent = ctx
+	s.mu.Unlock()
 }
 
-// fetchWithin does one basic.get and gives up after d, so a stalled broker cannot
-// hold verification open past the memory guard's next check.
-func fetchWithin(ch *amqp.Channel, d time.Duration) (amqp.Delivery, bool, error) {
-	c := make(chan fetchResult, 1)
-	go func() {
-		m, ok, err := ch.Get(queue, true)
-		c <- fetchResult{m, ok, err}
-	}()
+// nextDelivery waits for the next delivery, but never longer than d and never past
+// ctx: nothing is left blocked, because a delivery channel needs no goroutine.
+func nextDelivery(ctx context.Context, deliveries <-chan amqp.Delivery, d time.Duration) (amqp.Delivery, error) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	select {
-	case r := <-c:
-		return r.msg, r.ok, r.err
-	case <-time.After(d):
-		return amqp.Delivery{}, false, fmt.Errorf("basic.get did not answer within %v", d)
+	case m, ok := <-deliveries:
+		if !ok {
+			return amqp.Delivery{}, fmt.Errorf("the consumer was cancelled")
+		}
+		return m, nil
+	case <-ctx.Done():
+		return amqp.Delivery{}, fmt.Errorf("verification stopped: %w", ctx.Err())
+	case <-timer.C:
+		return amqp.Delivery{}, fmt.Errorf("no delivery within %v", d)
 	}
 }
 
-// Read serves verification one message at a time: it fetches only until the
-// requested record has arrived, so the harness's memory guard is checked between
-// fetches. Every acknowledged message must still be in the queue after the restart.
+// Read serves verification through one consumer for the whole verification, bound
+// to the harness's context, so a memory-guard trip or a stalled broker ends the wait
+// at once. It reads only until the requested record has arrived; every acknowledged
+// message must still be in the queue after the restart. Each wait is bounded.
 func (s *store) Read(index uint64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fetched == nil {
 		s.fetched = map[uint64][]byte{}
 	}
-	if s.reader == nil {
+	parent := s.parent
+	if parent == nil {
+		parent = context.Background()
+	}
+	if s.deliveries == nil {
 		p := <-s.pool
 		s.reader = p.ch
+		ctx, cancel := context.WithCancel(parent)
+		d, err := p.ch.ConsumeWithContext(ctx, queue, "verify", true, false, false, false, nil)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		s.deliveries, s.stopConsumer = d, cancel
 	}
 	for {
 		if v, ok := s.fetched[index]; ok {
 			return v, nil
 		}
-		msg, ok, err := fetchWithin(s.reader, 10*time.Second)
+		msg, err := nextDelivery(parent, s.deliveries, 10*time.Second)
 		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("record %d is not in the queue after the restart", index)
+			return nil, fmt.Errorf("record %d: %w", index, err)
 		}
 		if len(msg.Body) >= 8 {
 			s.fetched[binary.BigEndian.Uint64(msg.Body)] = msg.Body
@@ -159,12 +175,30 @@ func (s *store) ServerPeakKiB() (uint64, error) {
 	return b + e, nil
 }
 
+// Close shuts down in order: stop the consumer and close the channels, stop the
+// broker, then the node's EPMD, and only then drop the connection (which the
+// broker's exit has already ended).
 func (s *store) Close() {
-	s.conn.Close()
+	s.mu.Lock()
+	if s.stopConsumer != nil {
+		s.stopConsumer()
+	}
+	s.mu.Unlock()
+	if s.reader != nil {
+		s.reader.Close()
+	}
+	for i := 0; i < cap(s.pool); i++ {
+		select {
+		case p := <-s.pool:
+			p.ch.Close()
+		default:
+		}
+	}
 	err := s.proc.Stop(60 * time.Second)
 	if e := s.epmd.Stop(10 * time.Second); e != nil && err == nil {
 		err = e
 	}
+	s.conn.Close() // already ended by the broker's exit; the error is not a trial failure
 	if err != nil {
 		panic(err)
 	}

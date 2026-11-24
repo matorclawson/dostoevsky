@@ -2,6 +2,7 @@ package run
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -26,6 +27,8 @@ type fake struct {
 	onRead     func()        // called at the start of every Read
 	panicAt    int32         // Close number that panics (0 = never)
 	onClose    func(n int32) // called at the start of every Close with its number
+	mu         sync.Mutex
+	bound      context.Context
 }
 
 func (f *fake) Publish(b []byte) (uint64, error) {
@@ -49,6 +52,18 @@ func (f *fake) Read(o uint64) ([]byte, error) {
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
 	return f.s.data[o], nil
+}
+
+func (f *fake) BindContext(ctx context.Context) {
+	f.mu.Lock()
+	f.bound = ctx
+	f.mu.Unlock()
+}
+
+func (f *fake) boundContext() context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bound
 }
 
 func (f *fake) Close() {
@@ -421,5 +436,43 @@ func TestRemovalFailureIsAFailedTrial(t *testing.T) {
 	}
 	if calls.Load() < 1 {
 		t.Error("removal was never attempted")
+	}
+}
+
+// A store that waits on a server is handed a context that the memory guard
+// cancels, so a stalled verification read ends at once instead of holding the
+// trial open.
+func TestGuardCancelsAStalledVerificationRead(t *testing.T) {
+	left := withTemp(t)
+	var low atomic.Bool
+	setMemory(t, func() (uint64, error) {
+		if low.Load() {
+			return 100 << 10, nil
+		}
+		return 1 << 30, nil
+	})
+	f := newFake()
+	var once sync.Once
+	f.onRead = func() {
+		once.Do(func() {
+			low.Store(true)
+			select {
+			case <-f.boundContext().Done(): // the guard trips and cancels the context
+			case <-time.After(10 * time.Second):
+				t.Error("the bound context was never cancelled")
+			}
+		})
+	}
+	start := time.Now()
+	var out bytes.Buffer
+	err := execute("fake", opener(f, false), 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "low-memory abort") {
+		t.Fatalf("error %v", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("the stalled read held the trial open")
+	}
+	if out.Len() != 0 || left() != 0 {
+		t.Errorf("output %q, %d entries left", out.String(), left())
 	}
 }

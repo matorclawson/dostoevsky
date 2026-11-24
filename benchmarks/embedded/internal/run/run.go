@@ -3,6 +3,7 @@ package run
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -32,6 +33,13 @@ type Measured interface {
 	// the server tree. It returns an error when memory could not be measured; the
 	// trial then fails instead of reporting zero.
 	ServerPeakKiB() (uint64, error)
+}
+
+// Cancelable is implemented by a Store whose verification can wait on a server.
+// The harness gives it a context that is cancelled when the memory guard trips
+// (and when the trial ends), and the store must stop waiting when it is done.
+type Cancelable interface {
+	BindContext(context.Context)
 }
 
 // minFreeKiB is the approved low-memory abort: a trial stops, as a failure, when
@@ -113,6 +121,8 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	// The memory guard is the first thing that runs and the last thing that is
 	// joined, so every phase (open, publish, reopen, verify, close) is inside one
 	// monitored span. tripped() is checked after each phase.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var guardErr atomic.Pointer[error]
 	stopGuard := make(chan struct{})
 	guardDone := make(chan struct{})
@@ -133,6 +143,7 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 			case <-t.C:
 				if e := checkMemory(); e != nil {
 					guardErr.Store(&e)
+					cancel() // a store waiting on a server stops waiting
 					return
 				}
 			}
@@ -155,6 +166,11 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		}
 	}()
 	var s Store
+	bind := func() {
+		if b, ok := s.(Cancelable); ok {
+			b.BindContext(ctx)
+		}
+	}
 	closed := true
 	closeStore := func() (cerr error) {
 		if s == nil || closed {
@@ -178,6 +194,7 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		return err
 	}
 	closed = false
+	bind()
 	if err = tripped(); err != nil {
 		return err
 	}
@@ -254,6 +271,7 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		return err
 	}
 	closed = false
+	bind()
 	reopen := time.Since(start)
 	if err = tripped(); err != nil {
 		return err

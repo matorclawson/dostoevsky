@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func TestNodeIsPrivateToTheTrial(t *testing.T) {
@@ -29,5 +33,41 @@ func TestNodeIsPrivateToTheTrial(t *testing.T) {
 func TestMemoryIsBounded(t *testing.T) {
 	if !strings.Contains(config, "vm_memory_high_watermark.absolute = 1GiB") {
 		t.Fatal("the 1 GiB watermark is missing from the broker config")
+	}
+}
+
+func TestNextDeliveryNeverWaitsPastItsBounds(t *testing.T) {
+	hung := make(chan amqp.Delivery) // a broker that never answers
+	start := time.Now()
+	if _, err := nextDelivery(context.Background(), hung, 50*time.Millisecond); err == nil || !strings.Contains(err.Error(), "no delivery within") {
+		t.Fatalf("hung channel: %v", err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("the bounded wait took far longer than its bound")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := nextDelivery(ctx, hung, time.Hour); done <- err }()
+	cancel() // the memory guard trips
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "verification stopped") {
+			t.Fatalf("cancelled wait: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cancelled context did not end the wait; a goroutine would be left blocked")
+	}
+
+	closed := make(chan amqp.Delivery)
+	close(closed)
+	if _, err := nextDelivery(context.Background(), closed, time.Second); err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("closed channel: %v", err)
+	}
+
+	ready := make(chan amqp.Delivery, 1)
+	ready <- amqp.Delivery{Body: []byte("x")}
+	if m, err := nextDelivery(context.Background(), ready, time.Second); err != nil || string(m.Body) != "x" {
+		t.Fatalf("delivery: %v %v", m, err)
 	}
 }

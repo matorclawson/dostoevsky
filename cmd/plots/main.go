@@ -299,13 +299,13 @@ func renderBars(c chart, data []series, footer []string) string {
 	plotW, plotH := float64(width-left-right), float64(base-top)
 	y := func(v float64) float64 { return float64(base) - v/top1*plotH }
 
+	verdict := winners(data, c.lower)
 	var b strings.Builder
 	footer = wrap(footer, 112)
 	h := base + 74 + 15*len(footer) + 10
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
 	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
-	verdict := winners(data, c.lower)
 	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", c.note + " " + verdict}
 	if c.explain != "" && losing(data, c.lower) {
 		subtitle[1] += " " + c.explain

@@ -257,10 +257,10 @@ func TestWinnersAreDerivedFromTheData(t *testing.T) {
 		{engine: "dostoevsky", values: map[int][]float64{1: {5}, 8: {1}, 32: {1}}},
 		{engine: "jetstream", values: map[int][]float64{1: {1}, 8: {5}, 32: {5}}},
 	}
-	if got := winners(data, true); got != "Dostoevsky wins at 8 and 32 producers. JetStream wins at 1 producer." {
+	if got := winners(data, true); got != "Dostoevsky wins at 8 and 32 producers. Embedded JetStream wins at 1 producer." {
 		t.Fatal(got)
 	}
-	if got := winners(data, false); got != "Dostoevsky wins at 1 producer. JetStream wins at 8 and 32 producers." {
+	if got := winners(data, false); got != "Dostoevsky wins at 1 producer. Embedded JetStream wins at 8 and 32 producers." {
 		t.Fatal(got)
 	}
 	if !losing(data, true) {

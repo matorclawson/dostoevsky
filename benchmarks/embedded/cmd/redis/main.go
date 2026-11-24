@@ -18,10 +18,7 @@ import (
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/serverproc"
 )
 
-const (
-	port   = "6390"
-	stream = "events"
-)
+const stream = "events"
 
 type store struct {
 	client *redis.Client
@@ -72,13 +69,38 @@ func (s store) Read(v uint64) ([]byte, error) {
 	return []byte(d), nil
 }
 
-func (s store) ServerPeakKiB() uint64 { return s.proc.PeakKiB() }
+func (s store) ServerPeakKiB() (uint64, error) { return s.proc.PeakKiB() }
 
 func (s store) Close() {
 	s.client.Close()
 	if err := s.proc.Stop(30 * time.Second); err != nil {
 		panic(err)
 	}
+}
+
+// serverConfig is private to one trial: no TCP port, and a unix socket inside the
+// trial's own directory, so no other process can be the one that answers.
+func serverConfig(dir string) (conf, sock string) {
+	sock = filepath.Join(dir, "server.sock")
+	conf = fmt.Sprintf("port 0\nunixsocket %s\nunixsocketperm 700\ndir %s\nappendonly yes\nappendfsync always\nsave \"\"\n", sock, dir)
+	return conf, sock
+}
+
+// clientOptions disables command retries. go-redis retries failed commands by
+// default; a retried XADD would append a second entry under a new ID, and the
+// harness only verifies the IDs it was told about.
+func clientOptions(sock string) *redis.Options {
+	return &redis.Options{Network: "unix", Addr: sock, PoolSize: 64, MaxRetries: -1}
+}
+
+// serverPid reads process_id from INFO server.
+func serverPid(info string) (int, error) {
+	for _, line := range strings.Split(info, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "process_id:"); ok {
+			return strconv.Atoi(v)
+		}
+	}
+	return 0, fmt.Errorf("process_id not found in INFO server")
 }
 
 func main() {
@@ -91,22 +113,36 @@ func main() {
 		if bin == "" {
 			return nil, fmt.Errorf("BENCH_SERVER_BIN is not set")
 		}
+		confText, sock := serverConfig(dir)
 		conf := filepath.Join(dir, "server.conf")
-		cfg := fmt.Sprintf("port %s\nbind 127.0.0.1\ndir %s\nappendonly yes\nappendfsync always\nsave \"\"\nprotected-mode yes\n", port, dir)
-		if err := os.WriteFile(conf, []byte(cfg), 0o600); err != nil {
+		if err := os.WriteFile(conf, []byte(confText), 0o600); err != nil {
 			return nil, err
 		}
 		proc, err := serverproc.Start(bin, []string{conf}, nil, filepath.Join(dir, "server.log"), 50*time.Millisecond)
 		if err != nil {
 			return nil, err
 		}
-		addr := "127.0.0.1:" + port
-		if err = proc.WaitReady(addr, 60*time.Second); err != nil {
+		if err = proc.WaitReady("unix", sock, 60*time.Second); err != nil {
 			proc.Stop(5 * time.Second)
 			return nil, err
 		}
-		client := redis.NewClient(&redis.Options{Addr: addr, PoolSize: 64})
-		if err = client.Ping(context.Background()).Err(); err != nil {
+		client := redis.NewClient(clientOptions(sock))
+		ctx := context.Background()
+		if err = client.Ping(ctx).Err(); err != nil {
+			client.Close()
+			proc.Stop(5 * time.Second)
+			return nil, err
+		}
+		// The socket lives in this trial's private directory, but readiness is also
+		// tied to the launched child: the answering process must be our own.
+		info, err := client.Info(ctx, "server").Result()
+		if err == nil {
+			var pid int
+			if pid, err = serverPid(info); err == nil && pid != proc.Pid() {
+				err = fmt.Errorf("process %d answered, not the launched server %d", pid, proc.Pid())
+			}
+		}
+		if err != nil {
 			client.Close()
 			proc.Stop(5 * time.Second)
 			return nil, err

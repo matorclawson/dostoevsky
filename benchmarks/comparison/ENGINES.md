@@ -10,7 +10,7 @@ Host: production-03, Ubuntu 26.04.1 (codename resolute) arm64, 2 Neoverse-N1 vCP
 |---|---|---|---|---|
 | Dostoevsky | the commit in the receipt | built from this repository, `CGO_ENABLED=0` | commit and tree in the receipt | in process |
 | NATS JetStream | nats-server v2.15.3 | embedded in the benchmark binary | `benchmarks/embedded/go.sum` | in process |
-| SQLite | 3.54.1, bundled in modernc.org/sqlite v1.63.0 (pure Go) | Go module | `benchmarks/embedded/go.sum` | in process |
+| SQLite (single writer) | 3.54.1, bundled in modernc.org/sqlite v1.63.0 (pure Go) | Go module | `benchmarks/embedded/go.sum` | in process |
 | Redis | 8.12.0 | source tarball `http://download.redis.io/releases/redis-8.12.0.tar.gz`, built with `make` into `/opt/bench/redis-8.12.0` (Redis ships no arm64 binary) | `https://raw.githubusercontent.com/redis/redis-hashes/master/README` (sha256) | server, loopback |
 | Valkey | 9.2.0 | `https://download.valkey.io/releases/valkey-9.2.0-noble-arm64.tar.gz` (built for Ubuntu 24.04; built from source if it will not start on 26.04) | the `.sha256` file beside the tarball | server, loopback |
 | Apache Kafka (KRaft, one node) | 4.4.0 | `https://downloads.apache.org/kafka/4.4.0/kafka_2.13-4.4.0.tgz` | `https://downloads.apache.org/kafka/4.4.0/kafka_2.13-4.4.0.tgz.sha512` | server, loopback |
@@ -34,10 +34,18 @@ Host: production-03, Ubuntu 26.04.1 (codename resolute) arm64, 2 Neoverse-N1 vCP
 | Kafka | `log.flush.interval.messages=1`, client `acks=all`, `min.insync.replicas=1`, `default.replication.factor=1` | https://kafka.apache.org/44/configuration/broker-configs/ and https://kafka.apache.org/44/configuration/producer-configs/ | The settings are documented. The page does not say that `1` gives an fsync after every message; that is inferred from the definition, so the bar says "fsync per message inferred from log.flush.interval.messages=1" |
 | Kafka | KRaft single node: `bin/kafka-storage.sh format --standalone -t $KAFKA_CLUSTER_ID -c config/server.properties`, then `kafka-server-start.sh` | https://kafka.apache.org/quickstart | Yes for the commands. The values of `process.roles`, `node.id`, `controller.quorum.bootstrap.servers`, `listeners` and `controller.listener.names` are not stated there, so the config file cites https://kafka.apache.org/44/operations/kraft/ line by line before the run |
 | RabbitMQ | quorum queue, publisher confirms | https://www.rabbitmq.com/docs/quorum-queues ("Publisher confirms will only be issued once a published message has been successfully replicated to a quorum of members") | **Not verified**: the page never says the log is fsynced before the confirm and documents no switch to disable fsync. The bar says "durability per vendor default, not verified" |
-| SQLite | `journal_mode=WAL`, `synchronous=FULL` | https://www.sqlite.org/pragma.html#pragma_synchronous and https://www.sqlite.org/wal.html ("Writers sync the WAL on every transaction commit if PRAGMA synchronous is set to FULL") | Yes |
-| Dostoevsky | fdatasync before acknowledgment (full fsync for the first write) | [docs/how-it-works.md](../../docs/how-it-works.md) | Yes, by the crash tests it names |
+| SQLite (single writer) | `journal_mode=WAL`, `synchronous=FULL`, one writer connection, one transaction per publish | https://www.sqlite.org/pragma.html#pragma_synchronous and https://www.sqlite.org/wal.html ("Writers sync the WAL on every transaction commit if PRAGMA synchronous is set to FULL") | Yes |
+| Dostoevsky | fdatasync before acknowledgment (full fsync for the first write) | the crash tests in `crash_batch_test.go`, `publish_queue_test.go`, `retention_fault_test.go` and `fence_test.go` | Yes, by those tests |
 | JetStream | `SyncAlways` | the embedded server's options in `benchmarks/embedded/cmd/jet` | Yes |
 
 ## Memory
 
-`peakRSS_KiB` is the harness process alone (its `ru_maxrss`). For a server engine the receipt also carries `server_rss_KiB`, the sum over every process in the server's tree of that process's highest sampled `VmHWM` (read from `/proc` every 50 ms), and `total_rss_KiB`, the two added. It is a **sampled peak**: a spike shorter than the sampling interval in a child process can be missed. In-process engines have no server, so their total is `peakRSS_KiB`.
+`peakRSS_KiB` is the harness process alone (its `ru_maxrss`). For a server engine the receipt also carries `server_rss_KiB`, the sum over every process in the server's tree of that process's highest sampled `VmHWM` (read from `/proc` every 50 ms), and `total_rss_KiB`, the two added. It is a **sum of sampled per-process peaks**: the peaks can occur at different times, so the sum can exceed any real moment, shared pages are counted once per process, and a spike shorter than the sampling interval in a child process can be missed. If `/proc` is unreadable or the server process was never measured, the trial fails; a missing measurement is never reported as zero. In-process engines have no server, so their total is `peakRSS_KiB`.
+
+## Trial hygiene
+
+- Every trial removes its data directory and stops its server on every path, including failures; a failed trial is printed as FAILED and never retried.
+- Redis and Valkey listen on a unix socket inside the trial's private directory (no TCP port), the harness checks that the process answering is the launched child, and go-redis command retries are disabled so an ambiguous `XADD` is a failure, not a second entry.
+- The harness aborts a trial, as a failure, when the host's available memory falls below 300 MiB before or during the trial.
+- SQLite is measured with one writer connection and one transaction per publish (concurrent producers queue in Go), and the chart label says "single writer". Its timed reopen ends after one index-seek probe, not a table scan.
+- The comparison build runs with `-mod=readonly`. It writes to the Go module and build caches and the binaries to `.dev/embedded`.

@@ -11,7 +11,9 @@ set -u
 engines=${BENCH_ENGINES:?set BENCH_ENGINES to a space separated list}
 count=${BENCH_COUNT:-16000}
 rounds=${BENCH_ROUNDS:-5}
-(cd benchmarks/embedded && CGO_ENABLED=0 "${GO:-go}" build -buildvcs=false -o ../../.dev/embedded/ ./cmd/...) || exit 2
+# -mod=readonly: the build may not change go.mod or go.sum. It does write to the Go
+# module and build caches (GOMODCACHE, GOCACHE) and the binaries to .dev/embedded.
+(cd benchmarks/embedded && CGO_ENABLED=0 "${GO:-go}" build -mod=readonly -buildvcs=false -o ../../.dev/embedded/ ./cmd/...) || exit 2
 export GOMAXPROCS="${GOMAXPROCS:-2}"
 failed=0
 

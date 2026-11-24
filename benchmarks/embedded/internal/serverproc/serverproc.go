@@ -18,10 +18,11 @@ import (
 
 // Proc is a running server and its sampler.
 type Proc struct {
-	cmd  *exec.Cmd
-	stop chan struct{}
-	done chan struct{}
-	exit chan error
+	cmd     *exec.Cmd
+	rootPid int
+	stop    chan struct{}
+	done    chan struct{}
+	exit    chan error
 
 	mu   sync.Mutex
 	peak map[int]uint64 // pid -> highest VmHWM seen, in KiB
@@ -30,6 +31,10 @@ type Proc struct {
 // Start runs bin with args, in its own process group, with stdout and stderr
 // appended to logPath, and starts sampling its process tree every interval.
 func Start(bin string, args []string, env []string, logPath string, interval time.Duration) (*Proc, error) {
+	// Memory is part of every server receipt, so a host that cannot report it fails the trial.
+	if _, ok := vmHWM(os.Getpid()); !ok {
+		return nil, errors.New("procfs is unavailable: server memory cannot be measured")
+	}
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
@@ -42,15 +47,19 @@ func Start(bin string, args []string, env []string, logPath string, interval tim
 	if err = cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", bin, err)
 	}
-	p := &Proc{cmd: cmd, stop: make(chan struct{}), done: make(chan struct{}), exit: make(chan error, 1), peak: map[int]uint64{}}
+	p := &Proc{cmd: cmd, rootPid: cmd.Process.Pid, stop: make(chan struct{}), done: make(chan struct{}), exit: make(chan error, 1), peak: map[int]uint64{}}
 	go func() { p.exit <- cmd.Wait() }()
 	go p.sample(interval)
 	return p, nil
 }
 
-// WaitReady polls addr until it accepts a connection, the server exits or the
-// timeout passes.
-func (p *Proc) WaitReady(addr string, timeout time.Duration) error {
+// Pid is the launched server's process ID.
+func (p *Proc) Pid() int { return p.cmd.Process.Pid }
+
+// WaitReady polls addr on network ("tcp" or "unix") until it accepts a
+// connection, the server exits or the timeout passes. The caller must also check
+// that the process answering is the launched one (see Pid).
+func (p *Proc) WaitReady(network, addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		select {
@@ -59,7 +68,7 @@ func (p *Proc) WaitReady(addr string, timeout time.Duration) error {
 			return fmt.Errorf("server exited before it was ready: %v", err)
 		default:
 		}
-		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+		if c, err := net.DialTimeout(network, addr, 200*time.Millisecond); err == nil {
 			c.Close()
 			return nil
 		}
@@ -95,15 +104,21 @@ func (p *Proc) Stop(grace time.Duration) error {
 
 // PeakKiB returns the sum, over every process the server tree ever contained,
 // of that process's highest sampled VmHWM. It is a sampled peak: a spike
-// shorter than the sampling interval in a child process can be missed.
-func (p *Proc) PeakKiB() uint64 {
+// shorter than the sampling interval in a child process can be missed, the
+// per-process peaks may occur at different times, and shared pages are counted
+// once per process. It fails, rather than reporting zero, when the server
+// process itself was never measured.
+func (p *Proc) PeakKiB() (uint64, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.peak[p.rootPid] == 0 {
+		return 0, fmt.Errorf("server memory unavailable: no VmHWM was ever read for pid %d", p.rootPid)
+	}
 	var sum uint64
 	for _, v := range p.peak {
 		sum += v
 	}
-	return sum
+	return sum, nil
 }
 
 func (p *Proc) sample(interval time.Duration) {

@@ -295,7 +295,7 @@ func TestMissingMetricStopsThePlotterAndNeverAwardsAWin(t *testing.T) {
 	r := write(t, dir, "r.txt", b.String())
 	m := write(t, dir, "m.txt", meta)
 	out := filepath.Join(dir, "out")
-	err := run(r, "gate", m, filepath.Join(dir, "none"), out, 2)
+	err := run(r, m, filepath.Join(dir, "none"), out, 2)
 	if err == nil || !strings.Contains(err.Error(), "reopen_ms") {
 		t.Fatalf("missing reopen_ms accepted: %v", err)
 	}

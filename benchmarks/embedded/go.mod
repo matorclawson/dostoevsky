@@ -7,7 +7,9 @@ replace github.com/rodriveracom/dostoevsky => ../..
 require (
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.56.0
+	github.com/redis/go-redis/v9 v9.24.0
 	github.com/rodriveracom/dostoevsky v0.0.0
+	modernc.org/sqlite v1.63.0
 )
 
 require (

@@ -22,6 +22,13 @@ type Store interface {
 	Close()
 }
 
+// Measured is implemented by a Store backed by a separate server process. The
+// harness then reports that process tree's sampled peak memory next to its own.
+type Measured interface {
+	// ServerPeakKiB is the sum of the highest sampled VmHWM of every process in the server tree.
+	ServerPeakKiB() uint64
+}
+
 func Main(engine string, open func(string, bool) (Store, error)) {
 	count := flag.Int("count", 2000, "records per run")
 	workers := flag.Int("workers", 1, "concurrent synchronous producers")
@@ -73,6 +80,11 @@ func Main(engine string, open func(string, bool) (Store, error)) {
 	if err = syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
 		log.Fatal(err)
 	}
+	var server uint64
+	measured := false
+	if m, ok := s.(Measured); ok {
+		server, measured = m.ServerPeakKiB(), true
+	}
 	s.Close()
 	start = time.Now()
 	s, err = open(dir, false)
@@ -92,5 +104,10 @@ func Main(engine string, open func(string, bool) (Store, error)) {
 	}
 	readElapsed := time.Since(readStart)
 	sort.Slice(delays, func(i, j int) bool { return delays[i] < delays[j] })
-	fmt.Printf("engine=%s workers=%d verified=%d records/s=%.0f p95_us=%d p99_us=%d liveHeap_KiB=%d peakRSS_KiB=%d reopen_ms=%.2f verified_reads_per_s=%.0f\n", engine, *workers, *count, float64(*count)/elapsed.Seconds(), delays[(95*len(delays)-1)/100].Microseconds(), delays[(99*len(delays)-1)/100].Microseconds(), mem.HeapAlloc/1024, usage.Maxrss, float64(reopen)/1e6, float64(*count)/readElapsed.Seconds())
+	line := fmt.Sprintf("engine=%s workers=%d verified=%d records/s=%.0f p95_us=%d p99_us=%d liveHeap_KiB=%d peakRSS_KiB=%d reopen_ms=%.2f verified_reads_per_s=%.0f", engine, *workers, *count, float64(*count)/elapsed.Seconds(), delays[(95*len(delays)-1)/100].Microseconds(), delays[(99*len(delays)-1)/100].Microseconds(), mem.HeapAlloc/1024, usage.Maxrss, float64(reopen)/1e6, float64(*count)/readElapsed.Seconds())
+	if measured {
+		// peakRSS_KiB stays the harness process alone; total_rss_KiB adds the server tree (sampled peaks).
+		line += fmt.Sprintf(" server_rss_KiB=%d total_rss_KiB=%d arch=server", server, uint64(usage.Maxrss)+server)
+	}
+	fmt.Println(line)
 }

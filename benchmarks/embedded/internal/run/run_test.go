@@ -365,3 +365,37 @@ func TestLowMemoryDuringTheFinalCloseFailsTheTrial(t *testing.T) {
 		t.Error("trial data was not removed")
 	}
 }
+
+// The first open is inside the monitored span: pressure while a store opens
+// fails the trial even if the store then works.
+func TestLowMemoryDuringTheFirstOpenFailsTheTrial(t *testing.T) {
+	left := withTemp(t)
+	var low atomic.Bool
+	setMemory(t, func() (uint64, error) {
+		if low.Load() {
+			return 100 << 10, nil
+		}
+		return 1 << 30, nil
+	})
+	f := newFake()
+	opens := 0
+	open := func(string, bool) (Store, error) {
+		opens++
+		if opens == 1 {
+			low.Store(true)
+			time.Sleep(350 * time.Millisecond) // the guard samples every 100 ms
+		}
+		return f, nil
+	}
+	var out bytes.Buffer
+	err := execute("fake", open, 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "low-memory abort") {
+		t.Fatalf("a low-memory event during the first open was not reported: %v", err)
+	}
+	if out.Len() != 0 || opens != 1 {
+		t.Errorf("output %q after %d opens; the trial must stop right after the first open", out.String(), opens)
+	}
+	if left() != 0 || atomic.LoadInt32(f.closeCount) != 1 {
+		t.Errorf("cleanup incomplete: %d entries left, %d closes", left(), atomic.LoadInt32(f.closeCount))
+	}
+}

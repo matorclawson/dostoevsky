@@ -107,6 +107,41 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		return err
 	}
 	cutoff := cutoffStatus()
+	// The memory guard is the first thing that runs and the last thing that is
+	// joined, so every phase (open, publish, reopen, verify, close) is inside one
+	// monitored span. tripped() is checked after each phase.
+	var guardErr atomic.Pointer[error]
+	stopGuard := make(chan struct{})
+	guardDone := make(chan struct{})
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() { close(stopGuard) })
+		<-guardDone
+	}
+	defer stop()
+	go func() {
+		defer close(guardDone)
+		t := time.NewTicker(100 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopGuard:
+				return
+			case <-t.C:
+				if e := checkMemory(); e != nil {
+					guardErr.Store(&e)
+					return
+				}
+			}
+		}
+	}()
+
+	tripped := func() error {
+		if ge := guardErr.Load(); ge != nil {
+			return *ge
+		}
+		return nil
+	}
 	dir, err := os.MkdirTemp("", "embedded-bench-")
 	if err != nil {
 		return err
@@ -140,32 +175,9 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		return err
 	}
 	closed = false
-
-	var guardErr atomic.Pointer[error]
-	stopGuard := make(chan struct{})
-	guardDone := make(chan struct{})
-	var stopOnce sync.Once
-	stop := func() {
-		stopOnce.Do(func() { close(stopGuard) })
-		<-guardDone
+	if err = tripped(); err != nil {
+		return err
 	}
-	defer stop()
-	go func() {
-		defer close(guardDone)
-		t := time.NewTicker(100 * time.Millisecond)
-		defer t.Stop()
-		for {
-			select {
-			case <-stopGuard:
-				return
-			case <-t.C:
-				if e := checkMemory(); e != nil {
-					guardErr.Store(&e)
-					return
-				}
-			}
-		}
-	}()
 
 	delays := make([]time.Duration, count)
 	seq := make([]uint64, count)
@@ -231,20 +243,15 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	if err = closeStore(); err != nil {
 		return err
 	}
+	if err = tripped(); err != nil {
+		return err
+	}
 	start = time.Now()
 	if s, err = open(dir, false); err != nil {
 		return err
 	}
 	closed = false
 	reopen := time.Since(start)
-	// The guard keeps watching through the reopen and the verification: a
-	// low-memory event anywhere in the trial makes it a failed trial.
-	tripped := func() error {
-		if ge := guardErr.Load(); ge != nil {
-			return *ge
-		}
-		return nil
-	}
 	if err = tripped(); err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -186,6 +187,13 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 		if err := checkGroups(trials, want); err != nil {
 			return fmt.Errorf("%s: %w", receipt, err)
 		}
+		// Every chart needs its own metric in every group, or a bar and a winner
+		// could be drawn from fewer trials than the receipt promises.
+		for _, c := range gateCharts {
+			if err := checkMetric(trials, c.key, want); err != nil {
+				return fmt.Errorf("%s: %s: %w", receipt, c.file, err)
+			}
+		}
 	}
 	footer := footerLines(meta, receipt)
 	for _, c := range gateCharts {
@@ -342,8 +350,8 @@ func renderBars(c chart, data []series, footer []string) string {
 			}
 			m := median(vs)
 			x := gx + groupW/2 + (float64(si)-float64(len(data))/2)*(barW+6) + 3
-			fmt.Fprintf(&b, `<rect class="s%d" x="%.1f" y="%.1f" width="%.1f" height="%.1f"><title>%s, %d producers: median %s</title></rect>`+"\n",
-				si, x, y(m), barW, float64(base)-y(m), label(s.engine), w, format(m, c.decimals))
+			fmt.Fprintf(&b, `<rect class="s%d" x="%.1f" y="%.1f" width="%.1f" height="%.1f"><title>%s, %d producer%s: median %s</title></rect>`+"\n",
+				si, x, y(m), barW, float64(base)-y(m), label(s.engine), w, plural(w), format(m, c.decimals))
 			fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" font-weight="600">%s</text>`+"\n", x+barW/2, y(m)-8-dotRoom(vs, y, m), format(m, c.decimals))
 			sorted := append([]float64(nil), vs...)
 			sort.Float64s(sorted)
@@ -443,6 +451,9 @@ func medians(data []series) map[string]map[int]float64 {
 // bestAt returns the engine with the best median at each producer count,
 // leaving out counts where the two best medians are equal.
 func bestAt(data []series, lower bool) map[int]string {
+	if len(data) < 2 {
+		return map[int]string{} // nobody to beat
+	}
 	med := medians(data)
 	counts := map[int]bool{}
 	for _, s := range data {
@@ -455,11 +466,18 @@ func bestAt(data []series, lower bool) map[int]string {
 		var name string
 		var value float64
 		tie := false
+		complete := true
 		for _, s := range data {
-			v, ok := med[s.engine][w]
-			if !ok {
-				continue
+			if _, ok := med[s.engine][w]; !ok {
+				complete = false
 			}
+		}
+		if !complete {
+			// A winner needs an opponent at this producer count.
+			continue
+		}
+		for _, s := range data {
+			v := med[s.engine][w]
 			switch {
 			case name == "" || (lower && v < value) || (!lower && v > value):
 				name, value, tie = s.engine, v, false
@@ -559,6 +577,32 @@ func checkGroups(trials []trial, want int) error {
 			}
 			if len(n) != want {
 				return fmt.Errorf("%s at %d producers has %d trials, want %d", e, w, len(n), want)
+			}
+		}
+	}
+	return nil
+}
+
+// checkMetric requires want usable, finite values of key for every expected
+// engine at every expected producer count.
+func checkMetric(trials []trial, key string, want int) error {
+	type group struct {
+		engine  string
+		workers int
+	}
+	usable := map[group]int{}
+	for _, t := range trials {
+		w, err := strconv.Atoi(t["workers"])
+		v, ok := t.num(key)
+		if err != nil || !ok || math.IsNaN(v) || math.IsInf(v, 0) {
+			continue
+		}
+		usable[group{t["engine"], w}]++
+	}
+	for _, e := range expectedEngines {
+		for _, w := range expectedProducers {
+			if n := usable[group{e, w}]; n != want {
+				return fmt.Errorf("%s at %d producers has %d usable %q values, want %d", e, w, n, key, want)
 			}
 		}
 	}

@@ -166,6 +166,9 @@ func run(receipt, metaPath, sketchPath, out string) error {
 			return err
 		}
 	}
+	if err := os.WriteFile(filepath.Join(out, "architecture.svg"), []byte(renderArchitecture()), 0o644); err != nil {
+		return err
+	}
 	if sk, err := parseTrials(sketchPath); err == nil {
 		svg := renderSketch(sk, []string{"Receipt: " + sketchPath, "Command: " + meta["sketch_command"]})
 		return os.WriteFile(filepath.Join(out, "sketch-accuracy.svg"), []byte(svg), 0o644)

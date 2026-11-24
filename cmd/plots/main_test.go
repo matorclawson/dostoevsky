@@ -74,7 +74,7 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := map[string]string{}
-		for _, name := range []string{"throughput.svg", "memory.svg", "p99-latency.svg", "reopen.svg", "sketch-accuracy.svg"} {
+		for _, name := range []string{"throughput.svg", "memory.svg", "p99-latency.svg", "reopen.svg", "sketch-accuracy.svg", "architecture.svg"} {
 			b, err := os.ReadFile(filepath.Join(out, name))
 			if err != nil {
 				t.Fatal(err)
@@ -99,6 +99,9 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 	}
 	if !strings.Contains(first["memory.svg"], "10.0") || !strings.Contains(first["memory.svg"], "44.0") {
 		t.Error("memory.svg should show medians 10.0 and 44.0 MiB")
+	}
+	if !strings.Contains(first["architecture.svg"], "ack only after sync") || !strings.Contains(first["architecture.svg"], "<desc id=\"d\">") {
+		t.Error("architecture.svg missing durability text or description")
 	}
 	if !strings.Contains(first["reopen.svg"], "JetStream is faster here") {
 		t.Error("reopen.svg must say where JetStream wins")

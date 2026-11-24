@@ -113,27 +113,35 @@ func TestSuccessfulTrialPrintsAReceiptLine(t *testing.T) {
 // A failed publish must stop the other workers, close the store (which stops a
 // server) and remove the trial's data: no deferred cleanup may be skipped.
 func TestPublishFailureCleansUp(t *testing.T) {
-	left := withTemp(t)
-	setMemory(t, func() (uint64, error) { return 1 << 30, nil })
-	f := newFake()
-	f.failAt = 5
-	var out bytes.Buffer
-	err := execute("fake", opener(f, false), 50, 4, &out)
-	if err == nil || !strings.Contains(err.Error(), "injected publish failure") {
-		t.Fatalf("error %v", err)
-	}
-	if out.Len() != 0 {
-		t.Errorf("a failed trial printed a receipt line: %q", out.String())
-	}
-	if left() != 0 {
-		t.Error("trial data was not removed after the failure")
-	}
-	if got := atomic.LoadInt32(f.closeCount); got != 1 {
-		t.Errorf("store closed %d times, want exactly 1", got)
-	}
-	// The failure is not retried: the failing sequence number was used once.
-	if f.s.n < 5 || f.s.n > 5+4 {
-		t.Errorf("%d publishes ran; workers did not stop after the failure", f.s.n)
+	for _, workers := range []int{1, 4} {
+		left := withTemp(t)
+		setMemory(t, func() (uint64, error) { return 1 << 30, nil })
+		f := newFake()
+		f.failAt = 5
+		var out bytes.Buffer
+		const count = 100000
+		err := execute("fake", opener(f, false), count, workers, &out)
+		if err == nil || !strings.Contains(err.Error(), "injected publish failure") {
+			t.Fatalf("%d workers: error %v", workers, err)
+		}
+		if out.Len() != 0 {
+			t.Errorf("%d workers: a failed trial printed a receipt line: %q", workers, out.String())
+		}
+		if left() != 0 {
+			t.Errorf("%d workers: trial data was not removed after the failure", workers)
+		}
+		if got := atomic.LoadInt32(f.closeCount); got != 1 {
+			t.Errorf("%d workers: store closed %d times, want exactly 1", workers, got)
+		}
+		// The failing publish is not retried and the workers stop. One worker stops
+		// exactly at the failure; several can finish publishes already in flight, or
+		// started before the failure is recorded, but never run on to the end.
+		if workers == 1 && f.s.n != 5 {
+			t.Errorf("one worker ran %d publishes, want exactly 5", f.s.n)
+		}
+		if f.s.n >= count/10 {
+			t.Errorf("%d workers: %d of %d publishes ran; workers did not stop after the failure", workers, f.s.n, count)
+		}
 	}
 }
 

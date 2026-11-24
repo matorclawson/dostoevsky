@@ -36,6 +36,9 @@ func TestSamplesATreeAndStops(t *testing.T) {
 }
 
 func TestWaitReadyReportsAnExitedServer(t *testing.T) {
+	if _, ok := vmHWM(os.Getpid()); !ok {
+		t.Skip("needs procfs (Linux); run on the Linux gate host")
+	}
 	p, err := Start("sh", []string{"-c", "exit 3"}, nil, filepath.Join(t.TempDir(), "log"), 10*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)

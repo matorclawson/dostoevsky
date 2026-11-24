@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 484" width="760" height="484" role="img" aria-labelledby="t d">
-<title id="t">Reopen and verify time</title><desc id="d">Grouped bars of median reopen time in milliseconds at 1, 8 and 32 producers. Embedded JetStream reopens faster than Dostoevsky.</desc>
+<title id="t">Reopen time</title><desc id="d">Grouped bars of median time to reopen the store, in milliseconds, at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot. The time stops before the records are verified. Embedded JetStream wins at 1, 8 and 32 producers.</desc>
 <style>
 :root{--bg:#ffffff;--fg:#1f2328;--muted:#59636e;--grid:#d1d9e0;--a:#0b6bcb;--b:#c2410c}
 @media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#9198a1;--grid:#3d444d;--a:#58a6ff;--b:#f0883e}}
@@ -9,9 +9,10 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 .s0{fill:var(--a)}.s1{fill:var(--b)}.d0{fill:var(--fg);stroke:var(--a);stroke-width:1.5}.d1{fill:var(--fg);stroke:var(--b);stroke-width:1.5}
 </style>
 <rect class="bg" width="100%" height="100%"/>
-<text x="72" y="26" font-size="18" font-weight="600">Reopen and verify time</text>
+<text x="72" y="26" font-size="18" font-weight="600">Reopen time</text>
 <text x="72" y="46" font-size="12" class="m">milliseconds. Bars are medians; dots are trials.</text>
-<text x="72" y="61" font-size="12" class="m">Lower is better. JetStream is faster here: Dostoevsky scans its journal on open.</text>
+<text x="72" y="61" font-size="12" class="m">Lower is better. Embedded JetStream wins at 1, 8 and 32 producers. Dostoevsky scans its journal on</text>
+<text x="72" y="76" font-size="12" class="m">open.</text>
 <line class="g" x1="72" x2="736" y1="340.0" y2="340.0"/><text class="m" x="64" y="344.0" font-size="11" text-anchor="end">0</text>
 <line class="g" x1="72" x2="736" y1="253.3" y2="253.3"/><text class="m" x="64" y="257.3" font-size="11" text-anchor="end">50</text>
 <line class="g" x1="72" x2="736" y1="166.7" y2="166.7"/><text class="m" x="64" y="170.7" font-size="11" text-anchor="end">100</text>

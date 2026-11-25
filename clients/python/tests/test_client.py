@@ -89,12 +89,16 @@ class Stub(BaseHTTPRequestHandler):
     do_GET = do_POST = _go
 
 
+class _Server(ThreadingHTTPServer):
+    request_queue_size = 64  # eight clients connect at once; the default backlog of 5 can reset some of them
+    daemon_threads = True
+    block_on_close = False
+
+
 class ClientTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Stub)  # keep-alive needs a thread per connection
-        cls.srv.daemon_threads = True
-        cls.srv.block_on_close = False
+        cls.srv = _Server(("127.0.0.1", 0), Stub)  # keep-alive needs a thread per connection
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.url = "http://127.0.0.1:%d/" % cls.srv.server_port
 
@@ -153,12 +157,18 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(len(CONNECTIONS), 1)
 
     def test_threads_share_a_small_pool(self):
+        errors = []
+
         def work():
-            for _ in range(20):
-                self.c.read("jobs", 0, 5)
+            try:
+                for _ in range(20):
+                    self.c.read("jobs", 0, 5)
+            except BaseException as e:  # noqa: BLE001 - a worker's failure must fail the test, not vanish with its thread
+                errors.append(e)
         threads = [threading.Thread(target=work) for _ in range(8)]
         [t.start() for t in threads]
         [t.join() for t in threads]
+        self.assertEqual(errors, [], "a worker thread raised")
         self.assertLessEqual(len(CONNECTIONS), 8)
         self.assertLessEqual(len(self.c._idle), 16)
 

@@ -1,0 +1,42 @@
+#!/usr/bin/env node
+// One trial of the publisher workload from JavaScript against one engine; prints one receipt line.
+//   BENCH_TOKEN=... node worker.mjs --engine kafka --addr 127.0.0.1:PORT --workers 8 --target 16000 [--window 600]
+// The token comes from the environment, never from the command line. The server is started and
+// stopped by the driver (benchmarks/embedded/cmd/serve). A publish failure is a result
+// (stop=failed), never an exit code, and is never retried; internal errors exit 1.
+import { parseArgs } from "node:util";
+import { pathToFileURL } from "node:url";
+import * as core from "./core.mjs";
+
+export async function main(argv, env = process.env, out = (s) => console.log(s), engines = null) {
+  let args;
+  try {
+    args = parseArgs({ args: argv, options: {
+      engine: { type: "string" }, addr: { type: "string" }, workers: { type: "string", default: "1" },
+      target: { type: "string", default: "2000" }, window: { type: "string", default: "0" } } }).values;
+  } catch (e) { console.error(e.message); return 2; }
+  const workers = Number(args.workers), target = Number(args.target), windowS = Number(args.window);
+  if (!args.engine || !args.addr || !(workers >= 1) || !(target >= 1) || !(windowS >= 0)) {
+    console.error("usage: --engine E --addr host:port [--workers N>=1] [--target N>=1] [--window S>=0]");
+    return 2;
+  }
+  engines ??= (await import("./adapters.mjs")).ENGINES;
+  if (!(args.engine in engines)) { console.error(`unknown engine '${args.engine}' (have ${Object.keys(engines).sort().join(", ")})`); return 2; }
+  const adapter = await engines[args.engine](args.addr, env.BENCH_TOKEN ?? "");
+  let res, verified = 0;
+  try {
+    res = await core.runWorkload(adapter, workers, target, windowS);
+    if (res.stop !== core.STOP.failed || res.records.length > 0) { // also read back what a failed run acknowledged
+      const why = await core.verify(adapter, res.records);
+      if (why) { res.stop = core.STOP.verify; res.detail = why; } else verified = res.acked;
+    }
+  } finally {
+    await adapter.close();
+  }
+  out(core.receiptLine(`javascript-${args.engine}`, workers, res, verified, adapter.clientName, core.peakRssKiB()));
+  return 0;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2)).then((code) => process.exit(code), (e) => { console.error(e); process.exit(1); });
+}

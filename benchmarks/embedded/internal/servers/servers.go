@@ -40,6 +40,7 @@ type Options struct {
 	Bin    string        // the server executable (not used by kafka)
 	Home   string        // kafka: the unpacked kafka_2.13-<version> directory
 	Java   string        // kafka: the JDK
+	Env    []string      // extra environment for the server process (for example GOMAXPROCS)
 	Dir    string        // private directory for this trial
 	Sample time.Duration // memory sampling interval (default 50 ms)
 }
@@ -72,7 +73,7 @@ func Start(engine string, o Options) (*Server, error) {
 	switch engine {
 	case "gateway":
 		args = []string{"-listen", addr, "-data", filepath.Join(o.Dir, "data")}
-		env = []string{"DOSTOEVSKY_TOKEN=" + token}
+		env = append([]string{"DOSTOEVSKY_TOKEN=" + token}, o.Env...)
 	case "redis":
 		conf := filepath.Join(o.Dir, "server.conf")
 		if err = os.WriteFile(conf, []byte(RedisConfig(o.Dir, port, token)), 0o600); err != nil {

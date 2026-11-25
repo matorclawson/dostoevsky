@@ -1,10 +1,19 @@
 // Command gateway runs the publisher workload against dostoevsky-gateway: the same
-// durable engine as the dost command, but reached over HTTP/1.1 on loopback from a Go
-// net/http client with keep-alive. It is the CONTROL for the per-language client
-// benchmarks: the distance from dost to this command is the cost of HTTP alone, and any
-// further drop in a language's client is that client's own cost. The gateway runs as a
-// separate process whose memory is reported next to the harness's. The binary comes from
-// BENCH_SERVER_BIN (go build ./cmd/dostoevsky-gateway).
+// durable engine as the dost command, reached over HTTP/1.1 on loopback from a Go net/http
+// client with keep-alive. It is the CONTROL for the per-language client benchmarks, labeled
+// "gateway end to end (HTTP, process boundary)", NOT "HTTP alone". The distance from dost to
+// this command is the whole cost of going through the gateway: HTTP, a process boundary, and a
+// longer reopen path. What is equalized and what still differs:
+//
+//   - CPU: the embedded row runs with GOMAXPROCS=2. Here the harness and the gateway each get
+//     GOMAXPROCS=1 (BENCH_GATEWAY_GOMAXPROCS for the gateway, GOMAXPROCS for the harness), so
+//     their combined budget equals the embedded row's. run.sh sets both.
+//   - Still different: two processes share the two cores and the scheduler places them, a
+//     socket and an HTTP parser sit between every publish and the engine, and reopen is the
+//     process start, the readiness poll (20 ms resolution) and one read, not just Open.
+//
+// The gateway runs as a separate process whose memory is reported next to the harness's. The
+// binary comes from BENCH_SERVER_BIN (go build ./cmd/dostoevsky-gateway).
 package main
 
 import (
@@ -36,7 +45,7 @@ func newClient(workers int) *http.Client {
 		Timeout: 60 * time.Second,
 		// Keep one connection per producer; never follow redirects.
 		Transport: &http.Transport{
-			MaxIdleConns: 4 * workers, MaxIdleConnsPerHost: 4 * workers, IdleConnTimeout: 90 * time.Second,
+			MaxIdleConns: 4 * workers, MaxIdleConnsPerHost: 4 * workers, IdleConnTimeout: 30 * time.Second, // below the gateway's 60 s, so the client gives up a connection first
 			DisableCompression: true,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -105,6 +114,15 @@ func (s store) Close() {
 	}
 }
 
+// gatewayProcs is the gateway's CPU budget: BENCH_GATEWAY_GOMAXPROCS, default 1 (half of the
+// embedded row's 2, the other half being the harness's).
+func gatewayProcs() string {
+	if v := os.Getenv("BENCH_GATEWAY_GOMAXPROCS"); v != "" {
+		return v
+	}
+	return "1"
+}
+
 func main() {
 	bin := os.Getenv("BENCH_SERVER_BIN")
 	workers := 1
@@ -119,7 +137,7 @@ func main() {
 		// The same code that starts the gateway for the language benchmarks (internal/servers).
 		// Start returns after an authorized read succeeded, which ends the timed restart:
 		// reopen is the process start until the gateway answers a read.
-		srv, err := servers.Start("gateway", servers.Options{Bin: bin, Dir: dir})
+		srv, err := servers.Start("gateway", servers.Options{Bin: bin, Dir: dir, Env: []string{"GOMAXPROCS=" + gatewayProcs()}})
 		if err != nil {
 			return nil, err
 		}

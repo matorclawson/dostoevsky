@@ -98,7 +98,7 @@ func TestNodeConfigReadbackIsStrict(t *testing.T) {
 func topicConfigs(name, cfg string, value *string, code int16) *kmsg.DescribeConfigsResponse {
 	r := kmsg.NewPtrDescribeConfigsResponse()
 	res := kmsg.NewDescribeConfigsResponseResource()
-	res.ResourceName, res.ErrorCode = name, code
+	res.ResourceType, res.ResourceName, res.ErrorCode = kmsg.ConfigResourceTypeTopic, name, code
 	if cfg != "" {
 		c := kmsg.NewDescribeConfigsResponseResourceConfig()
 		c.Name, c.Value = cfg, value
@@ -113,14 +113,22 @@ func TestTopicWriteCachingReadbackIsStrict(t *testing.T) {
 	if err := checkTopicWriteCaching(topicConfigs("events", "write.caching", &f, 0), "events"); err != nil {
 		t.Fatal(err)
 	}
+	broker := topicConfigs("events", "write.caching", &f, 0)
+	broker.Resources[0].ResourceType = kmsg.ConfigResourceTypeBroker
+	topicOK := topicConfigs("events", "write.caching", &f, 0)
+	topicOK.Resources[0].ResourceType = kmsg.ConfigResourceTypeTopic
+	if err := checkTopicWriteCaching(topicOK, "events"); err != nil {
+		t.Fatal(err)
+	}
 	for name, resp := range map[string]*kmsg.DescribeConfigsResponse{
-		"topic override on":  topicConfigs("events", "write.caching", &tr, 0),
-		"no value":           topicConfigs("events", "write.caching", nil, 0),
-		"not reported":       topicConfigs("events", "flush.ms", &f, 0),
-		"no configs":         topicConfigs("events", "", nil, 0),
-		"broker error":       topicConfigs("events", "write.caching", &f, 3),
-		"another topic only": topicConfigs("other", "write.caching", &f, 0),
-		"no resources":       kmsg.NewPtrDescribeConfigsResponse(),
+		"broker resource of the same name": broker,
+		"topic override on":                topicConfigs("events", "write.caching", &tr, 0),
+		"no value":                         topicConfigs("events", "write.caching", nil, 0),
+		"not reported":                     topicConfigs("events", "flush.ms", &f, 0),
+		"no configs":                       topicConfigs("events", "", nil, 0),
+		"broker error":                     topicConfigs("events", "write.caching", &f, 3),
+		"another topic only":               topicConfigs("other", "write.caching", &f, 0),
+		"no resources":                     kmsg.NewPtrDescribeConfigsResponse(),
 	} {
 		if err := checkTopicWriteCaching(resp, "events"); err == nil {
 			t.Errorf("%s was accepted", name)
@@ -144,9 +152,60 @@ func TestEvidenceIsKeptPerTrialAndNeverOverwritten(t *testing.T) {
 			t.Fatalf("%s: %q %v", open, got, err)
 		}
 	}
+	// Evidence is required: without a directory the trial cannot run, and a key is never reused.
+	if err := saveEvidence("open1-fresh", "node_config.json", []byte(`{"a":3}`)); err == nil {
+		t.Fatal("a write-once evidence file was overwritten")
+	}
 	t.Setenv("BENCH_EVIDENCE_DIR", "")
-	if err := saveEvidence("x", "y", nil); err != nil {
-		t.Fatal(err)
+	if err := saveEvidence("x", "y", nil); err == nil {
+		t.Fatal("evidence was dropped silently when BENCH_EVIDENCE_DIR was unset")
+	}
+}
+
+func TestRawFieldShowsWhatTheBrokerSent(t *testing.T) {
+	if got := rawField([]byte(`{"write_caching_default":"disabled"}`), "write_caching_default"); got != `"disabled"` {
+		t.Fatalf("%s", got)
+	}
+	if got := rawField([]byte(`{"write_caching_default":false}`), "write_caching_default"); got != "false" {
+		t.Fatalf("%s", got)
+	}
+	if rawField([]byte(`{}`), "write_caching_default") != "absent" || rawField([]byte(`x`), "k") != "unreadable" {
+		t.Fatal("absent or unreadable fields must say so")
+	}
+}
+
+func metaTopic(name *string, code int16, partitions ...kmsg.MetadataResponseTopicPartition) kmsg.MetadataResponseTopic {
+	t := kmsg.NewMetadataResponseTopic()
+	t.Topic, t.ErrorCode, t.Partitions = name, code, partitions
+	return t
+}
+
+func metaPartition(number int32, leader int32, replicas ...int32) kmsg.MetadataResponseTopicPartition {
+	p := kmsg.NewMetadataResponseTopicPartition()
+	p.Partition, p.Leader, p.Replicas = number, leader, replicas
+	return p
+}
+
+func TestTopicReadinessNeedsTheNamedTopicOnePartitionOneReplicaAndALeader(t *testing.T) {
+	events, other := "events", "other"
+	if !topicReady([]kmsg.MetadataResponseTopic{metaTopic(&events, 0, metaPartition(0, 0, 0))}, "events") {
+		t.Fatal("a ready topic was refused")
+	}
+	for name, topics := range map[string][]kmsg.MetadataResponseTopic{
+		"another topic":    {metaTopic(&other, 0, metaPartition(0, 0, 0))},
+		"unnamed":          {metaTopic(nil, 0, metaPartition(0, 0, 0))},
+		"topic error":      {metaTopic(&events, 3, metaPartition(0, 0, 0))},
+		"two partitions":   {metaTopic(&events, 0, metaPartition(0, 0, 0), metaPartition(1, 0, 0))},
+		"no partition":     {metaTopic(&events, 0)},
+		"partition 1 only": {metaTopic(&events, 0, metaPartition(1, 0, 0))},
+		"two replicas":     {metaTopic(&events, 0, metaPartition(0, 0, 0, 1))},
+		"no replica":       {metaTopic(&events, 0, metaPartition(0, 0))},
+		"no leader":        {metaTopic(&events, 0, metaPartition(0, -1, 0))},
+		"none":             nil,
+	} {
+		if topicReady(topics, "events") {
+			t.Errorf("%s was accepted", name)
+		}
 	}
 }
 

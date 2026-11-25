@@ -21,14 +21,21 @@ rounds=${BENCH_ROUNDS:-5}
 export GOMAXPROCS="${GOMAXPROCS:-2}"
 failed=0
 
-# Every invocation's stderr is appended, under its trial key, to stderr-all.log, and the
-# engines that write raw readbacks (redpanda) keep them under BENCH_EVIDENCE_DIR, keyed by
-# the same BENCH_TRIAL_KEY. Nothing is overwritten: these files are part of the receipt.
+# Evidence lives in ONE directory per run, BENCH_EVIDENCE_DIR (default: a new directory named
+# for this run). It must be new or empty, so keys from an earlier run can never mix with this
+# one. Every invocation's stderr is appended, under its trial key, to stderr-all.log there, and
+# the engines that write raw readbacks (redpanda) keep them there, keyed by the same
+# BENCH_TRIAL_KEY. A write that fails is fatal (exit 4): a run that cannot keep its evidence
+# does not continue. Nothing is overwritten: these files are part of the receipt.
 mkdir -p .dev/embedded
-BENCH_EVIDENCE_DIR="${BENCH_EVIDENCE_DIR:-.dev/embedded/evidence}"; export BENCH_EVIDENCE_DIR
-mkdir -p "$BENCH_EVIDENCE_DIR"
+BENCH_EVIDENCE_DIR="${BENCH_EVIDENCE_DIR:-.dev/embedded/evidence-$(date -u +%Y%m%dT%H%M%SZ)-$$}"; export BENCH_EVIDENCE_DIR
+mkdir -p "$BENCH_EVIDENCE_DIR" || exit 4
+if [ -n "$(ls -A "$BENCH_EVIDENCE_DIR" 2>/dev/null)" ]; then
+ echo "BENCH_EVIDENCE_DIR $BENCH_EVIDENCE_DIR is not empty: a run needs a fresh evidence directory" >&2
+ exit 4
+fi
 keep_stderr() { # key file
- { printf '== %s\n' "$1"; cat "$2"; } >> .dev/embedded/stderr-all.log
+ { printf '== %s\n' "$1"; cat "$2"; } >> "$BENCH_EVIDENCE_DIR/stderr-all.log" || { echo "cannot write stderr evidence for $1 to $BENCH_EVIDENCE_DIR" >&2; exit 4; }
 }
 run_engine() { # engine workers
  case "$1" in

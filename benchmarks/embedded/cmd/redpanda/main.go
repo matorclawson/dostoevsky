@@ -225,7 +225,9 @@ func checkBrokers(brokers []kmsg.MetadataResponseBroker, host string, port int) 
 // default of false does not prove it: a topic override supersedes the default.
 func checkTopicWriteCaching(resp *kmsg.DescribeConfigsResponse, name string) error {
 	for _, res := range resp.Resources {
-		if res.ResourceName != name {
+		// Only the TOPIC resource of this name is evidence: a broker resource with the
+		// same name and an off value is not.
+		if res.ResourceType != kmsg.ConfigResourceTypeTopic || res.ResourceName != name {
 			continue
 		}
 		if res.ErrorCode != 0 {
@@ -269,7 +271,7 @@ func readTopicWriteCaching(client *kgo.Client) (*kmsg.DescribeConfigsResponse, e
 func saveEvidence(open, name string, body []byte) error {
 	dir := os.Getenv("BENCH_EVIDENCE_DIR")
 	if dir == "" {
-		return nil
+		return errors.New("BENCH_EVIDENCE_DIR is not set: the raw readbacks are required evidence and cannot be dropped")
 	}
 	key := os.Getenv("BENCH_TRIAL_KEY")
 	if key == "" {
@@ -311,6 +313,18 @@ func bindListener(client *kgo.Client, adminUUID []byte, save func(string, []byte
 		return err
 	}
 	return checkBrokers(md.Brokers, host, port)
+}
+
+// rawField returns a top-level JSON field exactly as the broker sent it, for the log.
+func rawField(body []byte, key string) string {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return "unreadable"
+	}
+	if v, ok := m[key]; ok {
+		return string(v)
+	}
+	return "absent"
 }
 
 func checkReady(body []byte) (bool, error) {
@@ -460,10 +474,8 @@ func ensureTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
 		resp, err := client.Request(ctx, md)
 		cancel()
 		if err == nil {
-			for _, rt := range resp.(*kmsg.MetadataResponse).Topics {
-				if rt.ErrorCode == 0 && len(rt.Partitions) == 1 && rt.Partitions[0].ErrorCode == 0 && rt.Partitions[0].Leader >= 0 {
-					return nil
-				}
+			if topicReady(resp.(*kmsg.MetadataResponse).Topics, topic) {
+				return nil
 			}
 		}
 		if err := run.Context().Err(); err != nil {
@@ -474,6 +486,22 @@ func ensureTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// topicReady is true only for the requested topic by name, with no error, exactly one
+// partition numbered 0, exactly one replica, and a leader. An unnamed or differently
+// named topic, or a topic with another partition or replica count, is not ready.
+func topicReady(topics []kmsg.MetadataResponseTopic, name string) bool {
+	for _, rt := range topics {
+		if rt.Topic == nil || *rt.Topic != name || rt.ErrorCode != 0 || len(rt.Partitions) != 1 {
+			continue
+		}
+		p := rt.Partitions[0]
+		if p.ErrorCode == 0 && p.Partition == 0 && len(p.Replicas) == 1 && p.Leader >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
@@ -604,7 +632,7 @@ func main() {
 			closeClient(client)
 			return fail(err)
 		}
-		fmt.Fprintf(os.Stderr, "redpanda readback (%s): developer_mode=false write_caching_default=false topic write.caching=false data_directory=%s\n", open, filepath.Join(dir, "data"))
+		fmt.Fprintf(os.Stderr, "redpanda readback (%s): developer_mode=false (checked) cluster write_caching_default=%s (raw, accepted) topic write.caching=false (checked) data_directory=%s\n", open, rawField(cluster, "write_caching_default"), filepath.Join(dir, "data"))
 		return &store{client: client, proc: proc, addr: kaddr}, nil
 	})
 }

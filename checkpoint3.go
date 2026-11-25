@@ -330,6 +330,9 @@ func (r *replayer3) Frame(typ byte, body []byte) error {
 		}
 		return r.st.define(d.Partition, Partition{string(d.Topic), int(d.Number)})
 	case f3Fence:
+		if len(body) != 0 {
+			return fmt.Errorf("%w: a fence frame with a %d-byte body", errFrame3Invalid, len(body))
+		}
 		r.Fences++
 	default:
 		return fmt.Errorf("%w: frame type %d outside a checkpoint", errFrame3Invalid, typ)
@@ -344,7 +347,7 @@ func (r *replayer3) adopt(cp checkpoint3) error {
 	}
 	if !r.st.empty() {
 		if err := r.st.checkpointFollows(other); err != nil {
-			return fmt.Errorf("%w: a checkpoint disagrees with the frames before it: %v", errCheckpointInvalid, err)
+			return fmt.Errorf("%w: a checkpoint disagrees with the frames before it: %w", errCheckpointInvalid, err)
 		}
 	}
 	*r.st = *other

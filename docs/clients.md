@@ -17,7 +17,7 @@ Then, in a second terminal with the same `DOSTOEVSKY_TOKEN` exported, pick your 
 ```sh
 make dev-client-python                      # runs examples/clients/python/worker.py
 python3 -m pip install ./clients/python     # use it in your project
-python3 -c "from dostoevsky import Client; print(Client('http://127.0.0.1:8787', '$DOSTOEVSKY_TOKEN').publish('jobs', b'hi'))"
+python3 -c "from dostoevsky_client import Client; print(Client('http://127.0.0.1:8787', '$DOSTOEVSKY_TOKEN').publish('jobs', b'hi'))"
 ```
 ```python
 c = Client(url, token); ack = c.publish("jobs", b"hi", id="once"); rec = c.read("jobs", ack.partition, ack.offset, wait_ms=1000)
@@ -46,7 +46,7 @@ const rec: StreamRecord | null = await new Client(url, token).read("jobs", 0, 0n
 **Java** (17+, a JDK only; no Maven)
 ```sh
 make dev-client-java                        # compiles and runs examples/clients/java/Worker.java
-cp clients/java/src/main/java/io/dostoevsky/Client.java your/src/io/dostoevsky/   # one file
+cp clients/java/src/main/java/io/github/rodriveracom/dostoevsky/Client.java your/src/io/github/rodriveracom/dostoevsky/   # one file
 ```
 ```java
 var c = new Client(url, token); var ack = c.publish("jobs", "hi".getBytes(UTF_8), "", "once");
@@ -62,6 +62,17 @@ let c = dostoevsky_client::Client::new("http://127.0.0.1:8787", &token); let ack
 ```
 
 Each example publishes a job with a stable ID, processes records in order, and saves its own consumer group's cursor with its state. Run an example twice to see deduplication (the same offset comes back) and checkpoint recovery (it resumes where it stopped).
+
+## Package names
+
+| Ecosystem | Name to install or import | Status |
+|---|---|---|
+| PyPI | install `dostoevsky-client`, import `dostoevsky_client` (the bare `dostoevsky` on PyPI is an unrelated package) | not published |
+| npm | `dostoevsky-client` | not published |
+| crates.io | `dostoevsky-client` (library `dostoevsky_client`) | not published |
+| Maven | `io.github.rodriveracom:dostoevsky-client`, package `io.github.rodriveracom.dostoevsky` | not published |
+
+Until publication, install from this checkout as shown above.
 
 ## Security: read this before exposing the gateway
 

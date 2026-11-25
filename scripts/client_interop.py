@@ -6,7 +6,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 
-from dostoevsky import Client, ClientError
+from dostoevsky_client import Client, ClientError
 
 
 @contextmanager

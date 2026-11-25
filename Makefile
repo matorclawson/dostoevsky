@@ -145,7 +145,7 @@ dev-client-typescript: ## Run the TypeScript publisher and consumer (Node 22.18+
 
 dev-client-java: ## Compile and run the Java publisher and consumer (JDK 17+)
 	@mkdir -p .dev/clients/java
-	@"$(JAVAC)" --release 17 -encoding UTF-8 -d .dev/clients/java clients/java/src/main/java/io/dostoevsky/Client.java examples/clients/java/Worker.java
+	@"$(JAVAC)" --release 17 -encoding UTF-8 -d .dev/clients/java clients/java/src/main/java/io/github/rodriveracom/dostoevsky/Client.java examples/clients/java/Worker.java
 	@java -cp .dev/clients/java Worker
 
 dev-client-rust: ## Build and run the Rust publisher and consumer (no crates; builds offline)

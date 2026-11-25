@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -20,7 +21,7 @@ import (
 // The journal is the publish workload's (512-byte values, one topic, no IDs), written with one
 // sync per 1,000 frames: it is a builder, and its speed is not a publish rate. The measurement
 // prints bytes per record, the journal's size, three Open+Close times, the heap in use and the
-// process's VmRSS and VmHWM after Open (read from /proc/self/status; Linux only).
+// process's resident set and peak after Open: VmRSS and VmHWM from /proc/self/status on Linux; on macOS only the peak (getrusage), with the current resident set reported as 0 and memory_source saying so.
 
 func TestReopenBuild(t *testing.T) {
 	dir := os.Getenv("DOST_REOPEN_BUILD")
@@ -43,11 +44,31 @@ func TestReopenBuild(t *testing.T) {
 	t.Logf("reopen_build records=%d journal_bytes=%d bytes_per_record=%.1f build_seconds=%.1f", records, fi.Size(), float64(fi.Size())/float64(records), time.Since(start).Seconds())
 }
 
+// memoryKiB returns the process's current resident set and its peak, in KiB, and how they
+// were read. On Linux both come from /proc/self/status (VmRSS and VmHWM). Elsewhere (macOS)
+// only the peak is available from getrusage; the current resident set is reported as 0 and
+// the source says so, so a receipt never presents a missing value as a measurement.
+func memoryKiB(t testing.TB) (rss, peak uint64, source string) {
+	t.Helper()
+	if runtime.GOOS == "linux" {
+		return procStatusKiB(t, "VmRSS"), procStatusKiB(t, "VmHWM"), "proc-status"
+	}
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+		t.Fatalf("getrusage: %v", err)
+	}
+	peak = uint64(ru.Maxrss)
+	if runtime.GOOS == "darwin" {
+		peak /= 1024 // macOS reports bytes; Linux reports KiB
+	}
+	return 0, peak, "getrusage-maxrss-only"
+}
+
 func procStatusKiB(t testing.TB, key string) uint64 {
 	t.Helper()
 	f, err := os.Open("/proc/self/status")
 	if err != nil {
-		t.Fatalf("this measurement needs /proc: %v", err)
+		t.Fatalf("reading /proc/self/status: %v", err)
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -79,6 +100,7 @@ func TestReopenMeasure(t *testing.T) {
 	const rounds = 3
 	var times []float64
 	var heap, rss, hwm uint64
+	var source string
 	for i := 0; i < rounds; i++ {
 		start := time.Now()
 		n, err := Open(dir, reopenConfig())
@@ -89,13 +111,14 @@ func TestReopenMeasure(t *testing.T) {
 		if i == 0 {
 			var ms runtime.MemStats
 			runtime.ReadMemStats(&ms)
-			heap, rss, hwm = ms.HeapAlloc/1024, procStatusKiB(t, "VmRSS"), procStatusKiB(t, "VmHWM")
+			heap = ms.HeapAlloc / 1024
+			rss, hwm, source = memoryKiB(t)
 		}
 		if err = n.Close(); err != nil {
 			t.Fatal(err)
 		}
 		times = append(times, float64(open.Microseconds())/1000)
 	}
-	t.Logf("reopen_baseline records=%d journal_bytes=%d bytes_per_record=%.1f open_ms=%.1f,%.1f,%.1f heap_alloc_KiB_after_first_open=%d vmrss_KiB_after_first_open=%d vmhwm_KiB_after_first_open=%d",
-		records, fi.Size(), float64(fi.Size())/float64(records), times[0], times[1], times[2], heap, rss, hwm)
+	t.Logf("reopen_baseline records=%d journal_bytes=%d bytes_per_record=%.1f open_ms=%.1f,%.1f,%.1f heap_alloc_KiB_after_first_open=%d vmrss_KiB_after_first_open=%d vmhwm_KiB_after_first_open=%d memory_source=%s",
+		records, fi.Size(), float64(fi.Size())/float64(records), times[0], times[1], times[2], heap, rss, hwm, source)
 }

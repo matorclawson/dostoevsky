@@ -1,0 +1,2 @@
+Filesystem       1B-blocks        Used   Available Use% Mounted on
+/dev/sda1      39956590592 16995340288 21297160192  45% /

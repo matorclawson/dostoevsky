@@ -1,0 +1,13 @@
+cleanup_start=2026-11-25T03:09:16Z
+stage=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo
+Filesystem     Type  Size  Used Avail Use% Mounted on
+/dev/sda1      ext4   38G   20G   17G  54% /
+engine_processes=none
+package_inventory_diff=empty
+scratch=removed /opt/bench=absent
+Filesystem     Type  Size  Used Avail Use% Mounted on
+/dev/sda1      ext4   38G   16G   20G  45% /
+free_bytes_before=21297160192 free_bytes_after=21297381376 difference_bytes=221184
+dispatch_scan_utc=2026-11-25T03:09:19Z since_epoch=1795573906
+dispatch_activity=none_observed
+cleanup_end=2026-11-25T03:09:19Z

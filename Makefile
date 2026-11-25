@@ -115,6 +115,7 @@ dev-bench-publish-gate: ## Compare median throughput and peak RSS with JetStream
 plots: ## Regenerate docs/img/*.svg from the raw receipts (standard library only)
 	@"$(GO)" run ./cmd/plots
 	@"$(GO)" run ./cmd/plots -receipt docs/receipts/production-03/explicit-2.log -section '*' -meta docs/receipts/production-03/meta.txt -sketch /nonexistent -architecture=false -out docs/img/production-03
+	@"$(GO)" run ./cmd/plots -receipt docs/receipts/production-03-comparison/comparison.log -section '*' -meta docs/receipts/production-03-comparison/meta.txt -sketch /nonexistent -architecture=false -engines dostoevsky,jetstream,sqlite,redis,valkey,kafka,rabbitmq -out docs/img/comparison
 
 .PHONY: sketch-report
 sketch-report: ## Measure sketch accuracy against exact values and write docs/sketch-accuracy-results.txt

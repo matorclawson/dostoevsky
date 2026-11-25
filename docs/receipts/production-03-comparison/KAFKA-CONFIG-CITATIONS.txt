@@ -1,0 +1,19 @@
+process.roles confirmed https://kafka.apache.org/44/configuration/broker-configs/#process.roles
+node.id confirmed https://kafka.apache.org/44/configuration/broker-configs/#node.id
+controller.quorum.bootstrap.servers confirmed https://kafka.apache.org/44/configuration/broker-configs/#controller.quorum.bootstrap.servers
+listeners confirmed https://kafka.apache.org/44/configuration/broker-configs/#listeners
+advertised.listeners confirmed https://kafka.apache.org/44/configuration/broker-configs/#advertised.listeners
+controller.listener.names confirmed https://kafka.apache.org/44/configuration/broker-configs/#controller.listener.names
+listener.security.protocol.map confirmed https://kafka.apache.org/44/configuration/broker-configs/#listener.security.protocol.map
+inter.broker.listener.name confirmed https://kafka.apache.org/44/configuration/broker-configs/#inter.broker.listener.name
+log.dirs confirmed https://kafka.apache.org/44/configuration/broker-configs/#log.dirs
+num.partitions confirmed https://kafka.apache.org/44/configuration/broker-configs/#num.partitions
+default.replication.factor confirmed https://kafka.apache.org/44/configuration/broker-configs/#default.replication.factor
+min.insync.replicas confirmed https://kafka.apache.org/44/configuration/broker-configs/#min.insync.replicas
+offsets.topic.replication.factor confirmed https://kafka.apache.org/44/configuration/broker-configs/#offsets.topic.replication.factor
+transaction.state.log.replication.factor confirmed https://kafka.apache.org/44/configuration/broker-configs/#transaction.state.log.replication.factor
+transaction.state.log.min.isr confirmed https://kafka.apache.org/44/configuration/broker-configs/#transaction.state.log.min.isr
+group.initial.rebalance.delay.ms confirmed https://kafka.apache.org/44/configuration/broker-configs/#group.initial.rebalance.delay.ms
+log.flush.interval.messages confirmed https://kafka.apache.org/44/configuration/broker-configs/#log.flush.interval.messages
+auto.create.topics.enable confirmed https://kafka.apache.org/44/configuration/broker-configs/#auto.create.topics.enable
+Kafka durability label: acks=all, fsync per message inferred from log.flush.interval.messages=1

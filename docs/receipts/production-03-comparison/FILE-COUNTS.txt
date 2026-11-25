@@ -1,0 +1,13 @@
+HOST.log lines=368 bytes=20719
+ENGINE-VERSIONS.log lines=139 bytes=10001
+PACKAGES-BEFORE.txt lines=716 bytes=20377
+PACKAGES-AFTER.txt lines=716 bytes=20377
+TESTS.log lines=112 bytes=5675
+EXIT.log lines=8 bytes=457
+SMOKE.log lines=21 bytes=4498
+SMOKE-CAPTURE.log lines=4 bytes=152
+PROCESS-AFTER.log lines=0 bytes=0
+comparison.log lines=105 bytes=23023
+comparison.err lines=21 bytes=4498
+RESULT.md lines=46 bytes=3721
+CLEANUP.log lines=13 bytes=592

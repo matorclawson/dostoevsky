@@ -1,0 +1,12 @@
+[GNUPG:] NEWSIG
+gpg: Signature made Mon Nov 16 20:07:58 2026 UTC
+gpg:                using RSA key 0A9AF2115F4687BD29803A206B73A36E6026DFCA
+[GNUPG:] KEY_CONSIDERED 0A9AF2115F4687BD29803A206B73A36E6026DFCA 0
+[GNUPG:] SIG_ID ahCDRT+QNk7vka8WXLjzwrtpQSw 2026-11-16 1794859678
+[GNUPG:] GOODSIG 6B73A36E6026DFCA RabbitMQ Release Signing Key <info@rabbitmq.com>
+gpg: Good signature from "RabbitMQ Release Signing Key <info@rabbitmq.com>" [unknown]
+[GNUPG:] VALIDSIG 0A9AF2115F4687BD29803A206B73A36E6026DFCA 2026-11-16 1794859678 0 4 0 1 10 00 0A9AF2115F4687BD29803A206B73A36E6026DFCA
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: 0A9A F211 5F46 87BD 2980  3A20 6B73 A36E 6026 DFCA

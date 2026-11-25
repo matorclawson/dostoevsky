@@ -1,0 +1,139 @@
+HEAD=6f35c74be497ed8e5a8ac0e411f5c3472adba42f
+TREE=709e319b5768e2dbb58c055da0e33139a7e2b4f1
+8c72816a6b308842d5ed1f13e5826b69c567da4784f7238d7e800efa71fe54b1  OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.13.1_2.tar.gz
+OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.13.1_2.tar.gz: OK
+8c72816a6b308842d5ed1f13e5826b69c567da4784f7238d7e800efa71fe54b1  OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.13.1_2.tar.gz
+kafka_2.13-4.4.0.tgz: F5CEBA8A 265AB6BB 2D68362B 1F6859A9 5E15D60E F92BA83B
+                      43FDF065 B557DC18 E98D6383 C15B9977 320E25B3 A2C8B6F1
+                      1DECB17B 0FA6C0F1 63423793 A0EB95CB
+kafka_2.13-4.4.0.tgz: OK
+5d46df16e8dbd228fed83c3e6fc4306916cf3d9156184a7fc2462e9ad9711a7d  kafka_2.13-4.4.0.tgz
+08b259d827917f0ae34e6fdadb34fb8417c27a2a27b0d5cddad0dad3e5ce9eea  KAFKA-KEYS
+[GNUPG:] NEWSIG
+gpg: Signature made Tue Oct  6 16:14:14 2026 UTC
+gpg:                using RSA key 1817905E3B2708B11A24B88E9AFA6F66CC8C3534
+[GNUPG:] KEY_CONSIDERED 1817905E3B2708B11A24B88E9AFA6F66CC8C3534 0
+[GNUPG:] SIG_ID vEBdht3t5yz49BwNFlin//e7Ff8 2026-10-06 1791303254
+[GNUPG:] GOODSIG 9AFA6F66CC8C3534 Omnia Ibrahim <omnia@apache.org>
+gpg: Good signature from "Omnia Ibrahim <omnia@apache.org>" [unknown]
+gpg: Signature notation: manu=2,2.5+1.12,0,3
+[GNUPG:] NOTATION_NAME manu
+[GNUPG:] NOTATION_FLAGS 0 1
+[GNUPG:] NOTATION_DATA 2,2.5+1.12,0,3
+[GNUPG:] VALIDSIG 1817905E3B2708B11A24B88E9AFA6F66CC8C3534 2026-10-06 1791303254 0 4 0 1 8 00 1817905E3B2708B11A24B88E9AFA6F66CC8C3534
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: 1817 905E 3B27 08B1 1A24  B88E 9AFA 6F66 CC8C 3534
+sha256:667c652c1cb272c02f8a25b1ef32e981661f358b399a9d5c227982cc2101390f
+rabbitmq-server-generic-unix-4.4.1.tar.xz: OK
+667c652c1cb272c02f8a25b1ef32e981661f358b399a9d5c227982cc2101390f  rabbitmq-server-generic-unix-4.4.1.tar.xz
+gpg: key 6B73A36E6026DFCA: 1 signature not checked due to a missing key
+gpg: key 6B73A36E6026DFCA: public key "RabbitMQ Release Signing Key <info@rabbitmq.com>" imported
+gpg: Total number processed: 1
+gpg:               imported: 1
+gpg: no ultimately trusted keys found
+[GNUPG:] NEWSIG
+gpg: Signature made Mon Nov 16 20:07:58 2026 UTC
+gpg:                using RSA key 0A9AF2115F4687BD29803A206B73A36E6026DFCA
+[GNUPG:] KEY_CONSIDERED 0A9AF2115F4687BD29803A206B73A36E6026DFCA 0
+[GNUPG:] SIG_ID ahCDRT+QNk7vka8WXLjzwrtpQSw 2026-11-16 1794859678
+[GNUPG:] GOODSIG 6B73A36E6026DFCA RabbitMQ Release Signing Key <info@rabbitmq.com>
+gpg: Good signature from "RabbitMQ Release Signing Key <info@rabbitmq.com>" [unknown]
+[GNUPG:] VALIDSIG 0A9AF2115F4687BD29803A206B73A36E6026DFCA 2026-11-16 1794859678 0 4 0 1 10 00 0A9AF2115F4687BD29803A206B73A36E6026DFCA
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: 0A9A F211 5F46 87BD 2980  3A20 6B73 A36E 6026 DFCA
+go1.26.0.linux-arm64.tar.gz: OK
+bd03b743eb6eb4193ea3c3fd3956546bf0e3ca5b7076c8226334afe6b75704cd  go1.26.0.linux-arm64.tar.gz
+	linux-vdso.so.1 (0x0000f2aaa3bdc000)
+	libtinfo.so.6 => /usr/lib/aarch64-linux-gnu/libtinfo.so.6 (0x0000f2aaa3630000)
+	libz.so.1 => /usr/lib/aarch64-linux-gnu/libz.so.1 (0x0000f2aaa35f0000)
+	libstdc++.so.6 => /usr/lib/aarch64-linux-gnu/libstdc++.so.6 (0x0000f2aaa3350000)
+	libm.so.6 => /usr/lib/aarch64-linux-gnu/libm.so.6 (0x0000f2aaa3280000)
+	libgcc_s.so.1 => /usr/lib/aarch64-linux-gnu/libgcc_s.so.1 (0x0000f2aaa3240000)
+	libc.so.6 => /usr/lib/aarch64-linux-gnu/libc.so.6 (0x0000f2aaa3070000)
+	/lib/ld-linux-aarch64.so.1 (0x0000f2aaa3ba0000)
+openjdk version "21.0.13.1" 2026-11-17 LTS
+OpenJDK Runtime Environment Temurin-21.0.13.1+2 (build 21.0.13.1+2-LTS)
+OpenJDK 64-Bit Server VM Temurin-21.0.13.1+2 (build 21.0.13.1+2-LTS, mixed mode, sharing)
+usage: kafka-storage [-h]
+                     {info,format,version-mapping,feature-dependencies,random-uuid}
+                     ...
+rabbit_server=present
+redis_toolchain
+gcc 4:15.2.0-5ubuntu1
+libc6-dev 2.43-2ubuntu2.7
+make 4.4.1-3
+gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+GNU Make 4.4.1
+apt_package_changes=none
+hash redis-8.12.0.tar.gz sha256 b0100a879b2d45dc97d8fda941127609d648f8913008db1b65a2f72a8ae36c8b http://download.redis.io/releases/redis-8.12.0.tar.gz
+redis-8.12.0.tar.gz: OK
+b0100a879b2d45dc97d8fda941127609d648f8913008db1b65a2f72a8ae36c8b  redis-8.12.0.tar.gz
+08aa213891f216ef64daea441363570d0793e1a0d06b0fa64ce67e1a055c058f  valkey-9.2.0-noble-arm64.tar.gz
+valkey-9.2.0-noble-arm64.tar.gz: OK
+08aa213891f216ef64daea441363570d0793e1a0d06b0fa64ce67e1a055c058f  valkey-9.2.0-noble-arm64.tar.gz
+redis_build=make -C src -j2 BUILD_TLS=no
+Redis server v=8.12.0 sha=00000000:1 malloc=jemalloc-5.3.0 bits=64 build=59520f39c918b93
+redis_smoke=PONG stopped=yes
+Valkey server v=9.2.0 sha=d23684e3:0 malloc=jemalloc-5.3.0 bits=64 build=53bd9adb806c35a4
+valkey_smoke=PONG stopped=yes
+process.roles confirmed https://kafka.apache.org/44/configuration/broker-configs/#process.roles
+node.id confirmed https://kafka.apache.org/44/configuration/broker-configs/#node.id
+controller.quorum.bootstrap.servers confirmed https://kafka.apache.org/44/configuration/broker-configs/#controller.quorum.bootstrap.servers
+listeners confirmed https://kafka.apache.org/44/configuration/broker-configs/#listeners
+advertised.listeners confirmed https://kafka.apache.org/44/configuration/broker-configs/#advertised.listeners
+controller.listener.names confirmed https://kafka.apache.org/44/configuration/broker-configs/#controller.listener.names
+listener.security.protocol.map confirmed https://kafka.apache.org/44/configuration/broker-configs/#listener.security.protocol.map
+inter.broker.listener.name confirmed https://kafka.apache.org/44/configuration/broker-configs/#inter.broker.listener.name
+log.dirs confirmed https://kafka.apache.org/44/configuration/broker-configs/#log.dirs
+num.partitions confirmed https://kafka.apache.org/44/configuration/broker-configs/#num.partitions
+default.replication.factor confirmed https://kafka.apache.org/44/configuration/broker-configs/#default.replication.factor
+min.insync.replicas confirmed https://kafka.apache.org/44/configuration/broker-configs/#min.insync.replicas
+offsets.topic.replication.factor confirmed https://kafka.apache.org/44/configuration/broker-configs/#offsets.topic.replication.factor
+transaction.state.log.replication.factor confirmed https://kafka.apache.org/44/configuration/broker-configs/#transaction.state.log.replication.factor
+transaction.state.log.min.isr confirmed https://kafka.apache.org/44/configuration/broker-configs/#transaction.state.log.min.isr
+group.initial.rebalance.delay.ms confirmed https://kafka.apache.org/44/configuration/broker-configs/#group.initial.rebalance.delay.ms
+log.flush.interval.messages confirmed https://kafka.apache.org/44/configuration/broker-configs/#log.flush.interval.messages
+auto.create.topics.enable confirmed https://kafka.apache.org/44/configuration/broker-configs/#auto.create.topics.enable
+Kafka durability label: acks=all, fsync per message inferred from log.flush.interval.messages=1
+2026-11-25T02:12:39Z
+/usr/bin/gcc
+/usr/bin/cc
+/usr/bin/make
+/usr/bin/perl
+gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+GNU Make 4.4.1
+This is perl 5, version 40, subversion 1 (v5.40.1) built for aarch64-linux-gnu-thread-multi
+<stdin>:1:10: fatal error: openssl/ssl.h: No such file or directory
+compilation terminated.
+openssl_header_check_exit=1
+<stdin>:1:10: fatal error: ncurses.h: No such file or directory
+compilation terminated.
+ncurses_header_check_exit=1
+source=https://builds.hex.pm/builds/otp/arm64/ubuntu-26.04/OTP-27.3.4.20.tar.gz
+index=https://builds.hex.pm/builds/otp/arm64/ubuntu-26.04/builds.txt
+OTP-27.3.4.20 734f60facc784915e6ae24b2514632c60923cc59 2026-11-24T15:31:31Z 116d5eb2744dabb458525c770a1886cfced760ca3aa5b09e602ce8191febac29
+OTP-27.3.4.20.tar.gz: OK
+116d5eb2744dabb458525c770a1886cfced760ca3aa5b09e602ce8191febac29  OTP-27.3.4.20.tar.gz
+hex_index_sha256=matched
+otp_release=27
+crypto_hashes=[blake2s,blake2b,sm3,shake256,shake128,sha3_512,sha3_384,
+               sha3_256,sha3_224,sha512,sha384,sha256,sha224,sha,ripemd160,
+               md5,md4]
+openssl=[{<<"OpenSSL">>,810549328,<<"OpenSSL 3.5.5 27 Jan 2026">>}]
+application=crypto path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/crypto-5.5.3.6/ebin/crypto.app
+application=ssl path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/ssl-11.2.12.15/ebin/ssl.app
+application=public_key path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/public_key-1.17.1.7/ebin/public_key.app
+application=inets path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/inets-9.3.2.9/ebin/inets.app
+application=xmerl path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/xmerl-2.1.3.4/ebin/xmerl.app
+application=mnesia path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/mnesia-4.23.5.7/ebin/mnesia.app
+application=os_mon path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/os_mon-2.10.1.1/ebin/os_mon.app
+application=sasl path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/sasl-4.2.2.1/ebin/sasl.app
+application=runtime_tools path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/runtime_tools-2.1.1/ebin/runtime_tools.app
+application=syntax_tools path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/syntax_tools-3.2.2.2/ebin/syntax_tools.app
+application=tools path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/tools-4.1.1.1/ebin/tools.app
+application=eldap path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/eldap-1.2.14.2/ebin/eldap.app
+provenance=hex-prebuilt

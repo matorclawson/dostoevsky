@@ -179,6 +179,7 @@ func TestCLIExistingChartsAreByteIdentical(t *testing.T) {
 	}{
 		{"docs/img", []string{"-architecture=false", "-sketch", "/nonexistent"}},
 		{"docs/img/production-03", []string{"-receipt", "docs/receipts/production-03/explicit-2.log", "-section", "*", "-meta", "docs/receipts/production-03/meta.txt", "-sketch", "/nonexistent", "-architecture=false"}},
+		{"docs/img/comparison", []string{"-receipt", "docs/receipts/production-03-comparison/comparison.log", "-section", "*", "-meta", "docs/receipts/production-03-comparison/meta.txt", "-sketch", "/nonexistent", "-architecture=false", "-engines", "dostoevsky,jetstream,sqlite,redis,valkey,kafka,rabbitmq"}},
 	}
 	for _, set := range sets {
 		out := t.TempDir()

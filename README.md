@@ -11,14 +11,15 @@
 
 | | Dostoevsky | Embedded JetStream | Receipt |
 |---|---:|---:|---|
-| Throughput, 32 producers, median | **36,422 msg/s** (9x) | 4,020 msg/s | [publisher gate](docs/publisher-gate-results.txt) |
-| Peak memory, 32 producers, median | **11.1 MiB** (4x less) | 43.6 MiB | [publisher gate](docs/publisher-gate-results.txt) |
+| Throughput, 32 producers, median | **18,412 msg/s** (22x) | 826 msg/s | [comparison run](docs/receipts/production-03-comparison/RESULT.md) |
+| Peak memory, 32 producers, median | **10.2 MiB** (4x less) | 43.4 MiB | [comparison run](docs/receipts/production-03-comparison/RESULT.md) |
+| Reopen, 32 producers, median | 210 ms | **18.8 ms** | [comparison run](docs/receipts/production-03-comparison/RESULT.md) |
 | Runtime dependencies | **none** | NATS server and client | [go.mod](go.mod) |
 
-Synchronous, fsync-backed publishes of 512-byte records to one topic, five alternating trials per point, on shared Linux AMD64 with an overlay filesystem and `GOMAXPROCS=2`. Medians are in [the table](docs/publisher-gate.md); the chart shows every trial. JetStream reopens a store faster (see [reopen time](docs/img/reopen.svg)). Numbers on ARM64 and macOS hardware are being collected and will replace these when they land.
+Synchronous, fsync-backed publishes of 512-byte records to one topic, five alternating trials per point, on a Linux arm64 virtual machine with two vCPUs and `GOMAXPROCS=2`. The same run measured SQLite, Redis, Valkey, Kafka and RabbitMQ: Dostoevsky has the highest throughput at 1, 8 and 32 producers (narrowly at one: 833 against 799 for SQLite; at 32, 18,412 messages/s against 9,419 for Valkey and 8,384 for Redis), but SQLite has the lowest p99 at one producer (3.0 ms against 4.0) and both SQLite and JetStream reopen faster. [Every engine, every number and every caveat](docs/comparison.md); the earlier two-engine gate is in [the publisher gate](docs/publisher-gate.md).
 
 <p align="center">
-<img src="docs/img/throughput.svg" alt="Median messages per second at 1, 8 and 32 producers: Dostoevsky 4,005, 13,252 and 36,422; embedded JetStream 3,185, 3,384 and 4,020.">
+<img src="docs/img/comparison/throughput.svg" alt="Median messages per second at 1, 8 and 32 producers for seven engines. At 32 producers: Dostoevsky 18,412, Valkey 9,419, Redis 8,384, RabbitMQ 5,551, Kafka 3,168, JetStream 826, SQLite 783.">
 </p>
 
 ## Quickstart
@@ -259,3 +260,5 @@ Run `make dev-bench-embedded` on Linux to compare embedded single-node publisher
 Concurrent calls to `Node.Publish` can share a journal sync. A lone producer writes immediately. Acknowledgments follow the sync, and messages from different calls keep their own receipts. Run `make dev-bench-publish` on Linux for the [concurrent publishing comparison](docs/concurrent-publishing.md).
 
 Run `make dev-bench-publish-gate` on Linux to compare synchronous publishers at one, eight and 32 producers. The command checks median throughput and peak process memory against embedded JetStream. See [measurements and reproduction](docs/publisher-gate.md).
+
+The seven-engine comparison (Dostoevsky, JetStream, SQLite, Redis, Valkey, Kafka and RabbitMQ on one host) is in [docs/comparison.md](docs/comparison.md), with its receipts and what it does not show.

@@ -1,0 +1,8 @@
+preflight_exit=0 preflight_completed_before_window=yes
+start=2026-11-25T02:31:47Z command=sh benchmarks/comparison/run.sh
+finish=2026-11-25T03:08:11Z comparison_exit=0
+smoke_lines=21 smoke_failures=0
+engine_processes=none
+summary_command=go run ./cmd/plots -summary -receipt comparison.log -expect-engines dostoevsky,jetstream,sqlite,redis,valkey,kafka,rabbitmq -trials 5
+result_exit=0 trial_lines=105 failed_lines=0
+pipeline_phase=complete pipeline_exit=0

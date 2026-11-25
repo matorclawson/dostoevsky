@@ -1,0 +1,38 @@
+2026-11-25T02:12:39Z
+/usr/bin/gcc
+/usr/bin/cc
+/usr/bin/make
+/usr/bin/perl
+gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+GNU Make 4.4.1
+This is perl 5, version 40, subversion 1 (v5.40.1) built for aarch64-linux-gnu-thread-multi
+<stdin>:1:10: fatal error: openssl/ssl.h: No such file or directory
+compilation terminated.
+openssl_header_check_exit=1
+<stdin>:1:10: fatal error: ncurses.h: No such file or directory
+compilation terminated.
+ncurses_header_check_exit=1
+source=https://builds.hex.pm/builds/otp/arm64/ubuntu-26.04/OTP-27.3.4.20.tar.gz
+index=https://builds.hex.pm/builds/otp/arm64/ubuntu-26.04/builds.txt
+OTP-27.3.4.20 734f60facc784915e6ae24b2514632c60923cc59 2026-11-24T15:31:31Z 116d5eb2744dabb458525c770a1886cfced760ca3aa5b09e602ce8191febac29
+OTP-27.3.4.20.tar.gz: OK
+116d5eb2744dabb458525c770a1886cfced760ca3aa5b09e602ce8191febac29  OTP-27.3.4.20.tar.gz
+hex_index_sha256=matched
+otp_release=27
+crypto_hashes=[blake2s,blake2b,sm3,shake256,shake128,sha3_512,sha3_384,
+               sha3_256,sha3_224,sha512,sha384,sha256,sha224,sha,ripemd160,
+               md5,md4]
+openssl=[{<<"OpenSSL">>,810549328,<<"OpenSSL 3.5.5 27 Jan 2026">>}]
+application=crypto path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/crypto-5.5.3.6/ebin/crypto.app
+application=ssl path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/ssl-11.2.12.15/ebin/ssl.app
+application=public_key path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/public_key-1.17.1.7/ebin/public_key.app
+application=inets path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/inets-9.3.2.9/ebin/inets.app
+application=xmerl path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/xmerl-2.1.3.4/ebin/xmerl.app
+application=mnesia path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/mnesia-4.23.5.7/ebin/mnesia.app
+application=os_mon path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/os_mon-2.10.1.1/ebin/os_mon.app
+application=sasl path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/sasl-4.2.2.1/ebin/sasl.app
+application=runtime_tools path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/runtime_tools-2.1.1/ebin/runtime_tools.app
+application=syntax_tools path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/syntax_tools-3.2.2.2/ebin/syntax_tools.app
+application=tools path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/tools-4.1.1.1/ebin/tools.app
+application=eldap path=/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/erlang-27.3.4.20/lib/eldap-1.2.14.2/ebin/eldap.app
+provenance=hex-prebuilt

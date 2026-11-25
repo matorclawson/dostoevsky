@@ -1,0 +1,61 @@
+gpg: keybox '/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/gnupg/pubring.kbx' created
+gpg: /srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/gnupg/trustdb.gpg: trustdb created
+gpg: key 68255A3053038328: public key "Chris Douglas <cdouglas@apache.org>" imported
+gpg: key 6C74016C99369B56: public key "Neha Narkhede (Key for signing code and releases) <nehanarkhede@apache.org>" imported
+gpg: key 6C74016C99369B56: "Neha Narkhede (Key for signing code and releases) <nehanarkhede@apache.org>" not changed
+gpg: key 8418DC25575A2645: public key "Neha Narkhede (Key used for signing releases) <neha.narkhede@gmail.com>" imported
+gpg: key 865187967F1183BD: public key "Joe Stein (CODE SIGNING KEY) <joestein@apache.org>" imported
+gpg: key AB61F70FE0A61EEA: public key "Jun Rao <junrao@gmail.com>" imported
+gpg: key 73855CE2D0A67B5A: public key "Chen (Gwen) Shapira <cshapi@gmail.com>" imported
+gpg: key 82E634EDAB55EF5C: public key "Ismael Juma <ijuma@apache.org>" imported
+gpg: key 115B0CA827A7289E: 2 signatures not checked due to missing keys
+gpg: key 115B0CA827A7289E: public key "Jason Gustafson <jason.gustafson@gmail.com>" imported
+gpg: key AC3CF9DC9054F6FA: public key "Jason Gustafson <jason.gustafson@gmail.com>" imported
+gpg: key A6ECA8953B417B9B: public key "Guozhang Wang (Key for signing code and releases) <wangguoz@gmail.com>" imported
+gpg: key 934EEC7DBE7EFC73: public key "Ewen Cheslack-Postava <ewen@confluent.io>" imported
+gpg: key DDAA34525234D94F: public key "Ewen Cheslack-Postava <me@ewencp.org>" imported
+gpg: key 4B606607518830CF: public key "Damian Guy (CODE SIGNING KEY) <damianguy@apache.org>" imported
+gpg: key 0CF65F72E4609424: public key "Rajini Sivaram (CODE SIGNING KEY) <rajinisivaram@googlemail.com>" imported
+gpg: key 48307CB31DCC852D: public key "Matthias J. Sax <mjsax@apache.org>" imported
+gpg: key BEED4F6CB9F77D0E: public key "Dong Lin (CODE SIGNING KEY) <lindong28@gmail.com>" imported
+gpg: key 0DC9AB9E5B3A4458: public key "Manikumar Reddy Obili (SIGNING KEY) <manikumar.reddy@gmail.com>" imported
+gpg: key DE78987A9CD4D9D3: public key "Colin McCabe <cmccabe@apache.org>" imported
+gpg: key 62A9813636302260: public key "Bill Bejeck (CODE SIGNING KEY) <bbejeck@apache.org>" imported
+gpg: key 3674A03EDC7C2868: public key "Vahid Hashemian <vahid@apache.org>" imported
+gpg: key E9F87164989E9B3F: public key "David Arthur (CODE SIGNING KEY) <davidarthur@apache.org>" imported
+gpg: key A5B999BF0C414BEB: public key "Randall Hauch (CODE SIGNING KEY) <rhauch@apache.org>" imported
+gpg: key 8060FC0DA962AFE5: public key "Mickael Maison (CODE SIGNING KEY) <mimaison@apache.org>" imported
+gpg: key 016CCFCA0E2FD561: public key "John Roesler (CODE SIGNING KEY) <vvcephei@apache.org>" imported
+gpg: key 241A59C30616924E: 1 signature not checked due to a missing key
+gpg: key 241A59C30616924E: public key "Anna Sophie Blee-Goldman <ableegoldman@apache.org>" imported
+gpg: key B453F41C8B56AEE1: public key "Konstantine Karantasis (CODE SIGNING KEY) <kkarantasis@apache.org>" imported
+gpg: key B4CC1061B61737F9: public key "David Jacot (CODE SIGNING KEY) <dajac@apache.org>" imported
+gpg: key 07D24FE8E0B51CAC: public key "Tom Bentley (CODE SIGNING KEY) <tombentley@apache.org>" imported
+gpg: key 299A97FC61C78183: public key "Bruno Cadonna (CODE SIGNING KEY) <cadonna@apache.org>" imported
+gpg: key D3360B139CE19FE8: public key "David Arthur (CODE SIGNING KEY) <davidarthur@apache.org>" imported
+gpg: key CF2A47452FC9C6FD: public key "Jose Armando Garcia Sancio (CODE SIGNING KEY) <jsancio@apache.org>" imported
+gpg: key F19D6CB551424672: public key "Chris Egerton (CODE SIGNING KEY) <cegerton@apache.org>" imported
+gpg: key 6CCECEFAC04AC304: public key "Luke Chen (CODE SIGNING KEY) <showuon@apache.org>" imported
+gpg: key 76AAB84D81427E11: public key "Divij Vaidya (CODE SIGNING KEY) <divijv@apache.org>" imported
+gpg: key F65DC3423D4CD7B9: public key "Satish Duggana (code signing key) <satishd@apache.org>" imported
+gpg: key DE0D9D12FB1360DA: public key "Stanislav Kozlovski <stanislavkozlovski@apache.org>" imported
+gpg: key 39AB5531A7FCB08E: public key "Igor Soarez (CODE SIGNING KEY) <soarez@apache.org>" imported
+gpg: key 05EEA67F87749E61: public key "Josep Prat (Apache) <jlprat@apache.org>" imported
+gpg: key 8AF5CC6A1653902F: public key "Colin Patrick McCabe (CODE SIGNING KEY) <cmccabe@apache.org>" imported
+gpg: key FBB09F6AAD19A4BA: public key "Matthias J. Sax (Release Signing Key) <mjsax@apache.org>" imported
+gpg: key E60C009E3C4CC379: public key "TengYao Chi (ASF GPG KEY for TengYao) <frankvicky@apache.org>" imported
+gpg: key 3F66597F0116FD68: public key "Christo Lolov (CODE SIGNING KEY) <clolov@apache.org>" imported
+gpg: key 1E8A9F4B368638A9: public key "Lianet Magrans (CODE SIGNING KEY) <lianetm@apache.org>" imported
+gpg: key 72E522CC9FCBBAC9: public key "PoAn Yang <payang@apache.org>" imported
+gpg: key 5115511788EDBCC9: public key "Viktor Somogyi-Vass <viktor@apache.org>" imported
+gpg: key DCFDB318BA5D9AA8: public key "Andrew Schofield (CODE SIGNING KEY) <schofielaj@apache.org>" imported
+gpg: key ED3ADEA20917735C: public key "Chia-Ping Tsai (CODE SIGNING KEY) <chia7712@gmail.com>" imported
+gpg: key 71650CBCEA26F8A4: public key "Bill Bejeck (CODE SIGNING KEY) <bbejeck@apache.org>" imported
+gpg: key 62A9813636302260: "Bill Bejeck (CODE SIGNING KEY) <bbejeck@apache.org>" not changed
+gpg: key 9AFA6F66CC8C3534: public key "Omnia Ibrahim <omnia@apache.org>" imported
+gpg: key 504473FAF80CBBCB: public key "Jiunn Yang Huang <jyhuang@apache.org>" imported
+gpg: key 74DBE995B60755E9: public key "Apoorv Mittal (CODE SIGNING KEY) <mittal@apache.org>" imported
+gpg: Total number processed: 53
+gpg:               imported: 51
+gpg:              unchanged: 2
+gpg: no ultimately trusted keys found

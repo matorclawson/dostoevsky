@@ -1,0 +1,14 @@
+2343790:M 25 Nov 2026 02:17:38.571 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+2343790:M 25 Nov 2026 02:17:38.574 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+2343790:M 25 Nov 2026 02:17:38.574 * Valkey version=9.2.0, bits=64, commit=d23684e3, modified=0, pid=2343790, just started
+2343790:M 25 Nov 2026 02:17:38.574 * Configuration loaded
+2343790:M 25 Nov 2026 02:17:38.574 * Increased maximum number of open files to 10032 (it was originally set to 1024).
+2343790:M 25 Nov 2026 02:17:38.574 * monotonic clock: ARM CNTVCT @ 25 ticks/us
+2343790:M 25 Nov 2026 02:17:38.575 * Running mode=standalone, port=0.
+2343790:M 25 Nov 2026 02:17:38.576 * Static Module 'lua' successfully loaded (version 1)
+2343790:M 25 Nov 2026 02:17:38.576 * Server initialized
+2343790:M 25 Nov 2026 02:17:38.577 * Ready to accept connections unix
+2343790:M 25 Nov 2026 02:17:38.689 * User requested shutdown... (user request from 'id=4 addr=[/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/tmp/valkey-smoke.sock:0]:0 laddr=[/srv/zeo-gates/home/bench-final-20261125T021235Z.LRXtdMwo/tmp/valkey-smoke.sock:0]:0 fd=10 name=*redacted* user=*redacted* lib-name= lib-ver=')
+2343790:M 25 Nov 2026 02:17:38.689 * Removing the unix socket file.
+2343790:M 25 Nov 2026 02:17:38.689 * Module lua unloaded
+2343790:M 25 Nov 2026 02:17:38.689 # Valkey is now ready to exit, bye bye...

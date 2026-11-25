@@ -1,0 +1,16 @@
+[GNUPG:] NEWSIG
+gpg: Signature made Tue Oct  6 16:14:14 2026 UTC
+gpg:                using RSA key 1817905E3B2708B11A24B88E9AFA6F66CC8C3534
+[GNUPG:] KEY_CONSIDERED 1817905E3B2708B11A24B88E9AFA6F66CC8C3534 0
+[GNUPG:] SIG_ID vEBdht3t5yz49BwNFlin//e7Ff8 2026-10-06 1791303254
+[GNUPG:] GOODSIG 9AFA6F66CC8C3534 Omnia Ibrahim <omnia@apache.org>
+gpg: Good signature from "Omnia Ibrahim <omnia@apache.org>" [unknown]
+gpg: Signature notation: manu=2,2.5+1.12,0,3
+[GNUPG:] NOTATION_NAME manu
+[GNUPG:] NOTATION_FLAGS 0 1
+[GNUPG:] NOTATION_DATA 2,2.5+1.12,0,3
+[GNUPG:] VALIDSIG 1817905E3B2708B11A24B88E9AFA6F66CC8C3534 2026-10-06 1791303254 0 4 0 1 8 00 1817905E3B2708B11A24B88E9AFA6F66CC8C3534
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: 1817 905E 3B27 08B1 1A24  B88E 9AFA 6F66 CC8C 3534

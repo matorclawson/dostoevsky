@@ -1,6 +1,6 @@
 # Engines, versions, settings and what is verified
 
-Status as of 24 November 2026. This file is the source for every chart footer. A hash in the "checksum source" column is never filled from a summarized web page: zeo-rt checks each downloaded archive against the vendor's own checksum file on the host and records the result here before a run. "Not verified" means the vendor's documentation does not state the property, and the chart bar says so.
+Status as of 25 November 2026, after the final run (receipts in `docs/receipts/production-03-comparison/`: `ENGINE-VERSIONS.log`, `ERLANG-PROVENANCE.txt`, `KAFKA-CONFIG-CITATIONS.txt`, `CLEANUP.log`). This file is the source for every chart footer. A hash in the "checksum source" column is never filled from a summarized web page: zeo-rt checks each downloaded archive against the vendor's own checksum file on the host and records the result here before a run. "Not verified" means the vendor's documentation does not state the property, and the chart bar says so.
 
 Host: production-03, Ubuntu 26.04.1 (codename resolute) arm64, 2 Neoverse-N1 vCPUs, 3.7 GiB RAM, no swap, ext4 on a QEMU virtual disk. Every engine runs natively, one at a time, with data on the ext4 disk (never `/tmp`, which is tmpfs), and is removed at the end of the run.
 
@@ -11,13 +11,13 @@ Host: production-03, Ubuntu 26.04.1 (codename resolute) arm64, 2 Neoverse-N1 vCP
 | Dostoevsky | the commit in the receipt | built from this repository, `CGO_ENABLED=0` | commit and tree in the receipt | in process |
 | NATS JetStream | nats-server v2.15.3 | embedded in the benchmark binary | `benchmarks/embedded/go.sum` | in process |
 | SQLite (single writer) | 3.54.1, bundled in modernc.org/sqlite v1.63.0 (pure Go) | Go module | `benchmarks/embedded/go.sum` | in process |
-| Redis | 8.12.0 | source tarball `http://download.redis.io/releases/redis-8.12.0.tar.gz`, built with `make` into `/opt/bench/redis-8.12.0` (Redis ships no arm64 binary) | `https://raw.githubusercontent.com/redis/redis-hashes/master/README` (sha256) | server over a unix socket |
-| Valkey | 9.2.0 | `https://download.valkey.io/releases/valkey-9.2.0-noble-arm64.tar.gz` (built for Ubuntu 24.04; built from source if it will not start on 26.04) | the `.sha256` file beside the tarball | server over a unix socket |
-| Apache Kafka (KRaft, one node) | 4.4.0 | `https://downloads.apache.org/kafka/4.4.0/kafka_2.13-4.4.0.tgz` | `https://downloads.apache.org/kafka/4.4.0/kafka_2.13-4.4.0.tgz.sha512` | server, loopback |
-| RabbitMQ (quorum queue, one node) | 4.4.1 | `https://github.com/rabbitmq/rabbitmq-server/releases/download/v4.4.1/rabbitmq-server-generic-unix-4.4.1.tar.xz` | the release asset digest and the vendor's signature file | server, loopback |
-| JDK for Kafka | Eclipse Temurin 21.0.13.1+2 | `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13.1%2B2/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.13.1_2.tar.gz` into `/opt/bench/jdk-21` | `...tar.gz.sha256.txt` beside it; the research pass read `8c72816a6b308842d5ed1f13e5826b69c567da4784f7238d7e800efa71fe54b1` there, to be re-checked | n/a |
-| Erlang/OTP for RabbitMQ | Ubuntu `erlang` 1:27.3.4.6+dfsg-1ubuntu0.2 (supported range 27 to 29) | apt on the host, purged at the end; arm64 availability still to be confirmed | package index | n/a |
-| Faust (fold workload) | faust-streaming 0.15.4, Python 3.12.13 | PyPI into a disposable venv with `pip install --require-hashes` | the hash file zeo-rt generates | n/a |
+| Redis | 8.12.0 | source tarball `http://download.redis.io/releases/redis-8.12.0.tar.gz`, built on the host with `make -C src -j2 BUILD_TLS=no` into `/opt/bench` (Redis ships no arm64 binary) | sha256 `b0100a879b2d45dc97d8fda941127609d648f8913008db1b65a2f72a8ae36c8b` matched `https://raw.githubusercontent.com/redis/redis-hashes/master/README` | server over a unix socket |
+| Valkey | 9.2.0 | `https://download.valkey.io/releases/valkey-9.2.0-noble-arm64.tar.gz` (built for Ubuntu 24.04; it started on 26.04, so it was not built from source) | sha256 `08aa213891f216ef64daea441363570d0793e1a0d06b0fa64ce67e1a055c058f` matched the `.sha256` file beside the tarball | server over a unix socket |
+| Apache Kafka (KRaft, one node) | 4.4.0 | `https://downloads.apache.org/kafka/4.4.0/kafka_2.13-4.4.0.tgz` | the `.sha512` file beside it matched; the detached signature verified as good against the KEYS file (the signing key is not independently trusted) | server, loopback |
+| RabbitMQ (quorum queue, one node) | 4.4.1 | `https://github.com/rabbitmq/rabbitmq-server/releases/download/v4.4.1/rabbitmq-server-generic-unix-4.4.1.tar.xz` | sha256 `667c652c1cb272c02f8a25b1ef32e981661f358b399a9d5c227982cc2101390f` matched the release asset digest; the release signature file was checked with gpg (the signing key is not independently trusted) | server, loopback |
+| JDK for Kafka | Eclipse Temurin 21.0.13.1+2 | `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13.1%2B2/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.13.1_2.tar.gz` into `/opt/bench/jdk-21` | sha256 `8c72816a6b308842d5ed1f13e5826b69c567da4784f7238d7e800efa71fe54b1` matched the `.sha256.txt` beside it | n/a |
+| Erlang/OTP for RabbitMQ | OTP 27.3.4.20, the Hex.pm prebuilt for Ubuntu 26.04 arm64 (no Ubuntu apt package and no source build was used) | `https://builds.hex.pm/builds/otp/arm64/ubuntu-26.04/OTP-27.3.4.20.tar.gz` | sha256 `116d5eb2744dabb458525c770a1886cfced760ca3aa5b09e602ce8191febac29` matched the Hex.pm build index `builds.txt`; no independent checksum file is published, so provenance is the Hex.pm index only | n/a |
+| Faust (fold workload) | not measured in this run | n/a | n/a | n/a |
 
 ## Not measured
 

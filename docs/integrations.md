@@ -62,4 +62,6 @@ This table is a summary, not a benchmark. Check each system's documentation for 
 | Integrated stream processing | `Fold`, `Pipe` | Consumers keep their own state | Kafka Streams library | No: scripts and data structures, not a processing engine | No: SQL over tables |
 | Where it is the better choice | Embedded, low memory, one process | Networked messaging, many clients | High-volume, replicated logs, a large ecosystem | Fast in-memory structures you already run | Transactions with your other tables |
 
+Measured numbers for Dostoevsky, JetStream, SQLite, Redis, Valkey, Kafka and RabbitMQ on one host, with where each one wins, are in the [comparison](comparison.md); this table is not a benchmark.
+
 Sources: [JetStream](https://docs.nats.io/nats-concepts/jetstream); [Kafka](https://kafka.apache.org/documentation/) and its [single-broker quickstart](https://kafka.apache.org/quickstart); [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/), [Redis persistence](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/) and the [default `redis.conf` (`appendonly no`, `appendfsync`)](https://raw.githubusercontent.com/redis/redis/8.12.0/redis.conf); [SQLite WAL](https://sqlite.org/wal.html) and [`PRAGMA synchronous`](https://www.sqlite.org/pragma.html#pragma_synchronous).

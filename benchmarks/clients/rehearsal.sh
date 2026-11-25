@@ -44,6 +44,9 @@ CGO_ENABLED=0 go build -mod=readonly -buildvcs=false -o .dev/clients/dostoevsky-
 [ -x .dev/bench-venv/bin/python ] || "$py" -m venv .dev/bench-venv
 .dev/bench-venv/bin/pip install --quiet --require-hashes -r benchmarks/clients/python/requirements.txt
 (cd benchmarks/clients/javascript && npm ci --ignore-scripts --silent)
+case " ${CLIENT_LANGS:-python javascript java} " in *" rust "*)  # needs the committed worker/Cargo.lock; builds offline
+  cargo build --release --offline --locked --manifest-path benchmarks/clients/rust/worker/Cargo.toml ;;
+esac
 JAVAC="$java_home/bin/javac" PATH="$java_home/bin:$PATH" sh benchmarks/clients/java/build.sh
 
 {

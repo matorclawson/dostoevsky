@@ -20,6 +20,12 @@ const (
 	gatherLimit = 100 * time.Microsecond
 )
 
+// Hooks so tests can drive gather without wall-clock timing.
+var (
+	gatherYield = runtime.Gosched
+	gatherNow   = time.Now
+)
+
 type queuedPublish struct {
 	ctx       context.Context
 	partition Partition
@@ -123,15 +129,15 @@ func (q *publishQueue) gather(released int) {
 	if released < 2 {
 		return
 	}
-	deadline := time.Now().Add(gatherLimit)
+	deadline := gatherNow().Add(gatherLimit)
 	for {
 		q.mu.Lock()
 		pending := len(q.pending)
 		q.mu.Unlock()
-		if pending >= released || !time.Now().Before(deadline) {
+		if pending >= released || !gatherNow().Before(deadline) {
 			return
 		}
-		runtime.Gosched()
+		gatherYield()
 	}
 }
 func (n *Node) writeQueued(batch []*queuedPublish) {

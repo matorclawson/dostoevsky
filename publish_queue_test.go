@@ -14,7 +14,7 @@ import (
 )
 
 func pending(id, value string) *queuedPublish {
-	return &queuedPublish{ctx: ctx, partition: p, msg: Message{ID: id, Value: []byte(value)}}
+	return &queuedPublish{ctx: ctx, partition: p, msg: Message{ID: id, Value: []byte(value)}, done: make(chan struct{})}
 }
 
 func TestQueuedPublishIsolation(t *testing.T) {
@@ -277,23 +277,130 @@ func TestConcurrentPublishAcrossRetainAndReopen(t *testing.T) {
 	}
 }
 
-// With many synchronous producers every caller of a group waits for that group, so
-// the queue is empty when they are released. The groups must still stay large:
-// the drainer gathers the callers it just released instead of letting one of them
-// write alone. The sync is slowed to 2 ms so the producers' timing is irrelevant.
-func TestGroupCommitKeepsGroupsFullUnderClosedLoopLoad(t *testing.T) {
+// fakeGather replaces the gather clock and yield for one test and counts yields.
+func fakeGather(t *testing.T, yield func(now *time.Time)) *int {
+	t.Helper()
+	oldYield, oldNow := gatherYield, gatherNow
+	now := time.Unix(0, 0)
+	yields := 0
+	gatherNow = func() time.Time { return now }
+	gatherYield = func() { yields++; yield(&now) }
+	t.Cleanup(func() { gatherYield, gatherNow = oldYield, oldNow })
+	return &yields
+}
+
+func queueArrivals(q *publishQueue, count int, tag string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := 0; i < count; i++ {
+		q.pending = append(q.pending, pending(fmt.Sprintf("%s-%d", tag, i), "v"))
+	}
+}
+
+// A lone caller never waits: gather returns before looking at the queue.
+func TestGatherDoesNotDelayALoneCaller(t *testing.T) {
+	yields := fakeGather(t, func(*time.Time) { t.Error("a lone caller yielded") })
+	var q publishQueue
+	q.gather(1)
+	q.gather(0)
+	if *yields != 0 {
+		t.Fatalf("%d yields for a lone caller", *yields)
+	}
+}
+
+// gather returns as soon as about as many calls are pending as were released.
+func TestGatherStopsWhenTheReleasedCallersHaveReturned(t *testing.T) {
+	var q publishQueue
+	yields := fakeGather(t, func(*time.Time) { queueArrivals(&q, 1, "a") }) // one caller returns per look
+	q.gather(4)
+	if *yields != 4 || len(q.pending) != 4 {
+		t.Fatalf("%d yields, %d pending; want it to stop at 4 and 4", *yields, len(q.pending))
+	}
+}
+
+// With no arrivals gather gives up at gatherLimit, so the wait is bounded.
+func TestGatherIsBounded(t *testing.T) {
+	var q publishQueue
+	yields := fakeGather(t, func(now *time.Time) { *now = now.Add(gatherLimit / 4) })
+	q.gather(8)
+	if *yields < 3 || *yields > 5 || len(q.pending) != 0 {
+		t.Fatalf("%d yields, %d pending; want about four looks of gatherLimit/4 each and no arrivals", *yields, len(q.pending))
+	}
+}
+
+// The drainer takes the callers gathered after a release as one group: eight
+// records take two journal syncs, not more, and every caller is released only after
+// its own group has been written and synced.
+func TestDrainerTakesGatheredCallersAsOneGroup(t *testing.T) {
+	var syncs atomic.Int32
 	old := syncData
-	syncData = func(f *os.File) error { time.Sleep(2 * time.Millisecond); return old(f) }
+	syncData = func(f *os.File) error { syncs.Add(1); return old(f) }
 	t.Cleanup(func() { syncData = old })
 	n := openTest(t, t.TempDir(), config())
-	// The first write of a journal is a full sync; get it out of the way.
+	first := make([]*queuedPublish, 4)
+	for i := range first {
+		first[i] = pending(fmt.Sprintf("first-%d", i), "v")
+	}
+	arrived := false
+	fakeGather(t, func(now *time.Time) {
+		if !arrived { // the four released callers come back while the drainer gathers
+			arrived = true
+			queueArrivals(&n.publishes, 4, "second")
+			return
+		}
+		*now = now.Add(time.Second) // nobody else is coming
+	})
+	g0, r0 := n.publishes.groups.Load(), n.publishes.records.Load()
+	n.publishes.mu.Lock()
+	n.publishes.active = true // as in production, a drainer owns the queue
+	n.publishes.mu.Unlock()
+	second := func() []*queuedPublish {
+		n.publishes.mu.Lock()
+		defer n.publishes.mu.Unlock()
+		return n.publishes.pending
+	}
+	n.drainPublishes(first)
+	if got := n.publishes.groups.Load() - g0; got != 2 {
+		t.Fatalf("%d groups, want 2 (the released four, then the four who came back)", got)
+	}
+	if got := n.publishes.records.Load() - r0; got != 8 {
+		t.Fatalf("%d records, want 8", got)
+	}
+	if got := syncs.Load(); got != 2 {
+		t.Fatalf("%d data syncs for 8 records, want 2", got)
+	}
+	if left := second(); len(left) != 0 {
+		t.Fatalf("%d calls left queued", len(left))
+	}
+	if n.publishes.active {
+		t.Fatal("the drainer did not hand the queue back when it finished")
+	}
+	for _, w := range first {
+		select {
+		case <-w.done:
+		default:
+			t.Fatalf("caller %s was never released", w.msg.ID)
+		}
+		if w.err != nil {
+			t.Fatal(w.err)
+		}
+	}
+}
+
+// End to end: many producers with a slowed sync all get distinct, readable
+// offsets. The average group size is logged, not asserted: it depends on timing.
+func TestManyProducersGetDistinctReadableOffsets(t *testing.T) {
+	old := syncData
+	syncData = func(f *os.File) error { time.Sleep(time.Millisecond); return old(f) }
+	t.Cleanup(func() { syncData = old })
+	n := openTest(t, t.TempDir(), config())
 	if _, err := n.Publish(ctx, p.Topic, Message{ID: "warm", Value: []byte("w")}); err != nil {
 		t.Fatal(err)
 	}
 	g0, r0 := n.publishes.groups.Load(), n.publishes.records.Load()
-	const producers, each = 32, 25
+	const producers, each = 32, 10
 	var wg sync.WaitGroup
-	offsets := make(chan int64, producers*each)
+	offsets := make(chan Record, producers*each)
 	for w := 0; w < producers; w++ {
 		wg.Add(1)
 		go func() {
@@ -305,24 +412,26 @@ func TestGroupCommitKeepsGroupsFullUnderClosedLoopLoad(t *testing.T) {
 					t.Errorf("publish %s: %v", id, err)
 					return
 				}
-				offsets <- r.Offset
+				offsets <- r
 			}
 		}()
 	}
 	wg.Wait()
 	close(offsets)
 	seen := map[int64]bool{}
-	for o := range offsets {
-		if seen[o] {
-			t.Fatalf("offset %d acknowledged twice", o)
+	for r := range offsets {
+		if seen[r.Offset] {
+			t.Fatalf("offset %d acknowledged twice", r.Offset)
 		}
-		seen[o] = true
+		seen[r.Offset] = true
+		got, err := n.Read(ctx, p, r.Offset, false)
+		if err != nil || got.ID != r.ID {
+			t.Fatalf("offset %d: %v %q", r.Offset, err, got.ID)
+		}
 	}
 	groups, records := n.publishes.groups.Load()-g0, n.publishes.records.Load()-r0
 	if records != producers*each {
 		t.Fatalf("%d records written, want %d", records, producers*each)
 	}
-	if avg := float64(records) / float64(groups); avg < 22 {
-		t.Fatalf("average group of %.1f over %d groups; with %d producers the groups should stay near full", avg, groups, producers)
-	}
+	t.Logf("average group %.1f over %d groups", float64(records)/float64(groups), groups)
 }

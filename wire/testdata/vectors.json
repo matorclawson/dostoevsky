@@ -1,7 +1,7 @@
 {
   "protocol": "dostoevsky-wire",
   "version": 1,
-  "note": "Byte strings are lowercase hex. 64-bit integers are decimal strings. The token is an example, not a secret. In invalid entries, scope is what the receiver does: close-without-reply; welcome (WELCOME with status code, then close); connection (ERROR with request_id 0 and code, then close); request (ERROR with the request_id and code, connection stays open). A sender of server means the client is the receiver, and it closes.",
+  "note": "Byte strings are lowercase hex. 64-bit integers are decimal strings. The token is an example, not a secret. In invalid entries, scope is what the receiver does: close-without-reply; welcome (WELCOME with status code, then close); connection (ERROR with request_id 0 and code, then close); request (ERROR with the request_id and code, connection stays open); client-closes (the receiver is the client: it closes and sends nothing; code is 0).",
   "limits": {"max_body": 1056768, "max_value": 1048576, "max_key": 4096, "max_id": 256, "max_token": 4096, "max_wait_ms": 30000},
   "valid": [
     {"name": "hello", "sender": "client", "hex": "44535456010000001a006578616d706c652d746f6b656e2d6e6f742d612d736563726574", "fields": {"max_version": 1, "token": "example-token-not-a-secret"}},
@@ -43,7 +43,9 @@
     {"name": "read-wait-too-long", "sender": "client", "hex": "1300000002000a000000066576656e7473000000000000000000003175", "scope": "request", "code": 1},
     {"name": "read-offset-negative-as-int64", "sender": "client", "hex": "1300000002000b000000066576656e7473000000000000000000800000", "scope": "request", "code": 1},
     {"name": "position-empty-group", "sender": "client", "hex": "0a00000003000c000000066576656e7473000000", "scope": "request", "code": 1},
-    {"name": "reply-found-byte-two", "sender": "server", "hex": "0100000082000100000002", "scope": "connection", "code": 11},
-    {"name": "reply-publish-ok-short", "sender": "server", "hex": "020000008100010000000000", "scope": "connection", "code": 11}
+    {"name": "reply-found-byte-two", "sender": "server", "hex": "0100000082000100000002", "scope": "client-closes", "code": 0},
+    {"name": "reply-publish-ok-short", "sender": "server", "hex": "020000008100010000000000", "scope": "client-closes", "code": 0},
+    {"name": "reply-length-over-max-header-only", "sender": "server", "hex": "01201000820001000000", "scope": "client-closes", "code": 0},
+    {"name": "commit-expected-has-no-successor", "sender": "client", "hex": "1900000004000d000000066576656e7473000007776f726b657273ffffffffffffff7f", "scope": "request", "code": 6}
   ]
 }

@@ -148,7 +148,7 @@ func startKafkaServer(o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	k, err := StartKafka(KafkaOptions{Home: o.Home, Java: o.Java, Dir: o.Dir, Fresh: true, Port: port, ControllerPort: controller, Ctx: o.Ctx})
+	k, err := StartKafka(KafkaOptions{Home: o.Home, Java: o.Java, Dir: o.Dir, Fresh: true, Port: port, ControllerPort: controller, Ctx: o.Ctx, Sample: o.Sample})
 	if err != nil {
 		return nil, fmt.Errorf("kafka: %w", err)
 	}

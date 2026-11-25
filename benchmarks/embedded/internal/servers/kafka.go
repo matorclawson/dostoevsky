@@ -146,6 +146,7 @@ type KafkaOptions struct {
 	Port           int
 	ControllerPort int
 	Ctx            context.Context // when set, replaces run.Context() for every wait, so a cancel stops the start
+	Sample         time.Duration   // memory sampling interval (default 50 ms, as before)
 }
 
 // KafkaBroker is a started, ready broker and a client connected to it.
@@ -175,6 +176,10 @@ func StartKafka(o KafkaOptions) (*KafkaBroker, error) {
 		}
 		return run.Context()
 	}
+	sample := o.Sample
+	if sample == 0 {
+		sample = 50 * time.Millisecond
+	}
 	home, java, dir, fresh, clusterID, port, controller := o.Home, o.Java, o.Dir, o.Fresh, o.ClusterID, o.Port, o.ControllerPort
 	env := []string{"JAVA_HOME=" + java, "KAFKA_HEAP_OPTS=-Xms1g -Xmx1g", "LOG_DIR=" + filepath.Join(dir, "logs")}
 	var err error
@@ -198,7 +203,7 @@ func StartKafka(o KafkaOptions) (*KafkaBroker, error) {
 			return nil, fmt.Errorf("format: %v: %s", err, out)
 		}
 	}
-	proc, err := serverproc.Start(script(home, "kafka-server-start.sh"), []string{conf}, env, filepath.Join(dir, "server.log"), 50*time.Millisecond)
+	proc, err := serverproc.Start(script(home, "kafka-server-start.sh"), []string{conf}, env, filepath.Join(dir, "server.log"), sample)
 	if err != nil {
 		return nil, err
 	}

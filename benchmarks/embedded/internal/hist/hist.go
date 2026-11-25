@@ -1,7 +1,8 @@
 // Package hist is the latency histogram every benchmark in this repository reports its
 // percentiles from: 1% wide bins from 1 microsecond up, 2400 of them, the last taking
 // everything above. A quantile is the UPPER EDGE of the bin that holds it, in whole
-// microseconds, so it is accurate to 1% and never below the true value. The Python and
+// nanoseconds (receipts print it as microseconds with three decimals, so nothing is rounded
+// away), so it is accurate to 1% and never below the true value. The Python and
 // JavaScript workers implement the same bins and are checked against the same file,
 // benchmarks/clients/hist_vector.json, so a number means the same thing in every language.
 package hist
@@ -43,7 +44,7 @@ func (h *H) Total() uint64 {
 // Quantile returns the upper edge of the bin holding the q-th quantile, or 0 when empty. The
 // rule, spelled out so the other languages can copy it: rank = max(ceil(q*total), 1); walk the
 // bins in order until the running count reaches the rank; the answer is
-// trunc(1.01^(bin+1) * 1000 ns), which callers print in whole microseconds.
+// trunc(1.01^(bin+1) * 1000) nanoseconds, which receipts print as microseconds with three decimals.
 func (h *H) Quantile(q float64) time.Duration {
 	total := h.Total()
 	if total == 0 {

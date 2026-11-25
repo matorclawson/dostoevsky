@@ -1,5 +1,5 @@
 {
- "comment": "Shared by the Python worker (tests/test_core.py) and the Go harness (sustained.go); bins are 1% wide from 1 microsecond, 2400 bins, the last bin takes everything above. Quantile values are the upper edge of the bin in whole microseconds.",
+ "comment": "Shared by the Go harness (internal/hist), the Python worker and the JavaScript worker: bins are 1% wide from 1 microsecond, 2400 bins, the last bin takes everything above. A quantile is the upper edge of the bin holding it, in whole NANOSECONDS (trunc(1.01^(bin+1) * 1000)); receipts print it as microseconds with three decimals, so nothing is lost to rounding.",
  "bins": 2400,
  "durations_ns": [
   0,
@@ -98,13 +98,13 @@
   "5000000000000": 2244,
   "1000000000000000": 2399
  },
- "quantiles_us": {
-  "0.0": 1,
-  "0.5": 201,
-  "0.95": 201,
-  "0.99": 23512406327,
-  "0.999": 23512406327,
-  "0.9999": 23512406327,
-  "1.0": 23512406327
+ "quantiles_ns": {
+  "0.0": 1010,
+  "0.5": 201044,
+  "0.95": 201044,
+  "0.99": 23512406327088,
+  "0.999": 23512406327088,
+  "0.9999": 23512406327088,
+  "1.0": 23512406327088
  }
 }

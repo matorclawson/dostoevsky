@@ -338,8 +338,10 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	for _, d := range delays {
 		lat.Add(d)
 	}
-	us := func(q float64) int64 { return lat.Quantile(q).Microseconds() }
-	line := fmt.Sprintf("engine=%s workers=%d verified=%d records/s=%.0f p50_us=%d p95_us=%d p99_us=%d p99_9_us=%d p99_99_us=%d quantiles=bin-upper-1pct liveHeap_KiB=%d peakRSS_KiB=%d reopen_ms=%.2f verified_reads_per_s=%.0f", engine, workers, count, float64(count)/elapsed.Seconds(), us(0.50), us(0.95), us(0.99), us(0.999), us(0.9999), mem.HeapAlloc/1024, usage.Maxrss, float64(reopen)/1e6, float64(count)/readElapsed.Seconds())
+	// Microseconds with three decimals (the histogram holds nanoseconds): a short sample is not rounded
+	// down to a whole microsecond, so "never below the true value, within 1%" holds for it too.
+	us := func(q float64) string { return fmt.Sprintf("%.3f", float64(lat.Quantile(q))/1e3) }
+	line := fmt.Sprintf("engine=%s workers=%d verified=%d records/s=%.0f p50_us=%s p95_us=%s p99_us=%s p99_9_us=%s p99_99_us=%s quantiles=bin-upper-1pct liveHeap_KiB=%d peakRSS_KiB=%d reopen_ms=%.2f verified_reads_per_s=%.0f", engine, workers, count, float64(count)/elapsed.Seconds(), us(0.50), us(0.95), us(0.99), us(0.999), us(0.9999), mem.HeapAlloc/1024, usage.Maxrss, float64(reopen)/1e6, float64(count)/readElapsed.Seconds())
 	if measured {
 		// peakRSS_KiB stays the harness process alone. total_rss_KiB adds the server
 		// tree: a sum of sampled per-process peaks that can occur at different times

@@ -11,10 +11,10 @@ import (
 // The vector is shared with the Python and JavaScript workers (benchmarks/clients/hist_vector.json):
 // the same durations must give the same bins and the same percentiles in every language.
 type vector struct {
-	Bins        int                `json:"bins"`
-	DurationsNs []int64            `json:"durations_ns"`
-	Index       map[string]int     `json:"index"`
-	QuantilesUs map[string]float64 `json:"quantiles_us"`
+	Bins        int              `json:"bins"`
+	DurationsNs []int64          `json:"durations_ns"`
+	Index       map[string]int   `json:"index"`
+	QuantilesNs map[string]int64 `json:"quantiles_ns"`
 }
 
 func load(t *testing.T) vector {
@@ -35,7 +35,7 @@ func TestBinsAndQuantilesMatchTheSharedVector(t *testing.T) {
 	if v.Bins != Bins {
 		t.Fatalf("vector has %d bins, Go has %d", v.Bins, Bins)
 	}
-	if len(v.Index) == 0 || len(v.QuantilesUs) == 0 || len(v.DurationsNs) == 0 {
+	if len(v.Index) == 0 || len(v.QuantilesNs) == 0 || len(v.DurationsNs) == 0 {
 		t.Fatal("the vector is empty: the test would prove nothing")
 	}
 	for ns, want := range v.Index {
@@ -51,13 +51,13 @@ func TestBinsAndQuantilesMatchTheSharedVector(t *testing.T) {
 	for _, ns := range v.DurationsNs {
 		h.Add(time.Duration(ns))
 	}
-	for q, want := range v.QuantilesUs {
+	for q, want := range v.QuantilesNs {
 		f, err := strconv.ParseFloat(q, 64)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := h.Quantile(f).Microseconds(); float64(got) != want {
-			t.Errorf("Quantile(%s) = %d us, vector says %v", q, got, want)
+		if got := h.Quantile(f).Nanoseconds(); got != want {
+			t.Errorf("Quantile(%s) = %d ns, vector says %d", q, got, want)
 		}
 	}
 }
@@ -71,5 +71,15 @@ func TestEmptyAndSingleValueHistograms(t *testing.T) {
 	lo, hi := h.Quantile(0.01), h.Quantile(1)
 	if lo != hi || hi < 1500*time.Microsecond || hi > time.Duration(float64(1500*time.Microsecond)*1.0101) {
 		t.Fatalf("one value of 1.5 ms reported as %v and %v: must be its bin's upper edge, within 1%%", lo, hi)
+	}
+}
+
+// A short sample keeps its sub-microsecond precision: 1.5 us must not be reported as "1 us".
+func TestAShortSampleIsNotTruncatedToWholeMicroseconds(t *testing.T) {
+	var h H
+	h.Add(1900 * time.Nanosecond)
+	got := h.Quantile(0.5)
+	if got < 1900*time.Nanosecond || got > time.Duration(float64(1900*time.Nanosecond)*1.0101) {
+		t.Fatalf("1900 ns reported as %v: must be its bin's upper edge, never below the sample, within 1%%", got)
 	}
 }

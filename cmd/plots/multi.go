@@ -65,6 +65,26 @@ func failureRows(data []series, ws []int, groupW float64) int {
 	return most
 }
 
+// legendColumns picks the most columns (three, two, then one) in which every legend entry,
+// a swatch and its label, fits its column when measured with the same estimate as the
+// failure notes. Long labels fall back to fewer columns instead of overlapping.
+func legendColumns(texts []string, avail float64) int {
+	for _, c := range []int{3, 2, 1} {
+		colW := avail / float64(c)
+		fits := true
+		for _, t := range texts {
+			if 16+textWidth(t, 11) > colW-8 {
+				fits = false
+				break
+			}
+		}
+		if fits {
+			return c
+		}
+	}
+	return 1
+}
+
 // seriesLabel is the legend text: the engine's label and, when the meta file says it,
 // where it ran (in process, or a server and how it was reached).
 func seriesLabel(engine string) string {
@@ -106,7 +126,12 @@ func renderMulti(c chart, data []series, footer []string) string {
 	y := func(v float64) float64 { return float64(base) - v/top1*plotH }
 
 	n := len(data)
-	rows := (n + 2) / 3
+	var legendTexts []string
+	for _, s := range data {
+		legendTexts = append(legendTexts, seriesLabel(s.engine))
+	}
+	cols := legendColumns(legendTexts, float64(width-left-right))
+	rows := (n + cols - 1) / cols
 	verdict := winners(data, c.lower)
 	var names []string
 	for _, s := range data {
@@ -177,8 +202,8 @@ func renderMulti(c chart, data []series, footer []string) string {
 		}
 	}
 	for si, s := range data {
-		lx := left + (si%3)*230
-		ly := legendY + (si/3)*18
+		lx := left + (si%cols)*(width-left-right)/cols
+		ly := legendY + (si/cols)*18
 		fmt.Fprintf(&b, `<rect class="s%d" x="%d" y="%d" width="11" height="11"/><text x="%d" y="%d" font-size="11">%s</text>`+"\n", si, lx, ly, lx+16, ly+10, html.EscapeString(seriesLabel(s.engine)))
 	}
 	for i, line := range footer {

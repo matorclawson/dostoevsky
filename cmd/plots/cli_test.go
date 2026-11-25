@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -288,5 +289,83 @@ func TestCLIFailureNotesFitTheChart(t *testing.T) {
 				t.Errorf("%s: the legend at y=%.0f overlaps the last failure line at y=%.0f", name, y, last)
 			}
 		}
+	}
+}
+
+// The legend is laid out by measured width: with the long labels the real run will have, no
+// entry overlaps its neighbor or runs past the chart, and short labels keep three columns.
+func TestCLILegendFitsLongLabels(t *testing.T) {
+	bin := buildPlots(t)
+	dir := t.TempDir()
+	r := write(t, dir, "c.log", multiLog(multiRPS, nil))
+	long := strings.NewReplacer(
+		"label.rabbitmq=RabbitMQ 4.4 (quorum queue)", "label.rabbitmq=RabbitMQ 4.4 quorum (sync not verified)",
+		"arch.rabbitmq=server, loopback", "arch.rabbitmq=server over loopback",
+		"arch.redis=server, unix socket", "arch.redis=server over a unix socket",
+		"label.sqlite=SQLite (single writer)", "label.sqlite=SQLite 3.54 (WAL, FULL, single writer)",
+	).Replace(multiMeta)
+	longMeta := write(t, dir, "long.txt", long)
+	var shortLines []string
+	for _, l := range strings.Split(multiMeta, "\n") {
+		if !strings.HasPrefix(l, "label.") && !strings.HasPrefix(l, "arch.") {
+			shortLines = append(shortLines, l)
+		}
+	}
+	for _, e := range sevenEngines {
+		kind := "server"
+		if e == "dostoevsky" || e == "jetstream" || e == "sqlite" {
+			kind = "in process"
+		}
+		shortLines = append(shortLines, "label."+e+"="+strings.ToUpper(e[:1])+e[1:], "arch."+e+"="+kind)
+	}
+	shortMeta := write(t, dir, "short.txt", strings.Join(shortLines, "\n"))
+	re := regexp.MustCompile(`<text x="([0-9]+)" y="([0-9]+)" font-size="11">([^<]*)</text>`)
+	columns := func(name, meta string) int {
+		out := filepath.Join(dir, name)
+		if _, stderr, code := plots(t, bin, dir, sevenArgs(r, meta, out)...); code != 0 {
+			t.Fatalf("exit %d: %s", code, stderr)
+		}
+		b, err := os.ReadFile(filepath.Join(out, "throughput.svg"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := re.FindAllStringSubmatch(string(b), -1)
+		if len(entries) != 7 {
+			t.Fatalf("%s: found %d legend entries, want 7", name, len(entries))
+		}
+		rows := map[string][]int{}
+		for _, e := range entries {
+			x, _ := strconv.Atoi(e[1])
+			w := textWidth(html.UnescapeString(e[3]), 11)
+			if float64(x)+w > float64(width-right) {
+				t.Errorf("%s: legend entry %q runs to about %.0f, past the chart's right margin at %d", name, e[3], float64(x)+w, width-right)
+			}
+			rows[e[2]] = append(rows[e[2]], x)
+		}
+		most := 0
+		for y, xs := range rows {
+			sort.Ints(xs)
+			if len(xs) > most {
+				most = len(xs)
+			}
+			// Entries in one row must not overlap: each fits before the next one starts.
+			for i := 0; i+1 < len(xs); i++ {
+				for _, e := range entries {
+					x, _ := strconv.Atoi(e[1])
+					if e[2] == y && x == xs[i] {
+						if end := float64(x) + textWidth(html.UnescapeString(e[3]), 11); end > float64(xs[i+1]) {
+							t.Errorf("%s: legend entry %q (to about %.0f) overlaps the next one starting at %d", name, e[3], end, xs[i+1])
+						}
+					}
+				}
+			}
+		}
+		return most
+	}
+	if got := columns("short", shortMeta); got != 3 {
+		t.Errorf("short labels use %d columns, want 3", got)
+	}
+	if got := columns("long", longMeta); got >= 3 {
+		t.Errorf("long labels still use %d columns; they must fall back to fewer", got)
 	}
 }

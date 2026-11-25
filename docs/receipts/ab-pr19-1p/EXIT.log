@@ -1,0 +1,5 @@
+start=2026-11-25T01:03:15Z command=bash one-producer.sh
+finish=2026-11-25T01:14:27Z ab_exit=0
+summary_command=go run ./cmd/plots -summary -receipt ab.log -expect-engines baseline,candidate -expect-producers 1 -trials 15
+summary_exit=0
+pipeline_phase=complete pipeline_exit=0

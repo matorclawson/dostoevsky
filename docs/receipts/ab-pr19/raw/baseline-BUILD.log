@@ -1,0 +1,17 @@
+all modules verified
+/srv/zeo-gates/home/bench-ab19-20261125T004930Z.T5hmFnej/bin/dost-baseline: go1.26.0
+	path	github.com/rodriveracom/dostoevsky/benchmarks/embedded/cmd/dost
+	mod	github.com/rodriveracom/dostoevsky/benchmarks/embedded	v0.0.0-20261125001930-1ce4a6d1a514	
+	dep	github.com/rodriveracom/dostoevsky	v0.0.0
+	=>	../..	(devel)	
+	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	GOOS=linux
+	build	GOARM64=v8.0
+	build	vcs=git
+	build	vcs.revision=1ce4a6d1a514236f9b2a698046ca15fad338ccb3
+	build	vcs.time=2026-11-25T00:19:30Z
+	build	vcs.modified=false

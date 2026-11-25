@@ -1,0 +1,6 @@
+start=2026-11-25T00:50:00Z command=sh benchmarks/comparison/ab.sh BASELINE_BIN CANDIDATE_BIN
+finish=2026-11-25T00:54:32Z ab_exit=0
+summary_command=go run ./cmd/plots -summary -receipt ab.log -expect-engines baseline,candidate -trials 5
+summary_exit=0
+crash_test_exit=0
+pipeline_phase=complete pipeline_exit=0

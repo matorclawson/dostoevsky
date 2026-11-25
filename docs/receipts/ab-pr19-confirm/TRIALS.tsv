@@ -1,0 +1,11 @@
+round	engine	workers	verified	records_per_second	p99_microseconds	status
+1	baseline	32	16000	14862	6866	OK
+1	candidate	32	16000	15223	7786	OK
+2	candidate	32	16000	15167	6351	OK
+2	baseline	32	16000	15130	7129	OK
+3	baseline	32	16000	16965	5720	OK
+3	candidate	32	16000	15655	6239	OK
+4	candidate	32	16000	19005	4837	OK
+4	baseline	32	16000	16334	6312	OK
+5	baseline	32	16000	16060	5148	OK
+5	candidate	32	16000	17085	5457	OK

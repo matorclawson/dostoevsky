@@ -1,0 +1,10 @@
+trial=1 engine=baseline workers=32 verified=16000 records/s=14862 p95_us=4076 p99_us=6866 liveHeap_KiB=737 peakRSS_KiB=10444 reopen_ms=216.10 verified_reads_per_s=62634 mem_cutoff_KiB=307200
+trial=1 engine=candidate workers=32 verified=16000 records/s=15223 p95_us=4289 p99_us=7786 liveHeap_KiB=740 peakRSS_KiB=10444 reopen_ms=206.83 verified_reads_per_s=73266 mem_cutoff_KiB=307200
+trial=2 engine=candidate workers=32 verified=16000 records/s=15167 p95_us=4194 p99_us=6351 liveHeap_KiB=732 peakRSS_KiB=10300 reopen_ms=222.98 verified_reads_per_s=65144 mem_cutoff_KiB=307200
+trial=2 engine=baseline workers=32 verified=16000 records/s=15130 p95_us=4245 p99_us=7129 liveHeap_KiB=735 peakRSS_KiB=10408 reopen_ms=208.69 verified_reads_per_s=70136 mem_cutoff_KiB=307200
+trial=3 engine=baseline workers=32 verified=16000 records/s=16965 p95_us=3669 p99_us=5720 liveHeap_KiB=734 peakRSS_KiB=10408 reopen_ms=210.65 verified_reads_per_s=71411 mem_cutoff_KiB=307200
+trial=3 engine=candidate workers=32 verified=16000 records/s=15655 p95_us=3959 p99_us=6239 liveHeap_KiB=731 peakRSS_KiB=10444 reopen_ms=210.06 verified_reads_per_s=67412 mem_cutoff_KiB=307200
+trial=4 engine=candidate workers=32 verified=16000 records/s=19005 p95_us=2600 p99_us=4837 liveHeap_KiB=734 peakRSS_KiB=10388 reopen_ms=197.41 verified_reads_per_s=66783 mem_cutoff_KiB=307200
+trial=4 engine=baseline workers=32 verified=16000 records/s=16334 p95_us=3897 p99_us=6312 liveHeap_KiB=739 peakRSS_KiB=10320 reopen_ms=202.17 verified_reads_per_s=68513 mem_cutoff_KiB=307200
+trial=5 engine=baseline workers=32 verified=16000 records/s=16060 p95_us=3482 p99_us=5148 liveHeap_KiB=747 peakRSS_KiB=10584 reopen_ms=227.58 verified_reads_per_s=70247 mem_cutoff_KiB=307200
+trial=5 engine=candidate workers=32 verified=16000 records/s=17085 p95_us=3511 p99_us=5457 liveHeap_KiB=731 peakRSS_KiB=10376 reopen_ms=208.70 verified_reads_per_s=69640 mem_cutoff_KiB=307200

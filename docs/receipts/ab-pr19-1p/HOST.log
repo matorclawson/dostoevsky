@@ -1,0 +1,147 @@
+2026-11-25T01:02:45Z
+reservation=4926 start_epoch=1795568559
+Linux zeo-internal-production-03 7.0.0-34-generic #34-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:34:54 UTC 2026 aarch64 GNU/Linux
+Architecture:                            aarch64
+CPU op-mode(s):                          32-bit, 64-bit
+Byte Order:                              Little Endian
+CPU(s):                                  2
+On-line CPU(s) list:                     0,1
+Vendor ID:                               ARM
+Model name:                              Neoverse-N1
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      2
+Socket(s):                               1
+Stepping:                                r3p1
+BogoMIPS:                                50.00
+Flags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0,1
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; CSV2, BHB
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+               total        used        free      shared  buff/cache   available
+Mem:           3.7Gi       556Mi       2.6Gi        60Mi       778Mi       3.2Gi
+Swap:             0B          0B          0B
+Filesystem     Type  Size  Used Avail Use% Mounted on
+/dev/sda1      ext4   38G   16G   20G  45% /
+SOURCE    FSTYPE TARGET OPTIONS
+/dev/sda1 ext4   /      rw,relatime
+NAME  SIZE ROTA MODEL
+sda  38.1G    0 QEMU HARDDISK
+sr0  1024M    0 QEMU CD-ROM
+ 01:02:45 up 3 days,  3:19,  1 user,  load average: 0.30, 0.59, 1.04
+USER     COMMAND         %CPU %MEM S
+zeobuild bash            14.2  0.0 S
+root     sshd-session     3.1  0.3 S
+zeobuild systemd          1.4  0.3 S
+root     jbd2/sda1-8      0.2  0.0 S
+root     kworker/u8:0-ev  0.1  0.0 I
+syslog   rsyslogd         0.1  0.4 S
+root     kworker/u8:2-ev  0.1  0.0 I
+root     rcu_preempt      0.1  0.0 I
+root     qemu-ga          0.0  0.1 S
+root     kworker/u8:3-fl  0.0  0.0 I
+root     systemd-journal  0.0  0.6 S
+root     kworker/1:1-eve  0.0  0.0 I
+root     kworker/0:1-eve  0.0  0.0 I
+root     kworker/0:1H-kb  0.0  0.0 I
+dispatch_scan_utc=2026-11-25T01:02:45Z since_epoch=1795568559
+dispatch_activity=none_observed
+engine_preflight_processes=none
+go version go1.26.0 linux/arm64
+baseline 1ce4a6d1a514236f9b2a698046ca15fad338ccb3 d8172ab1564cbe2455f1b9d6c7e0801cb6abee68
+candidate 6d2b9eaf7ec55e5d17f9f7c73cc65ef5b19120c3 981d86123e2fa75e47931fcb0746e70792ab365f
+cdc12fb97b71ade59f3d4fda2e850e50fe20f017394f79a8cb5f66107bd76cb1  bin/dost-baseline
+50256d3aa7c8aa699d566f56abb7cc9992f8944ad768a35ce8e2f5fbd8b6c870  bin/dost-candidate
+bin/dost-baseline: OK
+bin/dost-candidate: OK
+original_build_path_removed=/srv/zeo-gates/home/bench-ab19-20261125T004930Z.T5hmFnej
+host_end=2026-11-25T01:14:38Z stage=complete pipeline_exit=0
+ 01:14:38 up 3 days,  3:31,  1 user,  load average: 2.32, 1.93, 1.59
+USER     COMMAND         %CPU %MEM S
+root     jbd2/sda1-8      0.2  0.0 S
+root     kworker/u8:2-fl  0.1  0.0 I
+syslog   rsyslogd         0.1  0.4 S
+root     kworker/u8:0-ev  0.1  0.0 I
+root     rcu_preempt      0.1  0.0 I
+root     kworker/u8:1-ex  0.0  0.0 I
+root     kworker/u8:3-fl  0.0  0.0 I
+root     qemu-ga          0.0  0.1 S
+root     systemd-journal  0.0  0.6 S
+root     kworker/1:1-eve  0.0  0.0 I
+root     kworker/0:1H-kb  0.0  0.0 I
+root     kworker/1:1H-kb  0.0  0.0 I
+root     kworker/0:1-eve  0.0  0.0 I
+root     kcompactd0       0.0  0.0 S
+dispatch_scan_utc=2026-11-25T01:14:38Z since_epoch=1795568559
+dispatch_activity=none_observed
+
+# Reservation dispatch scans
+dispatch_scan_utc=2026-11-25T01:03:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:03:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:04:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:04:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:05:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:05:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:06:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:06:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:07:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:07:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:08:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:08:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:09:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:09:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:10:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:10:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:11:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:11:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:12:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:12:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:13:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:13:46Z since_epoch=1795568559
+dispatch_activity=none_observed
+dispatch_scan_utc=2026-11-25T01:14:16Z since_epoch=1795568559
+dispatch_activity=none_observed
+
+# Dispatch scan through cleanup
+dispatch_scan_utc=2026-11-25T01:15:06Z since_epoch=1795568559
+dispatch_activity=none_observed
+cleanup_end=2026-11-25T01:15:06Z

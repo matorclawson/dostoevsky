@@ -1,0 +1,5 @@
+start=2026-11-25T01:22:59Z command=bash thirty-two-producers.sh
+finish=2026-11-25T01:23:13Z ab_exit=0
+summary_command=go run ./cmd/plots -summary -receipt ab.log -expect-engines baseline,candidate -expect-producers 32 -trials 5
+summary_exit=0
+pipeline_phase=complete pipeline_exit=0

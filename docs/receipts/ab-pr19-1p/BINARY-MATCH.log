@@ -1,0 +1,3 @@
+bin/dost-baseline: OK
+bin/dost-candidate: OK
+original_build_path_removed=/srv/zeo-gates/home/bench-ab19-20261125T004930Z.T5hmFnej

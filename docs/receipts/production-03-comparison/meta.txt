@@ -1,0 +1,25 @@
+# Meta file for the final seven-engine run's charts (cmd/plots). SKELETON: the notes marked FILL are
+# completed from the run's own receipts (ERLANG-PROVENANCE.txt, HOST.log); no figure belongs here.
+footer.1=production-03: 2 Neoverse-N1 vCPUs, Ubuntu 26.04 arm64, ext4 on a QEMU virtual disk; Go 1.26.0; GOMAXPROCS=2; Dostoevsky at 6f35c74b
+footer.2=512-byte payloads, 16,000 records per trial, one outstanding call per producer, five rounds, engine order rotated, one reserved window
+footer.3=Durability: Dostoevsky fdatasync per group (first write full fsync); JetStream embedded SyncAlways; SQLite WAL with synchronous=FULL, one writer connection
+footer.4=Durability: Redis 8.12 and Valkey 9.2 appendonly yes with appendfsync always; Kafka 4.4 acks=all with log.flush.interval.messages=1 and a 1 GiB heap; RabbitMQ 4.4 quorum queue with publisher confirms
+note.1=RabbitMQ: durability per vendor default, not verified; Erlang/OTP FILL(version) FILL(built from source on the host | Hex.pm prebuilt, sha256 recorded, no vendor digest)
+note.2=Kafka: fsync per message inferred from log.flush.interval.messages=1
+note.3=Reopen: Redis and Valkey restart-to-ready including AOF replay; Kafka and RabbitMQ restart-to-ready; Dostoevsky, JetStream and SQLite in-process open and replay
+note.4=Memory is client plus server processes, a sum of sampled per-process peaks; Kafka includes its JVM and RabbitMQ its Erlang VM
+command=sh benchmarks/comparison/run.sh (see HOST.log for the environment)
+label.dostoevsky=Dostoevsky 6f35c74b
+label.jetstream=Embedded JetStream 2.15.3 (SyncAlways)
+label.sqlite=SQLite 3.54 (WAL, FULL, single writer)
+label.redis=Redis 8.12 (AOF always)
+label.valkey=Valkey 9.2 (AOF always)
+label.kafka=Kafka 4.4 (acks=all, flush inferred)
+label.rabbitmq=RabbitMQ 4.4 quorum (sync not verified)
+arch.dostoevsky=in process
+arch.jetstream=in process
+arch.sqlite=in process
+arch.redis=server, unix socket
+arch.valkey=server, unix socket
+arch.kafka=server, loopback
+arch.rabbitmq=server, loopback

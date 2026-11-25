@@ -1,0 +1,13 @@
+cleanup_start=2026-11-25T01:15:05Z
+stage=/srv/zeo-gates/home/bench-ab19-1p-20261125T010239Z.YUWzE9vd
+Filesystem     Type  Size  Used Avail Use% Mounted on
+/dev/sda1      ext4   38G   17G   20G  46% /
+engine_processes=none
+package_inventory_diff=empty
+original_build_path_absent=/srv/zeo-gates/home/bench-ab19-20261125T004930Z.T5hmFnej
+scratch=removed /opt/bench=absent
+Filesystem     Type  Size  Used Avail Use% Mounted on
+/dev/sda1      ext4   38G   16G   20G  45% /
+dispatch_scan_utc=2026-11-25T01:15:06Z since_epoch=1795568559
+dispatch_activity=none_observed
+cleanup_end=2026-11-25T01:15:06Z

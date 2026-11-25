@@ -1,0 +1,20 @@
+=== RUN   TestConcurrentPublishKill
+=== RUN   TestConcurrentPublishKill/1
+=== RUN   TestConcurrentPublishKill/8
+--- PASS: TestConcurrentPublishKill (0.39s)
+    --- PASS: TestConcurrentPublishKill/1 (0.30s)
+    --- PASS: TestConcurrentPublishKill/8 (0.09s)
+=== RUN   TestConcurrentPublishKill
+=== RUN   TestConcurrentPublishKill/1
+=== RUN   TestConcurrentPublishKill/8
+--- PASS: TestConcurrentPublishKill (0.36s)
+    --- PASS: TestConcurrentPublishKill/1 (0.29s)
+    --- PASS: TestConcurrentPublishKill/8 (0.07s)
+=== RUN   TestConcurrentPublishKill
+=== RUN   TestConcurrentPublishKill/1
+=== RUN   TestConcurrentPublishKill/8
+--- PASS: TestConcurrentPublishKill (0.39s)
+    --- PASS: TestConcurrentPublishKill/1 (0.30s)
+    --- PASS: TestConcurrentPublishKill/8 (0.09s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky	1.155s

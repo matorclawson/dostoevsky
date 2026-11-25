@@ -1,0 +1,4 @@
+apt_package_changes=none
+dl/go1.26.0.linux-arm64.tar.gz: OK
+bd03b743eb6eb4193ea3c3fd3956546bf0e3ca5b7076c8226334afe6b75704cd  dl/go1.26.0.linux-arm64.tar.gz
+go version go1.26.0 linux/arm64

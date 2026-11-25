@@ -21,7 +21,7 @@ The measurements below come from shared Linux AMD64 with an overlay filesystem, 
 
 ## production-03: ARM64 on a real, virtualized disk
 
-zeo-rt ran the same gate on production-03 (delivery 4596, commit `8b5953ac`, which is main after the group-commit integration): Linux 7.0.0-34 aarch64, two Neoverse-N1 vCPUs, ext4 on a QEMU virtual disk, Go 1.26.0, `CGO_ENABLED=0`, `GOMAXPROCS=2`, native processes, one fresh directory per trial, 16,000 records of 512 bytes per trial, five alternating trials per point, every record verified after reopen. Absolute numbers are lower than on the AMD64 host above because each sync is a real flush to a virtual disk. The pattern is the same, with a larger gap at 32 producers.
+zeo-rt ran the same gate on production-03 (delivery 4596, commit `8b5953ac`, which is main after the group-commit integration): Linux 7.0.0-34 aarch64, two Neoverse-N1 vCPUs, ext4 on a QEMU virtual disk, Go 1.26.0, `CGO_ENABLED=0`, `GOMAXPROCS=2`, native processes, one fresh directory per trial, 16,000 records of 512 bytes per trial, five alternating trials per point, every record verified after reopen. Absolute numbers on this host are lower than on the AMD64 host above, which ran on an overlay filesystem rather than ext4 on a QEMU virtual disk; the cause of the difference was not isolated. The ordering of the two engines is the same at every producer count, and the gap at 32 producers is larger.
 
 | Producers | Engine | Median messages/s | Median trial p99 (ms) | Median peak RSS (MiB) | Median reopen (ms) |
 |---:|---|---:|---:|---:|---:|

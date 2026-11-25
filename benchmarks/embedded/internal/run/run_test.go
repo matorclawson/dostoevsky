@@ -2,6 +2,7 @@ package run
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -26,6 +27,8 @@ type fake struct {
 	onRead     func()        // called at the start of every Read
 	panicAt    int32         // Close number that panics (0 = never)
 	onClose    func(n int32) // called at the start of every Close with its number
+	mu         sync.Mutex
+	bound      context.Context
 }
 
 func (f *fake) Publish(b []byte) (uint64, error) {
@@ -49,6 +52,18 @@ func (f *fake) Read(o uint64) ([]byte, error) {
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
 	return f.s.data[o], nil
+}
+
+func (f *fake) BindContext(ctx context.Context) {
+	f.mu.Lock()
+	f.bound = ctx
+	f.mu.Unlock()
+}
+
+func (f *fake) boundContext() context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bound
 }
 
 func (f *fake) Close() {
@@ -397,5 +412,125 @@ func TestLowMemoryDuringTheFirstOpenFailsTheTrial(t *testing.T) {
 	}
 	if left() != 0 || atomic.LoadInt32(f.closeCount) != 1 {
 		t.Errorf("cleanup incomplete: %d entries left, %d closes", left(), atomic.LoadInt32(f.closeCount))
+	}
+}
+
+// A trial directory that cannot be removed is a failed trial: no receipt line.
+func TestRemovalFailureIsAFailedTrial(t *testing.T) {
+	withTemp(t)
+	setMemory(t, func() (uint64, error) { return 1 << 30, nil })
+	old := removeAll
+	var calls atomic.Int32
+	removeAll = func(path string) error {
+		calls.Add(1)
+		return errors.New("injected removal failure")
+	}
+	t.Cleanup(func() { removeAll = old })
+	var out bytes.Buffer
+	err := execute("fake", opener(newFake(), false), 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "injected removal failure") {
+		t.Fatalf("error %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a receipt was printed although the trial directory could not be removed: %q", out.String())
+	}
+	if calls.Load() < 1 {
+		t.Error("removal was never attempted")
+	}
+}
+
+// A store that waits on a server is handed a context that the memory guard
+// cancels, so a stalled verification read ends at once instead of holding the
+// trial open.
+func TestGuardCancelsAStalledVerificationRead(t *testing.T) {
+	left := withTemp(t)
+	var low atomic.Bool
+	setMemory(t, func() (uint64, error) {
+		if low.Load() {
+			return 100 << 10, nil
+		}
+		return 1 << 30, nil
+	})
+	f := newFake()
+	var once sync.Once
+	f.onRead = func() {
+		once.Do(func() {
+			low.Store(true)
+			select {
+			case <-f.boundContext().Done(): // the guard trips and cancels the context
+			case <-time.After(10 * time.Second):
+				t.Error("the bound context was never cancelled")
+			}
+		})
+	}
+	start := time.Now()
+	var out bytes.Buffer
+	err := execute("fake", opener(f, false), 5, 1, &out)
+	if err == nil || !strings.Contains(err.Error(), "low-memory abort") {
+		t.Fatalf("error %v", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("the stalled read held the trial open")
+	}
+	if out.Len() != 0 || left() != 0 {
+		t.Errorf("output %q, %d entries left", out.String(), left())
+	}
+}
+
+func TestWithinBoundsABlockingCall(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	start := time.Now()
+	if err := Within(context.Background(), 50*time.Millisecond, func() error { <-block; return nil }); err == nil || !strings.Contains(err.Error(), "no answer within") {
+		t.Fatalf("hung call: %v", err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("Within waited far past its deadline")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Within(ctx, time.Hour, func() error { <-block; return nil }) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "stopped") {
+			t.Fatalf("cancelled call: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cancelled context did not end the wait")
+	}
+	if err := Within(context.Background(), time.Second, func() error { return errors.New("boom") }); err == nil || err.Error() != "boom" {
+		t.Fatalf("an ordinary error must pass through: %v", err)
+	}
+	if err := Within(context.Background(), time.Second, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTrialContextIsCancelledByTheGuardAndReset(t *testing.T) {
+	withTemp(t)
+	var low atomic.Bool
+	setMemory(t, func() (uint64, error) {
+		if low.Load() {
+			return 100 << 10, nil
+		}
+		return 1 << 30, nil
+	})
+	f := newFake()
+	var seen context.Context
+	f.onRead = func() {
+		seen = Context()
+		low.Store(true)
+		select {
+		case <-seen.Done():
+		case <-time.After(10 * time.Second):
+			t.Error("the trial context was not cancelled by the guard")
+		}
+	}
+	if err := execute("fake", opener(f, false), 3, 1, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected a low-memory failure")
+	}
+	if Context().Err() != nil {
+		t.Error("the context was not reset after the trial")
 	}
 }

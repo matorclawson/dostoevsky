@@ -3,6 +3,7 @@ package run
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -34,12 +35,62 @@ type Measured interface {
 	ServerPeakKiB() (uint64, error)
 }
 
+// Cancelable is implemented by a Store whose verification can wait on a server.
+// The harness gives it a context that is cancelled when the memory guard trips
+// (and when the trial ends), and the store must stop waiting when it is done.
+type Cancelable interface {
+	BindContext(context.Context)
+}
+
+// trialCtx is the current trial's context: cancelled when the memory guard trips
+// and when the trial ends. A process runs one trial, so one package variable is
+// enough; commands use it for every blocking call to a server, including open.
+var (
+	trialMu  sync.Mutex
+	trialCtx = context.Background()
+)
+
+// Context returns the current trial's context.
+func Context() context.Context {
+	trialMu.Lock()
+	defer trialMu.Unlock()
+	return trialCtx
+}
+
+func setContext(ctx context.Context) {
+	trialMu.Lock()
+	trialCtx = ctx
+	trialMu.Unlock()
+}
+
+// Within runs f, which has no context form, in a goroutine and waits for it for at
+// most d and never past ctx. When the wait ends first the goroutine is left to
+// finish on its own (it is released when the server's process is killed); the
+// caller gets an error and must not rely on f having run to completion.
+func Within(ctx context.Context, d time.Duration, f func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("stopped: %w", ctx.Err())
+	case <-timer.C:
+		return fmt.Errorf("no answer within %v", d)
+	}
+}
+
 // minFreeKiB is the approved low-memory abort: a trial stops, as a failure, when
 // the host's available memory falls below 300 MiB before or during the trial.
 var minFreeKiB uint64 = 300 << 10
 
 // memAvailable is a hook so tests can simulate memory pressure.
 var memAvailable = readMemAvailableKiB
+
+// removeAll is a hook so tests can simulate a trial directory that cannot be removed.
+var removeAll = os.RemoveAll
 
 var errNoMeminfo = errors.New("available memory is not measured on this platform")
 
@@ -110,6 +161,9 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	// The memory guard is the first thing that runs and the last thing that is
 	// joined, so every phase (open, publish, reopen, verify, close) is inside one
 	// monitored span. tripped() is checked after each phase.
+	ctx, cancel := context.WithCancel(context.Background())
+	setContext(ctx)
+	defer func() { cancel(); setContext(context.Background()) }()
 	var guardErr atomic.Pointer[error]
 	stopGuard := make(chan struct{})
 	guardDone := make(chan struct{})
@@ -130,6 +184,7 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 			case <-t.C:
 				if e := checkMemory(); e != nil {
 					guardErr.Store(&e)
+					cancel() // a store waiting on a server stops waiting
 					return
 				}
 			}
@@ -147,11 +202,16 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		return err
 	}
 	defer func() {
-		if rerr := os.RemoveAll(dir); rerr != nil && err == nil {
+		if rerr := removeAll(dir); rerr != nil && err == nil {
 			err = rerr
 		}
 	}()
 	var s Store
+	bind := func() {
+		if b, ok := s.(Cancelable); ok {
+			b.BindContext(ctx)
+		}
+	}
 	closed := true
 	closeStore := func() (cerr error) {
 		if s == nil || closed {
@@ -175,6 +235,7 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		return err
 	}
 	closed = false
+	bind()
 	if err = tripped(); err != nil {
 		return err
 	}
@@ -251,6 +312,7 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		return err
 	}
 	closed = false
+	bind()
 	reopen := time.Since(start)
 	if err = tripped(); err != nil {
 		return err
@@ -281,6 +343,11 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 	// goroutine has exited (a sample still in flight cannot arrive after the last
 	// check) and it reported clean. Every worker was joined by wg.Wait above.
 	if err = closeStore(); err != nil {
+		return err
+	}
+	// The trial directory goes before the guard is joined and before any receipt,
+	// so a removal failure is a failed trial, not a success followed by an error.
+	if err = removeAll(dir); err != nil {
 		return err
 	}
 	stop()

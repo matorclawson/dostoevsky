@@ -36,6 +36,29 @@ func (t trial) numAny(keys string) (float64, bool) {
 	return 0, false
 }
 
+// quantileKind says how a receipt line's percentiles were computed: "bin-upper-1pct" (the
+// shared 1% histogram, an upper bound at most 1% above the true value) or "exact" (the sample
+// itself, which every receipt written before the histogram is, and which carries no marker).
+func quantileKind(t trial) string {
+	if k := t["quantiles"]; k != "" {
+		return k
+	}
+	return "exact"
+}
+
+// oneQuantileKind refuses a set of trials whose percentiles mean different things: a chart that
+// mixed exact values with bin upper edges would compare numbers that are not the same quantity.
+func oneQuantileKind(trials []trial) error {
+	kinds := map[string]bool{}
+	for _, t := range trials {
+		kinds[quantileKind(t)] = true
+	}
+	if len(kinds) > 1 {
+		return fmt.Errorf("the receipt mixes percentile kinds (quantiles=exact and quantiles=bin-upper-1pct); draw them as separate charts")
+	}
+	return nil
+}
+
 // parseTrials reads the key=value lines of one receipt. With a section name it
 // keeps only the lines under that "# section" header (up to the next header) that
 // start with trial=; with an empty name it keeps every line that has key=value pairs.
@@ -81,7 +104,13 @@ func parseTrials(path, section string) ([]trial, error) {
 			out = append(out, t)
 		}
 	}
-	return out, sc.Err()
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if err := oneQuantileKind(out); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return out, nil
 }
 
 func parseMeta(path string) (map[string]string, error) {

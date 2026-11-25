@@ -362,3 +362,27 @@ func subtitleText(svg string) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+func TestAReceiptThatMixesPercentileKindsIsRefused(t *testing.T) {
+	write := func(lines ...string) string {
+		path := filepath.Join(t.TempDir(), "r.log")
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	exact := "trial=1 engine=a workers=1 records/s=10 p99_us=5"
+	binned := "trial=1 engine=b workers=1 records/s=10 p99_us=5 quantiles=bin-upper-1pct"
+	if _, err := parseTrials(write(exact, binned), "*"); err == nil || !strings.Contains(err.Error(), "mixes percentile kinds") {
+		t.Fatalf("a receipt with exact and binned lines: %v", err)
+	}
+	if got, err := parseTrials(write(exact, exact), "*"); err != nil || len(got) != 2 {
+		t.Fatalf("two exact lines (the receipts written before the histogram): %v, %d trials", err, len(got))
+	}
+	if got, err := parseTrials(write(binned, binned), "*"); err != nil || len(got) != 2 {
+		t.Fatalf("two binned lines: %v, %d trials", err, len(got))
+	}
+	if quantileKind(trial{}) != "exact" || quantileKind(trial{"quantiles": "bin-upper-1pct"}) != "bin-upper-1pct" {
+		t.Fatal("a line without the marker must count as exact")
+	}
+}

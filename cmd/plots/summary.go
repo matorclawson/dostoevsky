@@ -48,6 +48,7 @@ func summarize(w io.Writer, path string, want int, producers []int, expectEngine
 	var problems []string
 	problem := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	lines, failed := 0, 0
+	kinds := map[string]bool{}
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<16), 1<<20)
@@ -86,6 +87,7 @@ func summarize(w io.Writer, path string, want int, producers []int, expectEngine
 			continue
 		}
 		engine := kv["engine"]
+		kinds[quantileKind(trial{"quantiles": kv["quantiles"]})] = true
 		trial, trialErr := canonicalInt(kv["trial"])
 		workers, workersErr := canonicalInt(kv["workers"])
 		rss := kv["peakRSS_KiB"]
@@ -141,6 +143,9 @@ func summarize(w io.Writer, path string, want int, producers []int, expectEngine
 	}
 	if err := sc.Err(); err != nil {
 		return err
+	}
+	if len(kinds) > 1 {
+		problem("the receipt mixes percentile kinds (quantiles=exact and quantiles=bin-upper-1pct); summarize them separately")
 	}
 	if lines == 0 {
 		problem("no trial lines in %s", path)

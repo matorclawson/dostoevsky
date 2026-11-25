@@ -123,7 +123,7 @@ func TestSuccessfulTrialPrintsAReceiptLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := out.String()
-	for _, want := range []string{"engine=fake ", "workers=4 ", "verified=20 ", "records/s=", "peakRSS_KiB=", "reopen_ms="} {
+	for _, want := range []string{"engine=fake ", "workers=4 ", "verified=20 ", "records/s=", "p50_us=", "p99_9_us=", "p99_99_us=", "quantiles=bin-upper-1pct ", "peakRSS_KiB=", "reopen_ms="} {
 		if !strings.Contains(line, want) {
 			t.Errorf("receipt line %q lacks %q", line, want)
 		}

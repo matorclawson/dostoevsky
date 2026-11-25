@@ -390,6 +390,7 @@ func TestSustainedAPublishThatFailsAfterTheWindowStillMakesAFailedRun(t *testing
 type blockedRetain struct {
 	*fake
 	release   chan struct{}
+	started   atomic.Bool
 	active    atomic.Bool
 	overlap   atomic.Bool
 	failAfter int64
@@ -404,6 +405,7 @@ func (b *blockedRetain) Publish(d []byte) (uint64, error) {
 }
 
 func (b *blockedRetain) Retain(uint64) error {
+	b.started.Store(true)
 	b.active.Store(true)
 	<-b.release
 	b.active.Store(false)
@@ -419,8 +421,12 @@ func (b *blockedRetain) Close() {
 
 func TestSustainedCloseWaitsForAnActiveRetention(t *testing.T) {
 	b := &blockedRetain{fake: newFake(), release: make(chan struct{}), failAfter: 400}
+	b.fake.slow = time.Millisecond // producers outlast the first retention tick, so a retention is running when one fails
 	go func() { time.Sleep(300 * time.Millisecond); close(b.release) }()
 	_, r := sustainedRun(t, func() Store { return b }, Sustained{Window: 30 * time.Second, Target: 1_000_000, Workers: 2, Bucket: time.Hour, KeepLast: 10, RetainEvery: 20 * time.Millisecond})
+	if !b.started.Load() {
+		t.Fatal("the retention never started, so this test proves nothing")
+	}
 	if b.overlap.Load() {
 		t.Fatal("Close ran while Retain was active")
 	}
@@ -434,9 +440,10 @@ func TestSustainedARetentionThatNeverReturnsIsReportedAndTheStoreIsNotClosed(t *
 	abandonAfter = 200 * time.Millisecond
 	t.Cleanup(func() { abandonAfter = old })
 	b := &blockedRetain{fake: newFake(), release: make(chan struct{}), failAfter: 400}
+	b.fake.slow = time.Millisecond
 	t.Cleanup(func() { close(b.release) })
 	_, r := sustainedRun(t, func() Store { return b }, Sustained{Window: 30 * time.Second, Target: 1_000_000, Workers: 2, Bucket: time.Hour, KeepLast: 10, RetainEvery: 20 * time.Millisecond})
-	if b.overlap.Load() || !strings.Contains(r["reason"], "retention still running") {
+	if !b.started.Load() || b.overlap.Load() || !strings.Contains(r["reason"], "retention still running") {
 		t.Fatalf("overlap=%v %v", b.overlap.Load(), r)
 	}
 }
@@ -464,7 +471,8 @@ func TestSustainedACorruptedLastByteFailsVerification(t *testing.T) {
 
 // L1: a record in both samples is read and counted once.
 func TestSustainedOverlappingSamplesCountEachRecordOnce(t *testing.T) {
-	lines, r := sustainedRun(t, func() Store { return newFake() }, Sustained{Window: 30 * time.Second, Target: 30, Workers: 1, Bucket: time.Hour})
+	f := newFake() // ONE store: a reopen must find the records again
+	lines, r := sustainedRun(t, func() Store { return f }, Sustained{Window: 30 * time.Second, Target: 30, Workers: 1, Bucket: time.Hour})
 	if r["stop"] != StopReached || r["acked"] != "30" {
 		t.Fatalf("%v", r)
 	}
@@ -474,5 +482,15 @@ func TestSustainedOverlappingSamplesCountEachRecordOnce(t *testing.T) {
 				t.Fatalf("verified %d of 30 acknowledged: %q", n, l)
 			}
 		}
+	}
+}
+
+// The number in the reason is the final count, the same as the acked field (publishes in flight at the window's end finish and count).
+func TestSustainedWindowReasonAndAckedAgree(t *testing.T) {
+	f := newFake()
+	f.slow = time.Millisecond
+	_, r := sustainedRun(t, func() Store { return f }, Sustained{Window: 100 * time.Millisecond, Target: 1_000_000_000, Workers: 8, Bucket: time.Hour})
+	if r["stop"] != StopWindow || !strings.Contains(r["reason"], "ended at "+r["acked"]+" acknowledged") {
+		t.Fatalf("acked=%s but reason=%q", r["acked"], r["reason"])
 	}
 }

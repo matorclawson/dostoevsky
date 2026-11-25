@@ -512,6 +512,10 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	if st == nil {
 		st = &stopInfo{StopFailed, "ended without a recorded reason", time.Now()}
 	}
+	if st.kind == StopWindow {
+		// Publishes in flight when the window closed finished and were counted: the reason carries the FINAL number.
+		st = &stopInfo{st.kind, fmt.Sprintf("window of %v ended at %d acknowledged", o.Window, acked.Load()), st.at}
+	}
 	if abandoned {
 		st = &stopInfo{st.kind, st.text + "; producers still inside a publish after " + abandonAfter.String() + " were abandoned", st.at}
 	}

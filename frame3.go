@@ -14,19 +14,29 @@ import (
 // This file is the codec only. Nothing in the engine writes or reads these frames yet;
 // the segmented log that will is a later change.
 //
-//	0   4  length: the bytes that follow the 8-byte prefix (type, flags and body)
-//	4   4  CRC-32C (Castagnoli) of the length field, the type, the flags and the body
-//	8   1  type
-//	9   1  flags (reserved, must be zero)
-//	10  .. body
+//	0   4  length of the body (u32)
+//	4   1  type
+//	5   1  flags (reserved, must be zero)
+//	6   4  header check: CRC-32C of bytes 0 to 5
+//	10  4  body check: CRC-32C of the body, seeded with the header check
+//	14  .. body
 //
-// The checksum covers the length, so a damaged length is caught by the frame's own CRC
-// rather than by a separate header checksum. All integers are little-endian. A frame is
-// at most frame3Max bytes after the prefix; the writer refuses to produce more and the
-// reader refuses to accept more.
+// The header check lets a reader trust the length before it has the body. That matters at the
+// end of a file: "the data ends inside this frame" is a torn append, safe to truncate, only if
+// the length that says so is itself verified; a damaged length field must never look like a torn
+// tail, or truncating it would destroy acknowledged data. So:
+//
+//   - fewer than 14 bytes left: errFrame3Short (a torn header; at most a partial header is lost);
+//   - a complete header whose check fails: errFrame3Header (corruption, never a torn tail);
+//   - a verified header declaring more body than the data holds: errFrame3Short (a torn append);
+//   - a complete frame whose body check fails: errFrame3Checksum (corruption).
+//
+// The body check is seeded with the header check, so a body cannot be moved under another
+// valid header. All integers are little-endian. A body is at most frame3Max bytes; the writer
+// refuses to produce more and the reader refuses a declared length above it.
 const (
-	frame3Prefix = 8
-	frame3Max    = maxFrame // same limit as the JSON frame: 4 MiB
+	frame3Header = 14
+	frame3Max    = maxFrame // same limit as the JSON frame: 4 MiB of body
 
 	f3Record   byte = 1
 	f3Commit   byte = 2
@@ -36,54 +46,57 @@ const (
 
 var (
 	errFrame3Short    = errors.New("frame3: truncated")
+	errFrame3Header   = errors.New("frame3: header check failed")
 	errFrame3Checksum = errors.New("frame3: checksum mismatch")
 	errFrame3Invalid  = errors.New("frame3: invalid frame")
 )
 
 // appendFrame3 appends one frame holding body to dst.
 func appendFrame3(dst []byte, typ byte, body []byte) ([]byte, error) {
-	if 2+len(body) > frame3Max {
+	if len(body) > frame3Max {
 		return dst, ErrLimit
 	}
 	start := len(dst)
-	dst = append(dst, 0, 0, 0, 0, 0, 0, 0, 0, typ, 0)
-	binary.LittleEndian.PutUint32(dst[start:], uint32(2+len(body)))
+	dst = append(dst, 0, 0, 0, 0, typ, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(dst[start:], uint32(len(body)))
 	dst = append(dst, body...)
 	return sealFrame3(dst, start), nil
 }
 
-// sealFrame3 fills in the checksum of the frame that starts at dst[start:].
+// sealFrame3 fills in the two checks of the frame that starts at dst[start:].
 func sealFrame3(dst []byte, start int) []byte {
 	f := dst[start:]
-	crc := crc32.Update(0, crcTable, f[:4])
-	crc = crc32.Update(crc, crcTable, f[frame3Prefix:])
-	binary.LittleEndian.PutUint32(f[4:], crc)
+	hcrc := crc32.Checksum(f[:6], crcTable)
+	binary.LittleEndian.PutUint32(f[6:], hcrc)
+	binary.LittleEndian.PutUint32(f[10:], crc32.Update(hcrc, crcTable, f[frame3Header:]))
 	return dst
 }
 
 // readFrame3 checks the frame at the start of b and returns its type, its body (a view
 // into b) and the frame's total size. It never reads past b and never allocates.
 func readFrame3(b []byte) (typ byte, body []byte, size int, err error) {
-	if len(b) < frame3Prefix+2 {
+	if len(b) < frame3Header {
 		return 0, nil, 0, errFrame3Short
+	}
+	hcrc := crc32.Checksum(b[:6], crcTable)
+	if hcrc != binary.LittleEndian.Uint32(b[6:]) {
+		return 0, nil, 0, errFrame3Header
 	}
 	n := int(binary.LittleEndian.Uint32(b))
-	if n < 2 || n > frame3Max {
+	if n > frame3Max || n < 0 {
 		return 0, nil, 0, fmt.Errorf("%w: length %d", errFrame3Invalid, n)
 	}
-	size = frame3Prefix + n
-	if len(b) < size {
-		return 0, nil, 0, errFrame3Short
+	if b[5] != 0 {
+		return 0, nil, 0, fmt.Errorf("%w: flags %#x", errFrame3Invalid, b[5])
 	}
-	crc := crc32.Update(0, crcTable, b[:4])
-	crc = crc32.Update(crc, crcTable, b[frame3Prefix:size])
-	if crc != binary.LittleEndian.Uint32(b[4:]) {
+	size = frame3Header + n
+	if len(b) < size {
+		return 0, nil, 0, errFrame3Short // the header is verified, so the data really does end inside this frame
+	}
+	if crc32.Update(hcrc, crcTable, b[frame3Header:size]) != binary.LittleEndian.Uint32(b[10:]) {
 		return 0, nil, 0, errFrame3Checksum
 	}
-	if b[9] != 0 {
-		return 0, nil, 0, fmt.Errorf("%w: flags %#x", errFrame3Invalid, b[9])
-	}
-	return b[8], b[frame3Prefix+2 : size], size, nil
+	return b[4], b[frame3Header:size], size, nil
 }
 
 // ----- record -----
@@ -101,14 +114,24 @@ type record3 struct {
 
 const record3Fixed = 4 + 8 + 8 + 2 + 2
 
-// timeToNanos converts to the frame's time field. The zero time is kept as a sentinel; a
-// time outside the range int64 nanoseconds can hold (years 1678 to 2262) is refused.
+// The frame's time field is Unix nanoseconds in an int64. math.MinInt64 is reserved as the
+// zero-time sentinel, so the instants a frame can hold are exactly those from
+// 1677-09-21 00:12:43.145224193 UTC (MinInt64+1 ns) through 2262-04-11 23:47:16.854775807 UTC
+// (MaxInt64 ns), inclusive, in any time.Location: only the instant matters, and it comes back
+// as UTC.
+var (
+	minFrameTime = time.Unix(0, math.MinInt64+1).UTC()
+	maxFrameTime = time.Unix(0, math.MaxInt64).UTC()
+)
+
+// timeToNanos converts to the frame's time field. The zero time is kept as the sentinel; an
+// instant outside [minFrameTime, maxFrameTime] is refused.
 func timeToNanos(t time.Time) (int64, error) {
 	if t.IsZero() {
 		return math.MinInt64, nil
 	}
-	if y := t.Year(); y < 1678 || y > 2261 {
-		return 0, fmt.Errorf("time %v is outside the range of a nanosecond timestamp", t)
+	if t.Before(minFrameTime) || t.After(maxFrameTime) {
+		return 0, fmt.Errorf("time %v is outside the range of a nanosecond timestamp (%v to %v)", t, minFrameTime, maxFrameTime)
 	}
 	return t.UnixNano(), nil
 }
@@ -127,12 +150,12 @@ func appendRecord3(dst []byte, r record3) ([]byte, error) {
 		return dst, ErrLimit
 	}
 	body := record3Fixed + len(r.Key) + len(r.ID) + len(r.Value)
-	if 2+body > frame3Max {
+	if body > frame3Max {
 		return dst, ErrLimit
 	}
 	start := len(dst)
-	dst = append(dst, 0, 0, 0, 0, 0, 0, 0, 0, f3Record, 0)
-	binary.LittleEndian.PutUint32(dst[start:], uint32(2+body))
+	dst = append(dst, 0, 0, 0, 0, f3Record, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(dst[start:], uint32(body))
 	dst = binary.LittleEndian.AppendUint32(dst, r.Partition)
 	dst = binary.LittleEndian.AppendUint64(dst, r.Offset)
 	dst = binary.LittleEndian.AppendUint64(dst, uint64(r.Time))
@@ -181,12 +204,12 @@ func appendCommit3(dst []byte, c commit3) ([]byte, error) {
 		return dst, ErrLimit
 	}
 	body := 4 + 2 + len(c.Group) + 8 + 1 + 8 + len(c.State)
-	if 2+body > frame3Max {
+	if body > frame3Max {
 		return dst, ErrLimit
 	}
 	start := len(dst)
-	dst = append(dst, 0, 0, 0, 0, 0, 0, 0, 0, f3Commit, 0)
-	binary.LittleEndian.PutUint32(dst[start:], uint32(2+body))
+	dst = append(dst, 0, 0, 0, 0, f3Commit, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(dst[start:], uint32(body))
 	dst = binary.LittleEndian.AppendUint32(dst, c.Partition)
 	dst = binary.LittleEndian.AppendUint16(dst, uint16(len(c.Group)))
 	dst = append(dst, c.Group...)

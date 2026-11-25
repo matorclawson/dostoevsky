@@ -41,14 +41,14 @@ func TestFrame3RecordRoundTrip(t *testing.T) {
 		if err != nil || !equalRecord3(got, r) {
 			t.Fatalf("%s: %+v %v", name, got, err)
 		}
-		if want := frame3Prefix + 2 + record3Fixed + len(r.Key) + len(r.ID) + len(r.Value); len(b) != want {
+		if want := frame3Header + record3Fixed + len(r.Key) + len(r.ID) + len(r.Value); len(b) != want {
 			t.Fatalf("%s: %d bytes, want %d", name, len(b), want)
 		}
 	}
-	// The overhead of a record frame is 34 bytes, against 300 or more for the JSON frame.
+	// The overhead of a record frame is 38 bytes, against 300 or more for the JSON frame.
 	b, _ := appendRecord3(nil, record3{Value: make([]byte, 512)})
-	if len(b) != 512+34 {
-		t.Fatalf("512-byte record frame is %d bytes, want 546", len(b))
+	if len(b) != 512+38 {
+		t.Fatalf("512-byte record frame is %d bytes, want 550", len(b))
 	}
 }
 
@@ -122,7 +122,7 @@ func TestFrame3TruncationAtEveryLength(t *testing.T) {
 }
 
 func TestFrame3Limits(t *testing.T) {
-	room := frame3Max - 2 - record3Fixed
+	room := frame3Max - record3Fixed
 	if _, err := appendRecord3(nil, record3{Value: make([]byte, room)}); err != nil {
 		t.Fatalf("a frame exactly at the limit was refused: %v", err)
 	}
@@ -135,25 +135,74 @@ func TestFrame3Limits(t *testing.T) {
 	if _, err := appendRecord3(nil, record3{ID: make([]byte, math.MaxUint16+1)}); !errors.Is(err, ErrLimit) {
 		t.Fatalf("id over 65,535 bytes: %v", err)
 	}
-	if _, err := appendFrame3(nil, f3Fence, make([]byte, frame3Max)); !errors.Is(err, ErrLimit) {
+	if _, err := appendFrame3(nil, f3Fence, make([]byte, frame3Max)); err != nil {
+		t.Fatalf("a generic frame exactly at the limit was refused: %v", err)
+	}
+	if _, err := appendFrame3(nil, f3Fence, make([]byte, frame3Max+1)); !errors.Is(err, ErrLimit) {
 		t.Fatalf("generic frame over the limit: %v", err)
 	}
-	// A reader refuses a declared length above the limit or below the minimum, even with a
-	// matching checksum.
-	for _, n := range []uint32{0, 1, frame3Max + 1, math.MaxUint32} {
-		b := make([]byte, frame3Prefix+2)
+	// A reader refuses a declared length above the limit even when the header check is right.
+	for _, n := range []uint32{frame3Max + 1, math.MaxUint32} {
+		b := make([]byte, frame3Header)
 		binary.LittleEndian.PutUint32(b, n)
+		b[4] = f3Fence
 		sealFrame3(b, 0)
 		if _, _, _, err := readFrame3(b); !errors.Is(err, errFrame3Invalid) {
 			t.Fatalf("declared length %d: %v", n, err)
 		}
 	}
-	// Non-zero flags are refused even when the checksum is right.
+	// Non-zero flags are refused even when both checks are right.
 	b := mustFrame3(t, f3Fence, nil)
-	b[9] = 1
+	b[5] = 1
 	sealFrame3(b, 0)
 	if _, _, _, err := readFrame3(b); !errors.Is(err, errFrame3Invalid) {
 		t.Fatalf("flags: %v", err)
+	}
+	// A frame with an empty body is valid (the fence frame).
+	if _, body, size, err := readFrame3(mustFrame3(t, f3Fence, nil)); err != nil || len(body) != 0 || size != frame3Header {
+		t.Fatalf("empty body: %d %d %v", len(body), size, err)
+	}
+}
+
+// cx PR 30 M1: a damaged length field must never look like a torn tail. A scanner truncates a
+// torn append, so confusing the two would destroy acknowledged data.
+func TestFrame3ADamagedHeaderIsNeverATornTail(t *testing.T) {
+	frame := mustRecord3(t, sampleRecord3())
+	// every bit of the header (length, type, flags, header check): corruption, not "short"
+	for i := 0; i < 10; i++ {
+		for bit := 0; bit < 8; bit++ {
+			bad := append([]byte(nil), frame...)
+			bad[i] ^= 1 << bit
+			if _, _, _, err := readFrame3(bad); !errors.Is(err, errFrame3Header) || errors.Is(err, errFrame3Short) {
+				t.Fatalf("bit %d of header byte %d: %v", bit, i, err)
+			}
+			// even when the damaged length claims far more data than the file holds
+			if _, _, _, err := readFrame3(bad[:frame3Header+3]); errors.Is(err, errFrame3Short) {
+				t.Fatalf("a damaged header looked torn when truncated: bit %d of byte %d", bit, i)
+			}
+		}
+	}
+	// damage to the body or its check, with the header intact, is a checksum failure
+	for i := 10; i < len(frame); i++ {
+		bad := append([]byte(nil), frame...)
+		bad[i] ^= 0x01
+		if _, _, _, err := readFrame3(bad); !errors.Is(err, errFrame3Checksum) {
+			t.Fatalf("damage at byte %d: %v", i, err)
+		}
+	}
+	// a verified header with the body cut short IS a torn append; an incomplete header is torn too
+	for cut := 0; cut < len(frame); cut++ {
+		if _, _, _, err := readFrame3(frame[:cut]); !errors.Is(err, errFrame3Short) {
+			t.Fatalf("cut at %d: %v", cut, err)
+		}
+	}
+	// a body cannot be moved under another valid header
+	other := mustRecord3(t, record3{Value: bytes.Repeat([]byte{9}, len(sampleRecord3().Value)+len(sampleRecord3().Key)+len(sampleRecord3().ID))})
+	spliced := append(append([]byte(nil), frame[:frame3Header]...), other[frame3Header:]...)
+	if len(spliced) == len(frame) {
+		if _, _, _, err := readFrame3(spliced); !errors.Is(err, errFrame3Checksum) {
+			t.Fatalf("a body moved under another header was accepted: %v", err)
+		}
 	}
 }
 
@@ -251,7 +300,7 @@ func TestFrame3TopicDefRoundTrip(t *testing.T) {
 
 func TestFrame3Fence(t *testing.T) {
 	typ, body, size, err := readFrame3(mustFrame3(t, f3Fence, nil))
-	if err != nil || typ != f3Fence || len(body) != 0 || size != frame3Prefix+2 {
+	if err != nil || typ != f3Fence || len(body) != 0 || size != frame3Header {
 		t.Fatalf("%d %d %d %v", typ, len(body), size, err)
 	}
 }
@@ -266,10 +315,50 @@ func TestFrame3TimeConversion(t *testing.T) {
 	if n, err := timeToNanos(time.Time{}); err != nil || n != math.MinInt64 || !nanosToTime(n).IsZero() {
 		t.Fatalf("zero time: %d %v", n, err)
 	}
+	// the exact bounds, inclusive: MinInt64 is the zero-time sentinel, so the earliest instant is one nanosecond later
+	if n, err := timeToNanos(minFrameTime); err != nil || n != math.MinInt64+1 || !nanosToTime(n).Equal(minFrameTime) {
+		t.Fatalf("earliest instant: %d %v", n, err)
+	}
+	if n, err := timeToNanos(maxFrameTime); err != nil || n != math.MaxInt64 || !nanosToTime(n).Equal(maxFrameTime) {
+		t.Fatalf("latest instant: %d %v", n, err)
+	}
+	if _, err := timeToNanos(minFrameTime.Add(-time.Nanosecond)); err == nil {
+		t.Fatal("one nanosecond before the earliest instant was accepted")
+	}
+	if _, err := timeToNanos(maxFrameTime.Add(time.Nanosecond)); err == nil {
+		t.Fatal("one nanosecond after the latest instant was accepted")
+	}
+	// the documented dates
+	if got := minFrameTime.Format("2006-01-02T15:04:05.000000000Z"); got != "1677-09-21T00:12:43.145224193Z" {
+		t.Fatalf("earliest instant is %s", got)
+	}
+	if got := maxFrameTime.Format("2006-01-02T15:04:05.000000000Z"); got != "2262-04-11T23:47:16.854775807Z" {
+		t.Fatalf("latest instant is %s", got)
+	}
 	for _, tm := range []time.Time{time.Date(1500, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC)} {
 		if _, err := timeToNanos(tm); err == nil {
 			t.Fatalf("%v was accepted", tm)
 		}
+	}
+	// only the instant matters, not the location it is expressed in; monotonic readings do not change it
+	for _, loc := range []*time.Location{time.UTC, time.FixedZone("east", 14*3600), time.FixedZone("west", -12*3600)} {
+		tm := time.Date(2026, 11, 25, 12, 0, 0, 123, loc)
+		want, err := timeToNanos(tm.UTC())
+		got, err2 := timeToNanos(tm)
+		if err != nil || err2 != nil || got != want || !nanosToTime(got).Equal(tm) || nanosToTime(got).Location() != time.UTC {
+			t.Fatalf("%v: %d vs %d (%v %v)", loc, got, want, err, err2)
+		}
+	}
+	// the same instants just inside the bounds, written in a far-away zone
+	west := time.FixedZone("west", -12*3600)
+	if _, err := timeToNanos(minFrameTime.In(west)); err != nil {
+		t.Fatalf("earliest instant in another zone: %v", err)
+	}
+	if _, err := timeToNanos(maxFrameTime.In(time.FixedZone("east", 14*3600))); err != nil {
+		t.Fatalf("latest instant in another zone: %v", err)
+	}
+	if _, err := timeToNanos(time.Now()); err != nil { // carries a monotonic reading
+		t.Fatalf("time.Now: %v", err)
 	}
 }
 
@@ -285,7 +374,7 @@ func FuzzReadFrame3(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if size > len(b) || size < frame3Prefix+2 {
+		if size > len(b) || size < frame3Header {
 			t.Fatalf("size %d of %d", size, len(b))
 		}
 		again, err := appendFrame3(nil, typ, body)

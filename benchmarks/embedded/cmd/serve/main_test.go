@@ -67,3 +67,21 @@ func TestServeRefusesWhatItCannotStart(t *testing.T) {
 		t.Fatalf("printed %q although nothing started", out.String())
 	}
 }
+
+func TestServerBinComesFromTheFlagThenTheEnginesVariableThenTheGenericOne(t *testing.T) {
+	env := map[string]string{"BENCH_REDIS_SERVER": "/opt/redis-server", "BENCH_SERVER_BIN": "/generic"}
+	get := func(k string) string { return env[k] }
+	for _, tc := range []struct{ engine, flag, want string }{
+		{"redis", "/flag", "/flag"},
+		{"redis", "", "/opt/redis-server"},
+		{"nats", "", "/generic"},
+		{"gateway", "", "/generic"},
+	} {
+		if got := serverBin(tc.engine, tc.flag, get); got != tc.want {
+			t.Errorf("%s with flag %q: %q, want %q", tc.engine, tc.flag, got, tc.want)
+		}
+	}
+	if got := serverBin("nats", "", func(string) string { return "" }); got != "" {
+		t.Errorf("nothing set gave %q", got)
+	}
+}

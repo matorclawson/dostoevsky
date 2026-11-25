@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/servers"
@@ -32,10 +33,21 @@ func main() {
 	engine := flag.String("engine", "", "gateway, redis or nats")
 	bin := flag.String("bin", os.Getenv("BENCH_SERVER_BIN"), "server executable (default $BENCH_SERVER_BIN)")
 	flag.Parse()
-	if err := serve(*engine, *bin, os.Stdin, os.Stdout); err != nil {
+	if err := serve(*engine, serverBin(*engine, *bin, os.Getenv), os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)
 	}
+}
+
+// serverBin picks the server executable: the flag, else BENCH_<ENGINE>_SERVER, else BENCH_SERVER_BIN.
+func serverBin(engine, flagValue string, getenv func(string) string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if v := getenv("BENCH_" + strings.ToUpper(engine) + "_SERVER"); v != "" {
+		return v
+	}
+	return getenv("BENCH_SERVER_BIN")
 }
 
 func serve(engine, bin string, stdin io.Reader, out io.Writer) (err error) {

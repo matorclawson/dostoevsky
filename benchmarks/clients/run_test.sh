@@ -19,10 +19,16 @@ cat > "$t/serve" <<STUB
 echo \$\$ > "$t/serve.pid"
 if [ "\${STUB_SERVE_DIES:-}" = "\$2" ]; then echo "FAILED: stub" >&2; exit 1; fi
 if [ -n "\${STUB_SERVE_HANG:-}" ]; then trap '' TERM; while :; do sleep 1; done; fi
+if [ -n "\${STUB_SERVE_STUCK:-}" ]; then
+  # an "engine" in a process group of its own, as serve's engine is; READY names its pid
+  set -m; sleep 600 & epid=\$!; set +m
+  echo \$epid > "$t/engine.pid"
+  echo "READY addr=127.0.0.1:12345 pid=\$epid token=$SECRET"
+  trap '' TERM; while :; do sleep 1; done
+fi
 echo "READY addr=127.0.0.1:12345 pid=\$\$ token=$SECRET"
-if [ -n "\${STUB_SERVE_STUCK:-}" ]; then trap '' TERM; while :; do sleep 1; done; fi
 cat > /dev/null
-echo "STOPPED server_rss_KiB=1000 rss_source=VmHWM verdict=clean"
+echo "STOPPED server_rss_KiB=1000 rss_source=VmHWM verdict=\${STUB_VERDICT:-clean}"
 STUB
 # A stub worker: checks the token arrived in the environment, never in argv, and prints a canned, complete line.
 cat > "$t/worker" <<STUB
@@ -31,12 +37,18 @@ cat > "$t/worker" <<STUB
 case "\$*" in *$SECRET*) echo "the token is in argv" >&2; exit 8 ;; esac
 echo "\$*" >> "$t/argv.log"
 eng=\$2; workers=\$6
+if [ "\${STUB_MODE:-ok}" = hang ]; then while :; do sleep 1; done; fi
+if [ "\${STUB_MODE:-ok}" = leakfd ]; then sleep 20 & fi   # a child that would keep the FIFO's write end open if it inherited it
 if [ "\${STUB_MODE:-ok}" = crash ]; then echo "boom with the token $SECRET and a bad char \\\$(x) in it, then more and more text that goes on long enough to need cutting off somewhere around the hundred and twentieth character of it" >&2; exit 3; fi
 common="p50_us=2.000 p95_us=2.000 p99_us=2.000 p99_9_us=2.000 p99_99_us=2.000 quantiles=bin-upper-1pct client_rss_source=ru_maxrss lang=python client=stub-1 client_build=n/a"
 if [ "\${STUB_MODE:-ok}" = failed ] && [ "\$eng" = "\${STUB_FAIL_ENGINE:-kafka}" ]; then
   echo "engine=python-\$eng workers=\$workers result=FAILED acked=4 verified=4 records/s=2 elapsed_s=2.00 \$common client_rss_KiB=2000 stop=failed detail=publish_4:_Error:engine-error_(after_4_acknowledged)"
 elif [ "\${STUB_MODE:-ok}" = incomplete ]; then
   echo "engine=python-\$eng workers=\$workers result=ok acked=10 verified=10 records/s=100 elapsed_s=1.00 \$common stop=reached"   # no client_rss_KiB
+elif [ "\${STUB_MODE:-ok}" = badnum ]; then
+  echo "engine=python-\$eng workers=\$workers result=ok acked=10 verified=10 records/s=NaN elapsed_s=1.00 \$common client_rss_KiB=2000 stop=reached"
+elif [ "\${STUB_MODE:-ok}" = badp99 ]; then
+  echo "engine=python-\$eng workers=\$workers result=ok acked=10 verified=10 records/s=100 elapsed_s=1.00 p50_us=2.000 p95_us=2.000 p99_us=-5 p99_9_us=2.000 p99_99_us=2.000 quantiles=bin-upper-1pct client_rss_source=ru_maxrss lang=python client=stub-1 client_build=n/a client_rss_KiB=2000 stop=reached"
 elif [ "\${STUB_MODE:-ok}" = wrongcount ]; then
   echo "engine=python-\$eng workers=7 result=ok acked=10 verified=10 records/s=100 elapsed_s=1.00 \$common client_rss_KiB=2000 stop=reached"
 else
@@ -83,6 +95,38 @@ check "a server that dies before READY is a FAILED line, not a hang" "[ $code -e
 
 run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_SERVE_STUCK=1 STOP_WAIT=2 CLIENT_ENGINES=dostoevsky
 check "a server that will not stop is killed after the bound and reported, not waited for" "[ $code -eq 1 ] && grep -q 'FAILED server_did_not_stop_cleanly' $t/out && [ \$(leftovers) -eq 0 ]"
+
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_MODE=badnum CLIENT_ENGINES=dostoevsky
+check "a non-numeric throughput is refused, not accepted with exit 0" "[ $code -eq 1 ] && grep -q 'FAILED incomplete_worker_receipt:not_a_decimal_records_s' $t/out"
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_MODE=badp99 CLIENT_ENGINES=dostoevsky
+check "a negative percentile is refused" "[ $code -eq 1 ] && grep -q 'FAILED incomplete_worker_receipt:not_a_decimal_p99_us' $t/out"
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_VERDICT=dirty CLIENT_ENGINES=dostoevsky
+check "a STOPPED line without verdict=clean is not a clean stop" "[ $code -eq 1 ] && grep -q 'FAILED server_did_not_stop_cleanly' $t/out"
+
+begin=$(date +%s)
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_MODE=hang WORKER_MAX=2 CLIENT_ENGINES=dostoevsky
+check "a worker that never ends hits its deadline and is reported, not waited for" "[ $code -eq 1 ] && grep -q 'FAILED worker_timeout_after_2s' $t/out && [ \$(( \$(date +%s) - $begin )) -lt 60 ]"
+
+begin=$(date +%s)
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_MODE=leakfd STOP_WAIT=5 CLIENT_ENGINES=dostoevsky
+check "a worker's child does not inherit the server's stdin: the server stops at once and the trial succeeds" "[ $code -eq 0 ] && [ \$(grep -c '^trial=' $t/out) -eq 3 ] && [ \$(( \$(date +%s) - $begin )) -lt 15 ]"
+
+rm -f "$t/engine.pid"
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_SERVE_STUCK=1 STOP_WAIT=2 CLIENT_ENGINES=dostoevsky
+epid=$(cat "$t/engine.pid" 2>/dev/null)
+check "when a hung serve is killed, its engine's process group goes with it" "[ -n \"$epid\" ] && ! kill -0 $epid 2>/dev/null"
+
+# No program the script runs may see the token in its arguments (ps can read them): every child's argv is logged by a wrapper.
+mkdir -p "$t/bin"; : > "$t/children.log"
+for c in sed head tr grep sleep date mktemp mkfifo rm rmdir cut wc; do
+  real=$(command -v $c) || continue
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s"\nexec %s "$@"\n' "$c" "$t/children.log" "$real" > "$t/bin/$c"
+  chmod +x "$t/bin/$c"
+done
+run PATH="$t/bin:$PATH" BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_MODE=crash CLIENT_ENGINES=dostoevsky
+check "the wrappers saw the children run" "[ \$(wc -l < $t/children.log) -gt 20 ]"
+check "the token is in no child's argv (sed, head, grep, ... all logged)" "! grep -q $SECRET $t/children.log"
+check "the diagnostic is still masked after moving the masking into the shell" "grep -q 'FAILED worker_exit_3:boom_with_the_token__token_' $t/out"
 
 # TERM during readiness: the server is stopped and the directory with the token is removed.
 : > "$t/argv.log"; rm -f "$t/serve.pid"

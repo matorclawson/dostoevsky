@@ -23,6 +23,7 @@ rounds=${BENCH_ROUNDS:-5}
 serve=${SERVE_BIN:-.dev/clients/serve}
 failed=0
 umask 077
+case "$window" in ""|*[!0-9]*) echo "BENCH_WINDOW must be a whole number of seconds (0 for none), not '$window'" >&2; exit 2 ;; esac
 
 serve_engine() { # receipt engine -> the name serve knows it by
   case "$1" in dostoevsky) echo gateway ;; *) echo "$1" ;; esac
@@ -47,7 +48,7 @@ field() { # key line -> the value of key=value (first match), empty if absent
 
 # ---- cleanup: whatever ends the script (a TERM, an INT, a normal exit), the trial's server is stopped and its directory
 # ---- (which holds the token) is removed. Every wait is bounded: a hung server is killed, never waited for forever.
-CUR_DIR=""; CUR_SPID=""; CUR_WPID=""
+CUR_DIR=""; CUR_SPID=""; CUR_WPID=""; CUR_EPID=""
 
 stop_pid() { # pid seconds: TERM, wait up to `seconds`, then KILL; returns at once if it is already gone
   p=$1; secs=${2:-10}
@@ -60,16 +61,45 @@ stop_pid() { # pid seconds: TERM, wait up to `seconds`, then KILL; returns at on
   return 0
 }
 
+# kill_engine_group: serve starts its engine in a process group of its own whose id is the engine's pid (READY's pid=).
+# Killing a hung serve alone would orphan the engine, so the whole group goes too.
+kill_engine_group() {
+  case "$CUR_EPID" in ""|*[!0-9]*|0|1) return 0 ;; esac   # never a group id that could mean "everything"
+  kill -KILL -- "-$CUR_EPID" 2>/dev/null
+  return 0
+}
+
 cleanup_trial() {
   exec 3>&-
   stop_pid "$CUR_WPID" 5
   stop_pid "$CUR_SPID" "${STOP_WAIT:-120}"
+  kill_engine_group
   if [ -n "$CUR_DIR" ]; then rm -f "$CUR_DIR/in" "$CUR_DIR/out" "$CUR_DIR/err" "$CUR_DIR/wout" "$CUR_DIR/werr"; rmdir "$CUR_DIR" 2>/dev/null; fi
-  CUR_DIR=""; CUR_SPID=""; CUR_WPID=""
+  CUR_DIR=""; CUR_SPID=""; CUR_WPID=""; CUR_EPID=""
 }
 trap 'cleanup_trial; trap - EXIT; exit 143' TERM
 trap 'cleanup_trial; trap - EXIT; exit 130' INT
 trap cleanup_trial EXIT
+
+# is_decimal x: a non-negative decimal such as 12 or 2002.301 (not empty, not NaN, not 1e3, not -1, not .5, not 5.)
+is_decimal() {
+  case "$1" in ""|*[!0-9.]*|.*|*.|*.*.*) return 1 ;; esac
+  return 0
+}
+
+# mask_token token text: text with every occurrence of the token replaced by _token_, done by the shell itself, so the
+# token is never an argument of any other program (ps could read it there).
+mask_token() {
+  mt_t=$1; mt_s=$2; mt_out=""
+  if [ -z "$mt_t" ]; then printf '%s' "$mt_s"; return; fi
+  while :; do
+    case $mt_s in
+      *"$mt_t"*) mt_out="$mt_out${mt_s%%"$mt_t"*}_token_"; mt_s=${mt_s#*"$mt_t"} ;;
+      *) mt_out="$mt_out$mt_s"; break ;;
+    esac
+  done
+  printf '%s' "$mt_out"
+}
 
 # valid_receipt line lang engine workers -> prints the name of the first thing wrong, nothing when the line is whole
 valid_receipt() {
@@ -79,6 +109,9 @@ valid_receipt() {
   done
   for k in workers acked verified client_rss_KiB; do
     case "$(field "$k" "$v_line")" in *[!0-9]*) echo "not_a_number_$k"; return ;; esac
+  done
+  for k in records/s elapsed_s p50_us p95_us p99_us p99_9_us p99_99_us; do
+    is_decimal "$(field "$k" "$v_line")" || { echo "not_a_decimal_$(echo "$k" | tr '/' '_')"; return; }
   done
   [ "$(field workers "$v_line")" = "$v_want_workers" ] || { echo "wrong_workers"; return; }
   [ "$(field engine "$v_line")" = "$v_want_engine" ] || { echo "wrong_engine"; return; }
@@ -107,36 +140,47 @@ run_cell() {
     cleanup_trial
     return 1
   fi
-  addr=$(field addr "$ready"); token=$(field token "$ready")
+  addr=$(field addr "$ready"); token=$(field token "$ready"); CUR_EPID=$(field pid "$ready")
   cmd=$(worker_cmd "$l" "$e" "$addr" "$w" "$c" "$win")
   line=""; code=0; diag=""
   if [ -z "$cmd" ]; then code=2; else
-    # In the background so a TERM reaches the trap at once; exec so the pid is the worker itself and a kill reaches it.
-    BENCH_TOKEN="$token" sh -c "exec $cmd" > "$d/wout" 2> "$d/werr" &
+    # In the background so a TERM reaches the trap at once; exec so the pid is the worker itself and a kill reaches it;
+    # 3>&- so the worker does not inherit the FIFO's write end (it would keep the server's stdin open).
+    BENCH_TOKEN="$token" sh -c "exec $cmd" 3>&- > "$d/wout" 2> "$d/werr" &
     CUR_WPID=$!
-    wait "$CUR_WPID"; code=$?
+    # A deadline: the window plus time to read everything back, or WORKER_MAX seconds when given; 10 minutes without a window.
+    limit=${WORKER_MAX:-$(( win > 0 ? win * 3 + 1800 : 600 ))}
+    started=$(date +%s)
+    while kill -0 "$CUR_WPID" 2>/dev/null; do
+      if [ $(( $(date +%s) - started )) -ge "$limit" ]; then stop_pid "$CUR_WPID" 5; code=124; break; fi
+      sleep 0.2
+    done
+    if [ $code -ne 124 ]; then wait "$CUR_WPID"; code=$?; else wait "$CUR_WPID" 2>/dev/null; fi
     CUR_WPID=""
     line=$(head -n 1 "$d/wout" 2>/dev/null)
-    # At most 120 characters of the worker's first error line, reduced to a safe alphabet, with the token masked.
-    diag=$(head -n 1 "$d/werr" 2>/dev/null | head -c 120)
-    [ -n "$token" ] && diag=$(printf '%s' "$diag" | sed "s/$token/_token_/g")
-    diag=$(printf '%s' "$diag" | sed 's/[^A-Za-z0-9_.:,()\/-]/_/g')
+    # The worker's first error line, read by the shell (never an argument of another program), masked, THEN cut to 120
+    # characters and reduced to a safe alphabet; the token is only ever handled by shell builtins.
+    raw=$(head -n 1 "$d/werr" 2>/dev/null | head -c 4096)
+    raw=$(mask_token "$token" "$raw")
+    diag=$(printf '%s' "$raw" | head -c 120 | sed 's/[^A-Za-z0-9_.:,()\/-]/_/g')
   fi
   token=""; ready=""
   # The server's stdin closes: it stops, prints STOPPED. Bounded: a server that does not stop is killed.
   exec 3>&-
   i=0
   while kill -0 "$spid" 2>/dev/null && [ $i -lt $((${STOP_WAIT:-120} * 10)) ]; do sleep 0.1; i=$((i + 1)); done
-  if kill -0 "$spid" 2>/dev/null; then stop_pid "$spid" 5; scode=137; else wait "$spid"; scode=$?; fi
-  CUR_SPID=""
+  if kill -0 "$spid" 2>/dev/null; then stop_pid "$spid" 5; kill_engine_group; scode=137; else wait "$spid"; scode=$?; fi
+  CUR_SPID=""; CUR_EPID=""
   stopped=$(grep -m1 '^STOPPED ' "$d/out" 2>/dev/null)
   rc=0; bad=""
   [ -n "$line" ] && bad=$(valid_receipt "$line" "$l" "$e" "$w")
   if [ $code -ne 0 ] || [ -z "$line" ]; then
-    RESULT="trial=$n engine=$l-$e workers=$w FAILED worker_exit_$code${diag:+:$diag}"; rc=1
+    if [ $code -eq 124 ]; then RESULT="trial=$n engine=$l-$e workers=$w FAILED worker_timeout_after_${limit}s"
+    else RESULT="trial=$n engine=$l-$e workers=$w FAILED worker_exit_$code${diag:+:$diag}"; fi
+    rc=1
   elif [ -n "$bad" ]; then
     RESULT="trial=$n engine=$l-$e workers=$w FAILED incomplete_worker_receipt:$bad"; rc=1
-  elif [ $scode -ne 0 ] || [ -z "$stopped" ]; then
+  elif [ $scode -ne 0 ] || [ -z "$stopped" ] || [ "$(field verdict "$stopped")" != "clean" ]; then
     RESULT="trial=$n engine=$l-$e workers=$w FAILED server_did_not_stop_cleanly"; rc=1
   elif [ "$(field result "$line")" = "FAILED" ]; then
     # Converted to the marker cmd/plots counts as a failed trial: everything after FAILED is a diagnostic.

@@ -153,66 +153,77 @@ struct Shared {
     ambiguous: bool,
 }
 
+/// A mutex lock that survives poisoning: a panicking producer must not take the bookkeeping of the others with it.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+struct Part {
+    hist: Hist,
+    records: Vec<(u64, u64)>,
+}
+
 /// Publishes with `workers` synchronous producers until `target` messages are acknowledged, the window (seconds)
 /// ends, or a publish fails. The failing publish is not counted and nothing is retried. A failure is never hidden by
-/// an earlier "reached" or "window".
+/// an earlier "reached" or "window". A producer thread that PANICS is a failure too (the run is FAILED, never
+/// "reached"), and every record a producer had acknowledged before it panicked is kept, so the read-back still covers
+/// it: each acknowledgment is stored the moment it happens, not when the thread ends.
 pub fn run_workload(adapter: Arc<dyn Adapter>, workers: usize, target: u64, window_s: f64) -> Outcome {
     let shared = Arc::new(Mutex::new(Shared { next: 0, stop: None, ambiguous: false }));
     let start = Instant::now();
     let deadline = if window_s > 0.0 { Some(start + Duration::from_secs_f64(window_s)) } else { None };
-    let parts: Arc<Mutex<Vec<(Hist, Vec<(u64, u64)>)>>> = Arc::new(Mutex::new(Vec::new()));
+    let parts: Vec<Arc<Mutex<Part>>> = (0..workers).map(|_| Arc::new(Mutex::new(Part { hist: Hist::default(), records: Vec::new() }))).collect();
     let mut handles = Vec::new();
-    for _ in 0..workers {
-        let (shared, adapter, parts) = (shared.clone(), adapter.clone(), parts.clone());
-        handles.push(std::thread::spawn(move || {
-            let mut hist = Hist::default();
-            let mut mine: Vec<(u64, u64)> = Vec::new();
-            loop {
-                let i = {
-                    let mut s = shared.lock().unwrap();
-                    if s.stop.is_none() && deadline.is_some_and(|d| Instant::now() >= d) {
-                        s.stop = Some((WINDOW.to_string(), String::new()));
+    for part in &parts {
+        let (shared, adapter, part) = (shared.clone(), adapter.clone(), part.clone());
+        handles.push(std::thread::spawn(move || loop {
+            let i = {
+                let mut s = lock(&shared);
+                if s.stop.is_none() && deadline.is_some_and(|d| Instant::now() >= d) {
+                    s.stop = Some((WINDOW.to_string(), String::new()));
+                }
+                if s.stop.is_some() {
+                    break;
+                }
+                let i = s.next;
+                if i >= target {
+                    s.stop = Some((REACHED.to_string(), String::new()));
+                    break;
+                }
+                s.next = i + 1;
+                i
+            };
+            let begin = Instant::now();
+            match adapter.publish(&payload(i)) {
+                Ok(offset) => {
+                    let mut p = lock(&part);
+                    p.hist.add_ns(begin.elapsed().as_nanos() as u64);
+                    p.records.push((i, offset)); // kept at once: a later panic cannot lose it
+                }
+                Err(e) => {
+                    let mut s = lock(&shared);
+                    if s.stop.as_ref().map_or(true, |(k, _)| k != FAILED) {
+                        s.stop = Some((FAILED.to_string(), format!("publish {i}: {}", reason(&e))));
                     }
-                    if s.stop.is_some() {
-                        break;
-                    }
-                    let i = s.next;
-                    if i >= target {
-                        s.stop = Some((REACHED.to_string(), String::new()));
-                        break;
-                    }
-                    s.next = i + 1;
-                    i
-                };
-                let begin = Instant::now();
-                match adapter.publish(&payload(i)) {
-                    Ok(offset) => {
-                        hist.add_ns(begin.elapsed().as_nanos() as u64);
-                        mine.push((i, offset));
-                    }
-                    Err(e) => {
-                        let mut s = shared.lock().unwrap();
-                        if s.stop.as_ref().map_or(true, |(k, _)| k != FAILED) {
-                            s.stop = Some((FAILED.to_string(), format!("publish {i}: {}", reason(&e))));
-                        }
-                        s.ambiguous |= e.kind == Kind::AmbiguousTimeout;
-                        break;
-                    }
+                    s.ambiguous |= e.kind == Kind::AmbiguousTimeout;
+                    break;
                 }
             }
-            parts.lock().unwrap().push((hist, mine));
         }));
     }
-    for h in handles {
-        let _ = h.join();
-    }
+    let panicked = handles.into_iter().map(|h| h.join().is_err()).filter(|p| *p).count();
     let mut out = Outcome { elapsed_s: start.elapsed().as_secs_f64(), ..Default::default() };
-    for (h, mine) in parts.lock().unwrap().iter() {
-        out.hist.merge(h);
-        out.records.extend(mine.iter().copied());
+    for part in &parts {
+        let p = lock(part);
+        out.hist.merge(&p.hist);
+        out.records.extend(p.records.iter().copied());
     }
     out.acked = out.records.len() as u64;
-    let s = shared.lock().unwrap();
+    let mut s = lock(&shared);
+    if panicked > 0 {
+        // Whatever else was decided, a panicking producer makes this a failed run.
+        s.stop = Some((FAILED.to_string(), format!("ProducerPanic:panic in {panicked} producer threads")));
+    }
     let (kind, text) = s.stop.clone().unwrap_or((REACHED.to_string(), String::new()));
     out.detail = if kind == FAILED { format!("{text} (after {} acknowledged)", out.acked) } else { text };
     out.stop = kind;

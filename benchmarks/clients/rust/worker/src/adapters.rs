@@ -35,19 +35,22 @@ fn build_id(dir: &std::path::Path) -> String {
     }
 }
 
-/// "crate-version" of a dependency pinned in this worker's manifest (`crate = { version = "=X", ... }`): the name
-/// of the client the receipt reports comes from the pin, not from a typed string.
-fn pinned(krate: &str) -> String {
-    let path = repo().join("benchmarks/clients/rust/worker/Cargo.toml");
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let prefix = format!("{krate} = {{");
-    let version = text
-        .lines()
-        .find(|l| l.starts_with(&prefix))
-        .and_then(|l| l.split("version = \"=").nth(1))
-        .and_then(|r| r.split('"').next())
-        .unwrap_or("unknown");
-    format!("{krate}-{version}")
+/// The lockfile this binary was built from, embedded at build time: the client names in receipts come from the exact
+/// versions that were compiled in, and cannot depend on a file that may be missing at run time.
+const LOCK: &str = include_str!("../Cargo.lock");
+
+/// "crate-version" of a locked dependency, or an error: the worker refuses to run rather than report "unknown".
+fn locked(krate: &str) -> Result<String, String> {
+    let wanted = format!("name = \"{krate}\"");
+    let mut lines = LOCK.lines();
+    while let Some(l) = lines.next() {
+        if l == wanted {
+            if let Some(v) = lines.next().and_then(|x| x.strip_prefix("version = \"")).and_then(|x| x.strip_suffix('"')) {
+                return Ok(format!("{krate}-{v}"));
+            }
+        }
+    }
+    Err(format!("{krate} is not in the embedded Cargo.lock"))
 }
 
 fn host_port(addr: &str) -> Result<(String, u16), String> {
@@ -128,6 +131,8 @@ struct Kafka {
     consumer: Mutex<Option<BaseConsumer>>,
     loaded: Mutex<BTreeMap<u64, Vec<u8>>>,
     name: String,
+    /// A delivery wait ran out: the broker may or may not have stored that message, and work may still be queued.
+    timed_out: std::sync::atomic::AtomicBool,
 }
 
 impl Adapter for Kafka {
@@ -139,7 +144,10 @@ impl Adapter for Kafka {
         }
         match rx.recv_timeout(Duration::from_secs(60)) {
             Ok(Ok(offset)) => Ok(offset),
-            Ok(Err(true)) | Err(_) => Err(EngineError::new("KafkaError", Kind::AmbiguousTimeout)),
+            Ok(Err(true)) | Err(_) => {
+                self.timed_out.store(true, std::sync::atomic::Ordering::SeqCst);
+                Err(EngineError::new("KafkaError", Kind::AmbiguousTimeout))
+            }
             Ok(Err(false)) => Err(EngineError::new("KafkaError", Kind::Other)),
         }
     }
@@ -173,6 +181,10 @@ impl Adapter for Kafka {
         }
     }
     fn close(&self) {
+        if self.timed_out.load(std::sync::atomic::Ordering::SeqCst) {
+            // After an ambiguous timeout nothing still queued may be sent now: drop it, then give the library a short moment.
+            self.producer.purge(rdkafka::producer::PurgeConfig::default().queue().inflight());
+        }
         let _ = self.producer.flush(Duration::from_secs(2));
     }
     fn client_name(&self) -> String {
@@ -197,7 +209,8 @@ fn kafka(addr: &str, _token: &str, _workers: usize) -> Result<Arc<dyn Adapter>, 
         producer,
         consumer: Mutex::new(None),
         loaded: Mutex::new(BTreeMap::new()),
-        name: format!("{}+librdkafka-{}", pinned("rdkafka"), librdkafka),
+        timed_out: std::sync::atomic::AtomicBool::new(false),
+        name: format!("{}+librdkafka-{}", locked("rdkafka")?, librdkafka),
     }))
 }
 
@@ -255,7 +268,7 @@ fn nats(addr: &str, token: &str, workers: usize) -> Result<Arc<dyn Adapter>, Str
                 .map_err(|_| "create stream".to_string())?;
             Ok::<_, String>((js, stream))
         })?;
-    Ok(Arc::new(Nats { rt, js, stream, name: pinned("async-nats") }))
+    Ok(Arc::new(Nats { rt, js, stream, name: locked("async-nats")? }))
 }
 
 // ---- redis: XADD and XRANGE by raw command, so bytes stay bytes; one blocking connection per producer thread ----
@@ -318,7 +331,7 @@ fn redis_adapter(addr: &str, token: &str, _workers: usize) -> Result<Arc<dyn Ada
     // serve's token is hex, so nothing in it needs URL encoding; it lives only in memory, never in an argument.
     let url = format!("redis://:{token}@{host}:{port}/");
     let client = redis::Client::open(url.as_str()).map_err(|_| "redis client".to_string())?;
-    Ok(Arc::new(Redis { client, idle: Mutex::new(Vec::new()), name: pinned("redis") }))
+    Ok(Arc::new(Redis { client, idle: Mutex::new(Vec::new()), name: locked("redis")? }))
 }
 
 pub fn engines() -> BTreeMap<String, Factory> {

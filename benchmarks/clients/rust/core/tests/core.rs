@@ -240,3 +240,37 @@ fn a_gated_run_refuses_an_unknown_client_build() {
     let (code, out, _) = trial(&["--engine", "memory", "--addr", "x:1", "--target", "5"], unknown());
     assert!(code == 0 && out.contains("client_build=unknown"));
 }
+
+#[test]
+fn a_producer_that_panics_after_an_ack_fails_the_run_and_its_ack_is_still_verified() {
+    struct Panics {
+        inner: Arc<Memory>,
+        panic_at: u64,
+        calls: AtomicU64,
+    }
+    impl Adapter for Panics {
+        fn publish(&self, data: &[u8]) -> Result<u64, EngineError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.panic_at {
+                panic!("an adapter bug with a secret in its message: hunter2");
+            }
+            self.inner.publish(data)
+        }
+        fn read(&self, o: u64) -> Result<Vec<u8>, EngineError> {
+            self.inner.read(o)
+        }
+        fn client_name(&self) -> String {
+            "panics".into()
+        }
+    }
+    for workers in [1, 4] {
+        let a = Arc::new(Panics { inner: Memory::new(), panic_at: 3, calls: AtomicU64::new(0) });
+        let r = run_workload(a.clone(), workers, 1000, 0.0);
+        assert_eq!(r.stop, FAILED, "{workers} workers: a panic must not end as reached");
+        assert!(r.acked >= 2, "the acknowledgments made before the panic are kept: {}", r.acked);
+        assert_eq!(r.acked as usize, a.inner.log.lock().unwrap().len(), "every stored record is accounted for");
+        assert_eq!(verify(a.as_ref(), &r.records), "", "and read back");
+        assert!(r.detail.contains("ProducerPanic:panic") && !r.detail.contains("hunter2"), "{}", r.detail);
+        let line = receipt_line("x", workers, &r, r.acked, "c", 1, "VmHWM", "n/a");
+        assert!(line.contains("result=FAILED") && !line.contains("hunter2"), "{line}");
+    }
+}

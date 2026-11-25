@@ -22,5 +22,21 @@
   ],
   "scripts": {
     "test": "node --test"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rodriveracom/dostoevsky.git",
+    "directory": "clients/javascript"
+  },
+  "homepage": "https://github.com/rodriveracom/dostoevsky/blob/main/docs/clients.md",
+  "bugs": {
+    "url": "https://github.com/rodriveracom/dostoevsky/issues"
+  },
+  "keywords": [
+    "dostoevsky",
+    "streaming",
+    "durable",
+    "queue",
+    "messaging"
+  ]
 }

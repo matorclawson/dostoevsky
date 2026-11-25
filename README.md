@@ -1,12 +1,62 @@
 # Dostoevsky
 
-Dostoevsky is an embeddable Go library for durable topics and stateful stream processing. Start with a directory and a topic manifest. To distribute partitions, embed the same library in each participating application and mount its peer handler on the application's HTTP server. All runtime dependencies come from the Go standard library. MIT licensed.
+<p>
+<a href="https://go.dev/doc/devel/release"><img alt="Go 1.22 or later" src="https://img.shields.io/badge/go-1.22%2B-00ADD8"></a>
+<a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
+<img alt="Standard library only" src="https://img.shields.io/badge/dependencies-standard%20library%20only-brightgreen">
+<a href="https://github.com/rodriveracom/dostoevsky/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/rodriveracom/dostoevsky?include_prereleases"></a>
+</p>
 
-## Install
+**Durable topics and stateful stream processing that you embed in a Go program: no broker, no dependencies, standard library only.**
+
+| | Dostoevsky | Embedded JetStream | Receipt |
+|---|---:|---:|---|
+| Throughput, 32 producers, median | **36,422 msg/s** (9x) | 4,020 msg/s | [publisher gate](docs/publisher-gate-results.txt) |
+| Peak memory, 32 producers, median | **11.1 MiB** (4x less) | 43.6 MiB | [publisher gate](docs/publisher-gate-results.txt) |
+| Runtime dependencies | **none** | NATS server and client | [go.mod](go.mod) |
+
+Synchronous, fsync-backed publishes of 512-byte records to one topic, five alternating trials per point, on shared Linux AMD64 with an overlay filesystem and `GOMAXPROCS=2`. Medians are in [the table](docs/publisher-gate.md); the chart shows every trial. JetStream reopens a store faster (see [reopen time](docs/img/reopen.svg)). Numbers on ARM64 and macOS hardware are being collected and will replace these when they land.
+
+<p align="center">
+<img src="docs/img/throughput.svg" alt="Median messages per second at 1, 8 and 32 producers: Dostoevsky 4,005, 13,252 and 36,422; embedded JetStream 3,185, 3,384 and 4,020.">
+</p>
+
+## Quickstart
 
 ```sh
 go get github.com/rodriveracom/dostoevsky@latest
 ```
+
+Publish an event and fold it into durable state. `dir` is any writable directory and `ctx` ends the fold, which otherwise waits for more events:
+
+<!-- quickstart:begin -->
+```go
+node, err := dostoevsky.Open(dir, dostoevsky.Config{Node: "app", Nodes: []string{"app"}, Topics: map[string]int{"orders": 1}})
+if err != nil {
+	panic(err)
+}
+defer node.Close()
+rec, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: "order-1", Value: []byte("paid")})
+if err != nil {
+	panic(err)
+}
+paid := 0
+// Fold commits its state and the input offset together, then waits for more events.
+_ = dostoevsky.Fold(ctx, node, rec.Partition, "paid", 0, func(_ context.Context, n int, _ dostoevsky.Record) (int, error) {
+	paid = n + 1
+	return paid, nil
+})
+fmt.Println("paid events:", paid)
+```
+<!-- quickstart:end -->
+
+The message ID makes a retried publish idempotent, and the fold's committed state and offset survive a restart. The test `Example_quickstart` compiles and runs exactly this code, and `TestQuickstartMatchesREADME` fails if the README copy drifts.
+
+<p align="center">
+<img src="docs/img/architecture.svg" alt="Producers feed a group commit queue, which writes checksummed frames to the journal with one fdatasync per group before acknowledging. Consumer groups commit state and offset together. A notifier wakes subscribers.">
+</p>
+
+## Install
 
 Requires Go 1.22 or later. Import it as `github.com/rodriveracom/dostoevsky`. The module has no dependencies outside the Go standard library.
 

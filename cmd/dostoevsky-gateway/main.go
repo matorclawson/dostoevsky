@@ -56,6 +56,31 @@ func checkListen(addr string, useTLS bool) error {
 	return nil
 }
 
+// listen binds addr and then checks the address the operating system actually bound,
+// not only the flag: without TLS it must be loopback, or the listener is closed.
+func listen(addr string, useTLS bool) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkBound(ln.Addr(), useTLS); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
+}
+
+func checkBound(a net.Addr, useTLS bool) error {
+	tcp, ok := a.(*net.TCPAddr)
+	if useTLS {
+		return nil
+	}
+	if !ok || !tcp.IP.IsLoopback() {
+		return fmt.Errorf("refusing to serve the whole-store token in plaintext: the listener is bound to %v, which is not loopback", a)
+	}
+	return nil
+}
+
 func run() error {
 	addr := flag.String("listen", "127.0.0.1:8787", "HTTP listen address; non-loopback requires -tls-cert and -tls-key")
 	dir := flag.String("data", ".dev/client-data", "journal directory")
@@ -92,7 +117,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", *addr)
+	ln, err := listen(*addr, useTLS)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"net"
 	"testing"
 )
 
@@ -36,5 +37,33 @@ func TestNewTokenIsLongRandomAndUnique(t *testing.T) {
 	}
 	if a == b {
 		t.Fatal("two tokens were identical")
+	}
+}
+
+func TestTheBoundAddressIsCheckedNotOnlyTheFlag(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:0", "localhost:0", "[::1]:0"} {
+		ln, err := listen(addr, false)
+		if err != nil {
+			t.Logf("%s: %v (IPv6 may be unavailable)", addr, err)
+			continue
+		}
+		if !ln.Addr().(*net.TCPAddr).IP.IsLoopback() {
+			t.Errorf("%s bound to %v", addr, ln.Addr())
+		}
+		ln.Close()
+	}
+	for _, a := range []net.Addr{
+		&net.TCPAddr{IP: net.IPv4zero, Port: 1}, &net.TCPAddr{IP: net.IPv6unspecified, Port: 1},
+		&net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 1}, &net.UnixAddr{Name: "x", Net: "unix"},
+	} {
+		if checkBound(a, false) == nil {
+			t.Errorf("%v accepted without TLS", a)
+		}
+		if checkBound(a, true) != nil {
+			t.Errorf("%v refused with TLS", a)
+		}
+	}
+	if err := checkBound(&net.TCPAddr{IP: net.ParseIP("127.9.9.9"), Port: 1}, false); err != nil {
+		t.Error(err)
 	}
 }

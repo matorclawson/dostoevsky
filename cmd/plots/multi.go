@@ -69,6 +69,11 @@ func renderMulti(c chart, data []series, footer []string) string {
 			}
 		}
 	}
+	for _, byWorkers := range failedTrials { // a count where every trial failed still has its place
+		for w := range byWorkers {
+			producers[w] = true
+		}
+	}
 	var ws []int
 	for w := range producers {
 		ws = append(ws, w)
@@ -93,8 +98,12 @@ func renderMulti(c chart, data []series, footer []string) string {
 	h := footerY + 15*len(footer) + 10
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
-	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(alt+" "+verdict), styleMulti)
-	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
+	title := c.title
+	if c.multiTitle != "" {
+		title = c.multiTitle
+	}
+	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(title), html.EscapeString(alt+" "+verdict), styleMulti)
+	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(title))
 	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", strings.TrimSpace(c.note + " " + verdict)}
 	if c.explain != "" && losing(data, c.lower) {
 		subtitle[1] += " " + c.explain
@@ -152,4 +161,53 @@ func renderMulti(c chart, data []series, footer []string) string {
 	}
 	b.WriteString("</svg>\n")
 	return withBackground(b.String())
+}
+
+// countFailedLines counts the receipt's FAILED trial lines, whatever their engine or
+// producer count: a failure outside the expected schedule is still a failure.
+func countFailedLines(trials []trial) int {
+	n := 0
+	for _, t := range trials {
+		if t["failed"] == "1" {
+			n++
+		}
+	}
+	return n
+}
+
+// requireComparisonMeta checks the labels a multi-engine chart must carry: a label and
+// an architecture for every engine, and the qualifiers that must never disappear from
+// a chart of those engines.
+func requireComparisonMeta(engines []string, meta map[string]string) error {
+	var missing []string
+	for _, e := range engines {
+		if strings.TrimSpace(meta["label."+e]) == "" {
+			missing = append(missing, "label."+e)
+		}
+		if strings.TrimSpace(meta["arch."+e]) == "" {
+			missing = append(missing, "arch."+e)
+		}
+	}
+	notes := ""
+	for i := 1; ; i++ {
+		l, ok := meta[fmt.Sprintf("note.%d", i)]
+		if !ok {
+			break
+		}
+		notes += l + "\n"
+	}
+	need := func(engine, what, text string) {
+		for _, e := range engines {
+			if e == engine && !strings.Contains(notes, text) {
+				missing = append(missing, fmt.Sprintf("a note.N containing %q (%s)", text, what))
+			}
+		}
+	}
+	need("rabbitmq", "RabbitMQ's durability qualifier", "durability per vendor default, not verified")
+	need("rabbitmq", "the Erlang provenance", "Erlang")
+	need("kafka", "Kafka's flush qualifier", "fsync per message inferred")
+	if len(missing) > 0 {
+		return fmt.Errorf("the meta file lacks what every multi-engine chart must carry: %s", strings.Join(missing, "; "))
+	}
+	return nil
 }

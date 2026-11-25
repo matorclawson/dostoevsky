@@ -13,6 +13,7 @@ var sevenEngines = []string{"dostoevsky", "jetstream", "sqlite", "redis", "valke
 const multiMeta = `footer.1=test host; Linux; Go 1.0; GOMAXPROCS=2
 footer.2=512-byte payloads; 16000 records per trial; synchronous acknowledgments
 note.1=RabbitMQ: durability per vendor default, not verified; Erlang from the Hex.pm prebuilt
+note.2=Kafka: fsync per message inferred from log.flush.interval.messages=1
 command=make x
 label.dostoevsky=Dostoevsky
 label.jetstream=Embedded JetStream
@@ -22,8 +23,12 @@ label.valkey=Valkey 9.2 (AOF always)
 label.kafka=Kafka 4.4 (acks=all)
 label.rabbitmq=RabbitMQ 4.4 (quorum queue)
 arch.dostoevsky=in process
+arch.jetstream=in process
+arch.sqlite=in process
 arch.redis=server, unix socket
+arch.valkey=server, unix socket
 arch.kafka=server, loopback
+arch.rabbitmq=server, loopback
 `
 
 // multiLog builds a receipt with every engine at 1, 8 and 32 producers. rps maps an
@@ -139,7 +144,7 @@ func TestFailedTrialsAreShownNeverDropped(t *testing.T) {
 
 	withEngines(t, sevenEngines, false)
 	err := run(r, "*", m, filepath.Join(dir, "none"), filepath.Join(dir, "refused"), 5)
-	if err == nil || !strings.Contains(err.Error(), "failed trials") {
+	if err == nil || !strings.Contains(err.Error(), "FAILED trial lines") {
 		t.Fatalf("a receipt with failures was accepted without allow-failures: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "refused", "throughput.svg")); statErr == nil {

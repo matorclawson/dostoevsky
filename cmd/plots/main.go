@@ -68,8 +68,10 @@ func parseTrials(path, section string) ([]trial, error) {
 		t := trial{}
 		for _, field := range strings.Fields(line) {
 			if field == "FAILED" {
-				t["failed"] = "1" // a failed trial: it counts, it has no metrics, it is never dropped
-				continue
+				// A failed trial counts and is never dropped, but nothing after the marker is
+				// read: the rest is a diagnostic, and may look like key=value pairs.
+				t["failed"] = "1"
+				break
 			}
 			if k, v, ok := strings.Cut(field, "="); ok {
 				t[k] = v
@@ -121,7 +123,7 @@ func collect(trials []trial, key string, scale float64) []series {
 	for _, t := range trials {
 		w, err := strconv.Atoi(t["workers"])
 		v, ok := t.numAny(key)
-		if t["engine"] == "" || err != nil || !ok {
+		if t["failed"] == "1" || t["engine"] == "" || err != nil || !ok {
 			continue
 		}
 		s := byEngine[t["engine"]]
@@ -174,6 +176,7 @@ var (
 
 type chart struct {
 	file, title, unit, alt, note, explain string
+	multiTitle                            string // title when more than two engines are charted
 	lower                                 bool
 	key                                   string
 	scale                                 float64
@@ -184,7 +187,7 @@ var gateCharts = []chart{
 	{file: "throughput.svg", title: "Synchronous publish throughput", unit: "messages per second", key: "records/s", scale: 1, decimals: 0,
 		alt:  "Grouped bars of median messages per second at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot.",
 		note: "Higher is better."},
-	{file: "memory.svg", title: "Peak process memory", unit: "MiB peak RSS", key: "total_rss_KiB|peakRSS_KiB", scale: 1.0 / 1024, decimals: 1, lower: true,
+	{file: "memory.svg", title: "Peak process memory", multiTitle: "Peak memory, client plus server processes", unit: "MiB peak RSS", key: "total_rss_KiB|peakRSS_KiB", scale: 1.0 / 1024, decimals: 1, lower: true,
 		alt:  "Grouped bars of median peak resident memory in MiB at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot.",
 		note: "Lower is better."},
 	{file: "p99-latency.svg", title: "p99 publish latency", unit: "milliseconds", key: "p99_us", scale: 1.0 / 1000, decimals: 2, lower: true,
@@ -252,6 +255,16 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 	}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
+	}
+	if !allowFailures {
+		if n := countFailedLines(trials); n > 0 {
+			return fmt.Errorf("%s has %d FAILED trial lines; every failure must be shown, so plot it with -allow-failures or fix the run", receipt, n)
+		}
+	}
+	if len(expectedEngines) > 2 {
+		if err := requireComparisonMeta(expectedEngines, meta); err != nil {
+			return fmt.Errorf("%s: %w", metaPath, err)
+		}
 	}
 	engineLabels, engineArch = map[string]string{}, map[string]string{}
 	for k, v := range meta {
@@ -419,6 +432,11 @@ func renderBars(c chart, data []series, footer []string) string {
 					maxV = v
 				}
 			}
+		}
+	}
+	for _, byWorkers := range failedTrials { // a count where every trial failed still has its place
+		for w := range byWorkers {
+			producers[w] = true
 		}
 	}
 	var ws []int

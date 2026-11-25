@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/servers/stubserver"
 )
@@ -25,8 +26,14 @@ func TestEachEngineStartsAnswersAsItselfAndStops(t *testing.T) {
 			if !strings.HasPrefix(s.Addr, "127.0.0.1:") || len(s.Token) != 64 {
 				t.Fatalf("addr %q token length %d", s.Addr, len(s.Token))
 			}
-			if _, err := s.Proc.PeakKiB(); err != nil {
-				t.Fatal(err)
+			var perr error
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+				if _, perr = s.Proc.PeakKiB(); perr == nil {
+					break // the first sample (a ps run on macOS) can take a moment
+				}
+			}
+			if perr != nil {
+				t.Fatal(perr)
 			}
 			if err := s.Stop(); err != nil {
 				t.Fatal(err)

@@ -25,15 +25,15 @@ type Proc struct {
 	exit    chan error
 
 	mu   sync.Mutex
-	peak map[int]uint64 // pid -> highest VmHWM seen, in KiB
+	peak map[int]uint64 // pid -> highest reading seen, in KiB (see Source for what a reading is)
 }
 
 // Start runs bin with args, in its own process group, with stdout and stderr
 // appended to logPath, and starts sampling its process tree every interval.
 func Start(bin string, args []string, env []string, logPath string, interval time.Duration) (*Proc, error) {
 	// Memory is part of every server receipt, so a host that cannot report it fails the trial.
-	if _, ok := vmHWM(os.Getpid()); !ok {
-		return nil, errors.New("procfs is unavailable: server memory cannot be measured")
+	if err := checkMeasurable(); err != nil {
+		return nil, err
 	}
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -224,16 +224,21 @@ func (p *Proc) sample(interval time.Duration) {
 }
 
 func (p *Proc) sampleOnce() {
-	for _, pid := range tree(p.cmd.Process.Pid) {
-		if kib, ok := vmHWM(pid); ok {
-			p.mu.Lock()
-			if kib > p.peak[pid] {
-				p.peak[pid] = kib
-			}
-			p.mu.Unlock()
+	readings, err := snapshotTree(p.rootPid, Source())
+	if err != nil {
+		return // a missed sample; PeakKiB fails if the server was never measured
+	}
+	p.mu.Lock()
+	for pid, kib := range readings {
+		if kib > p.peak[pid] {
+			p.peak[pid] = kib
 		}
 	}
+	p.mu.Unlock()
 }
+
+// Source names how this process's memory was measured: SourceVmHWM or SourcePSSampled.
+func (p *Proc) Source() string { return Source() }
 
 // tree returns root and all of its descendants, read from /proc.
 func tree(root int) []int {
@@ -299,15 +304,5 @@ func vmHWM(pid int) (uint64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if rest, ok := strings.CutPrefix(line, "VmHWM:"); ok {
-			f := strings.Fields(rest)
-			if len(f) >= 1 {
-				if kib, err := strconv.ParseUint(f[0], 10, 64); err == nil {
-					return kib, true
-				}
-			}
-		}
-	}
-	return 0, false
+	return parseVmHWM(string(b))
 }

@@ -8,10 +8,12 @@
 // Standard output carries two lines for the driver and nothing else:
 //
 //	READY addr=127.0.0.1:PORT pid=N token=SECRET
-//	STOPPED server_rss_KiB=N verdict=clean
+//	STOPPED server_rss_KiB=N rss_source=VmHWM|ps-sampled verdict=clean
 //
-// The token is private to this trial. Memory is the server tree's sampled VmHWM
-// (Linux; the same sampler as the Go comparison). On any failure serve prints
+// The token is private to this trial: a driver must never copy the READY line into a
+// receipt or a log. Memory is the server tree's peak resident size, and rss_source says how it
+// was measured: VmHWM (Linux, the kernel's peak, as in the Go comparison) or ps-sampled (macOS,
+// the largest `ps -o rss=` sample; never compare it with VmHWM). On any failure serve prints
 // "FAILED: ..." to standard error and exits non-zero.
 package main
 
@@ -76,6 +78,6 @@ func serve(engine, bin string, stdin io.Reader, out io.Writer) (err error) {
 	if merr != nil {
 		return fmt.Errorf("server memory: %w", merr)
 	}
-	fmt.Fprintf(out, "STOPPED server_rss_KiB=%d verdict=clean\n", kib)
+	fmt.Fprintf(out, "STOPPED server_rss_KiB=%d rss_source=%s verdict=clean\n", kib, s.Proc.Source())
 	return nil
 }

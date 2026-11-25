@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/serverproc"
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/servers/stubserver"
 )
 
@@ -47,7 +48,7 @@ func TestServeReadyThenStoppedWithMemory(t *testing.T) {
 				t.Fatalf("serve: %v", err)
 			}
 			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-			if len(lines) != 2 || !strings.HasPrefix(lines[1], "STOPPED server_rss_KiB=") || !strings.HasSuffix(lines[1], " verdict=clean") {
+			if len(lines) != 2 || !strings.HasPrefix(lines[1], "STOPPED server_rss_KiB=") || !strings.HasSuffix(lines[1], " verdict=clean") || !strings.Contains(lines[1], " rss_source="+serverproc.Source()+" ") {
 				t.Fatalf("stdout is not exactly READY then STOPPED: %q", out.String())
 			}
 		})

@@ -88,9 +88,10 @@ func serverConfig(dir string) (conf, sock string) {
 
 // clientOptions disables command retries. go-redis retries failed commands by
 // default; a retried XADD would append a second entry under a new ID, and the
-// harness only verifies the IDs it was told about.
+// harness only verifies the IDs it was told about. ContextTimeoutEnabled lets a
+// context deadline bound each command, so the readiness deadline reaches the socket.
 func clientOptions(sock string) *redis.Options {
-	return &redis.Options{Network: "unix", Addr: sock, PoolSize: 64, MaxRetries: -1}
+	return &redis.Options{Network: "unix", Addr: sock, PoolSize: 64, MaxRetries: -1, ContextTimeoutEnabled: true}
 }
 
 // loadingFlag reads loading from INFO persistence.
@@ -116,9 +117,15 @@ func isLoadingErr(err error) bool { return err != nil && strings.HasPrefix(err.E
 // LOADING error counts as not ready; any other error, the trial context ending or
 // the bound passing is a failure.
 func waitLoaded(ctx context.Context, info func(context.Context, string) (string, error), every, bound time.Duration) error {
+	// One deadline for the whole wait: each poll gets only the budget that is left,
+	// and a loading:0 that arrives after the deadline does not count as ready.
 	deadline := time.Now().Add(bound)
 	for {
-		c, cancel := context.WithTimeout(ctx, 5*time.Second)
+		left := time.Until(deadline)
+		if left <= 0 {
+			return fmt.Errorf("the dataset was still loading after %v", bound)
+		}
+		c, cancel := context.WithTimeout(ctx, min(5*time.Second, left))
 		text, err := info(c, "persistence")
 		cancel()
 		switch {
@@ -128,6 +135,9 @@ func waitLoaded(ctx context.Context, info func(context.Context, string) (string,
 				return perr
 			}
 			if !loading {
+				if time.Now().After(deadline) {
+					return fmt.Errorf("loading:0 arrived after the %v readiness deadline", bound)
+				}
 				return nil
 			}
 		case isLoadingErr(err):
@@ -135,13 +145,10 @@ func waitLoaded(ctx context.Context, info func(context.Context, string) (string,
 		default:
 			return fmt.Errorf("INFO persistence: %w", err)
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("the dataset was still loading after %v", bound)
-		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("readiness stopped: %w", ctx.Err())
-		case <-time.After(every):
+		case <-time.After(min(every, max(time.Until(deadline), 0))):
 		}
 	}
 }

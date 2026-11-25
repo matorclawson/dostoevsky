@@ -26,7 +26,7 @@ func TestConfigIsPrivateToTheTrial(t *testing.T) {
 // An ambiguous XADD must never be retried with a new generated ID.
 func TestClientDoesNotRetryCommands(t *testing.T) {
 	o := clientOptions("/x.sock")
-	if o.MaxRetries != -1 || o.Network != "unix" || o.Addr != "/x.sock" {
+	if o.MaxRetries != -1 || !o.ContextTimeoutEnabled || o.Network != "unix" || o.Addr != "/x.sock" {
 		t.Fatalf("options: retries %d, network %q, addr %q", o.MaxRetries, o.Network, o.Addr)
 	}
 }
@@ -108,5 +108,40 @@ func TestLoadingFlag(t *testing.T) {
 	}
 	if _, err := loadingFlag("loading:2"); err == nil {
 		t.Error("an unknown loading value was accepted")
+	}
+}
+
+// A loading:0 that arrives only after the readiness deadline is not ready: the
+// bound is for the whole wait, not for each poll.
+func TestLateLoadedReplyIsRejected(t *testing.T) {
+	late := func(context.Context, string) (string, error) {
+		time.Sleep(150 * time.Millisecond)
+		return "loading:0\r\n", nil
+	}
+	err := waitLoaded(context.Background(), late, time.Millisecond, 50*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "after the") {
+		t.Fatalf("a reply after the deadline was accepted: %v", err)
+	}
+}
+
+// Each poll gets only the budget that is left.
+func TestEachPollIsBoundedByTheRemainingBudget(t *testing.T) {
+	var budgets []time.Duration
+	info := func(c context.Context, _ string) (string, error) {
+		d, ok := c.Deadline()
+		if !ok {
+			t.Error("a poll had no deadline")
+		}
+		budgets = append(budgets, time.Until(d))
+		return "loading:1\r\n", nil
+	}
+	_ = waitLoaded(context.Background(), info, 10*time.Millisecond, 120*time.Millisecond)
+	if len(budgets) < 2 {
+		t.Fatalf("only %d polls", len(budgets))
+	}
+	for _, b := range budgets {
+		if b > 125*time.Millisecond {
+			t.Errorf("a poll was given %v although the whole wait is 120ms", b)
+		}
 	}
 }

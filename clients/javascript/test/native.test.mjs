@@ -198,6 +198,15 @@ test("a refused handshake is the server's code and carries no token", async (t) 
   await assert.rejects(NativeClient.connect(target, TOKEN), (e) => e.code === "unauthorized" && !String(e.stack).includes(TOKEN));
 });
 
+test("an unacceptable WELCOME ends the connection before any request", async (t) => {
+  for (const bad of [{ window: 0 }, { windowBytes: wire.MAX_BODY + wire.HEADER - 1 }]) {
+    let frames = 0;
+    const target = await fake(t, bad, () => frames++);
+    await assert.rejects(NativeClient.connect(target, TOKEN), (e) => e.code === "protocol");
+    assert.equal(frames, 0);
+  }
+});
+
 test("values the protocol forbids are refused before anything is sent", async (t) => {
   let frames = 0;
   const target = await fake(t, {}, () => frames++);

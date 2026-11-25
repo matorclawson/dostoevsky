@@ -17,7 +17,7 @@ export const REPLY = 0x80;
 export const CODES = {
   1: ["invalid", 400], 2: ["unauthorized", 401], 3: ["conflict", 409], 4: ["wrong_owner", 409], 5: ["expired", 410],
   6: ["limit", 413], 7: ["closed", 503], 8: ["timeout", 504], 9: ["canceled", 408], 10: ["storage_failure", 500],
-  11: ["protocol", 400], 12: ["unsupported_version", 400], 13: ["busy", 503],
+  11: ["protocol", 400], 12: ["unsupported_version", 400],
 };
 
 /** A value this client refuses to send; `reason` is "invalid" or "limit". */

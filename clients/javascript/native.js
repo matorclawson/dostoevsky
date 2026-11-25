@@ -27,8 +27,9 @@ const failure = (code) => {
 };
 const refused = (error) => (error instanceof wire.Refused ? new ClientError(error.reason === "limit" ? 413 : 400, error.reason) : error);
 
-function isLoopback(host) {
-  return host === "localhost" || host === "::1" || (net.isIPv4(host) && host.startsWith("127."));
+function isLoopbackAddress(address = "") {
+  const ip = address.startsWith("::ffff:") ? address.slice(7) : address;
+  return ip === "::1" || (net.isIPv4(ip) && ip.startsWith("127."));
 }
 
 // The bearer token grants the whole store: plaintext only to a unix socket or loopback.
@@ -39,7 +40,7 @@ function open(target, options) {
     const { ca, servername } = options.tls === true ? {} : options.tls;
     return tls.connect({ host, port, ca, servername: servername ?? (net.isIP(host) ? undefined : host), minVersion: "TLSv1.2", rejectUnauthorized: true });
   }
-  if (!isLoopback(host)) throw new Error("refusing to send the token without TLS to a non-loopback address; set the tls option");
+  if (host !== "localhost" && !isLoopbackAddress(host)) throw new Error("refusing to send the token without TLS to a non-loopback address; set the tls option");
   return net.connect({ host, port });
 }
 
@@ -83,11 +84,12 @@ export class NativeClient {
     let first;
     try { first = wire.hello(token); } catch (error) { throw refused(error); }
     const client = new NativeClient();
-    await client.#start(open(target, options), first);
+    const plaintextTcp = typeof target.path !== "string" && !options.tls;
+    await client.#start(open(target, options), first, plaintextTcp);
     return client;
   }
 
-  #start(socket, first) {
+  #start(socket, first, plaintextTcp) {
     this.#socket = socket;
     socket.setNoDelay?.(true);
     return new Promise((resolve, reject) => {
@@ -99,7 +101,12 @@ export class NativeClient {
       socket.on("data", (chunk) => this.#receive(chunk));
       socket.on("error", () => this.#fail()); // the error text is not passed on
       socket.on("close", () => this.#fail());
-      socket.once(socket instanceof tls.TLSSocket ? "secureConnect" : "connect", () => socket.write(first));
+      // With TLS the token waits for the verified handshake. Without, it is the address actually connected to that must
+      // be loopback, whatever the name resolved to.
+      socket.once(socket instanceof tls.TLSSocket ? "secureConnect" : "connect", () => {
+        if (plaintextTcp && !isLoopbackAddress(socket.remoteAddress)) return this.#fail();
+        socket.write(first);
+      });
     });
   }
 
@@ -111,8 +118,11 @@ export class NativeClient {
         if (this.#inbox.size < wire.WELCOME_BYTES) return;
         const w = wire.welcome(this.#inbox.take(wire.WELCOME_BYTES));
         if (w.status !== 0) return this.#fail(failure(w.status));
-        if (w.version !== 1 || w.window < 1) throw new wire.Malformed("unusable WELCOME");
-        this.#limits = { maxBody: Math.min(w.maxBody, wire.MAX_BODY), window: w.window, windowBytes: w.windowBytes };
+        // Nothing more is sent unless the whole WELCOME is acceptable: every legal frame must fit the byte window.
+        if (w.version !== 1 || w.maxBody !== wire.MAX_BODY || w.window < 1 || w.windowBytes < wire.MAX_BODY + wire.HEADER) {
+          throw new wire.Malformed("unusable WELCOME");
+        }
+        this.#limits = { window: w.window, windowBytes: w.windowBytes };
         this.#handshake.resolve();
       }
       while (!this.#dead && this.#inbox.size >= wire.HEADER) {
@@ -196,7 +206,6 @@ export class NativeClient {
     let frame;
     try { frame = build(); } catch (error) { throw refused(error); }
     if (this.#dead) throw new ConnectionLost(false);
-    if (frame.length - wire.HEADER > this.#limits.maxBody || frame.length > this.#limits.windowBytes) throw failure(6);
     return new Promise((resolve, reject) => {
       this.#queue.push({ type, frame, bytes: frame.length, deadline: 0, resolve, reject });
       this.#send();

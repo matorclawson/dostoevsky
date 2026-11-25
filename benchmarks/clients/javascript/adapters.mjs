@@ -37,7 +37,7 @@ export function ownClientName() {
 export function buildId(dir = OWN_CLIENT_DIR) {
   try {
     const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"] }).trim(); // git's own error text is discarded
-    return git("rev-parse", "--short=12", "HEAD") + (git("status", "--porcelain", "--", ".") ? "-dirty" : "");
+    return git("rev-parse", "--short=12", "HEAD") + (git("status", "--porcelain", "--untracked-files=no", "--", ".") ? "-dirty" : "");
   } catch { return "unknown"; }
 }
 
@@ -90,7 +90,9 @@ export async function kafka(addr, token) {
     },
     read: async (offset) => {
       if (consumer === null) {
-        consumer = k.consumer({ groupId: "verify", retry: { retries: 0 } });
+        // Read-back is not a publish: the no-retry rule is about acknowledged writes. A consumer group needs a coordinator,
+        // which a fresh broker creates on first use, so the consumer keeps kafkajs's default retries while it joins.
+        consumer = k.consumer({ groupId: "verify" });
         await consumer.connect();
         await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
         await consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } });

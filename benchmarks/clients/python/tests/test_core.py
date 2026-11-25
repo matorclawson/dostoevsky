@@ -359,6 +359,9 @@ class AdapterTest(unittest.TestCase):
             git("commit", "-q", "-m", "one")
             clean = adapters.build_id(os.path.join(pkg, "__init__.py"))
             self.assertRegex(clean, r"^[0-9a-f]{12}$")
+            with open(os.path.join(pkg, "build_output.pyc"), "w") as f:  # untracked build output must not count
+                f.write("junk\n")
+            self.assertEqual(adapters.build_id(os.path.join(pkg, "__init__.py")), clean)
             with open(os.path.join(pkg, "__init__.py"), "w") as f:
                 f.write("x = 2\n")
             self.assertEqual(adapters.build_id(os.path.join(pkg, "__init__.py")), clean + "-dirty")

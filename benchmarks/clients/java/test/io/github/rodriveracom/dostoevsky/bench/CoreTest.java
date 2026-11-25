@@ -237,6 +237,8 @@ public final class CoreTest {
         Path dir = repo.resolve("clients/java"); // a RELATIVE-looking subdirectory: the old code resolved its pathspec twice
         String clean = Build.id(dir);
         check(clean.matches("[0-9a-f]{12}"), "a clean tree reports a bare commit, not -dirty: " + clean);
+        Files.writeString(dir.resolve("UntrackedBuildOutput.class"), "junk\n"); // untracked build output must not count
+        check(Build.id(dir).equals(clean), "an untracked file does not make the tree dirty: " + Build.id(dir));
         Files.writeString(dir.resolve("Client.java"), "class Client { int x; }\n");
         check(Build.id(dir).equals(clean + "-dirty"), "a modified file is -dirty: " + Build.id(dir));
         git(repo, "commit", "-q", "-am", "two");

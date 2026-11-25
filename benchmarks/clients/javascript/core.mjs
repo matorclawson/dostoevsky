@@ -105,13 +105,15 @@ export async function runWorkload(adapter, workers, target, windowSeconds, clock
 }
 
 // Reads every acknowledged record back in offset order; returns "" or a plain-words failure.
-export async function verify(adapter, records) {
+// `onError(where, error)`, when given, receives the RAW error (for a person debugging by hand at a terminal, never a receipt).
+export async function verify(adapter, records, onError = () => {}) {
   const sorted = [...records].sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
   for (const [i, offset] of sorted) {
     let got;
     try {
       got = await adapter.read(offset);
     } catch (e) {
+      onError(`read record ${i} at ${offset}`, e);
       return `record ${i} at ${offset}: read ${reason(e)}`;
     }
     if (!Buffer.from(got).equals(payload(i))) return `record ${i} at ${offset}: the bytes read back differ from the bytes published`;

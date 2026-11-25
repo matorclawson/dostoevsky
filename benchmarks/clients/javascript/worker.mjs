@@ -17,7 +17,9 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
     args = parseArgs({ args: argv, options: {
       engine: { type: "string" }, addr: { type: "string" }, workers: { type: "string", default: "1" },
       target: { type: "string", default: "2000" }, window: { type: "string", default: "0" },
-      "require-known-build": { type: "boolean", default: false } } }).values;
+      "require-known-build": { type: "boolean", default: false },
+      // Prints the raw engine error to stderr for a person at a terminal. run.sh never passes it; the receipt never has it.
+      "debug-errors": { type: "boolean", default: false } } }).values;
   } catch (e) { console.error(e.message); return 2; }
   const workers = Number(args.workers), target = Number(args.target), windowS = Number(args.window);
   // Whole numbers a double holds exactly, and a finite window: "--workers 1e9999" or "--target 2.5" is a usage error.
@@ -38,7 +40,7 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
   try {
     res = await core.runWorkload(adapter, workers, target, windowS);
     if (res.stop !== core.STOP.failed || res.records.length > 0) { // also read back what a failed run acknowledged
-      const why = await core.verify(adapter, res.records);
+      const why = await core.verify(adapter, res.records, args["debug-errors"] ? (where, e) => console.error("debug:", where, e) : undefined);
       if (why) { res.stop = core.STOP.verify; res.detail = why; } else verified = res.acked;
     }
   } finally {

@@ -222,6 +222,16 @@ test("error text never reaches the receipt, only the class and a fixed word", as
   assert.equal(core.reason(Object.assign(new Error("x"), { code: "ECONNRESET" })), "Error:connection");
 });
 
+test("the debug callback sees the raw read error while the receipt text stays sanitized", async () => {
+  const m = memory();
+  const r = await core.runWorkload(m, 1, 3, 0);
+  m.read = async () => { throw new Error("coordinator is not available hunter2"); };
+  const seen = [];
+  const why = await core.verify(m, r.records, (where, e) => seen.push([where, e.message]));
+  assert.ok(!why.includes("hunter2") && !why.includes("coordinator"), why);
+  assert.deepEqual(seen, [["read record 0 at 0", "coordinator is not available hunter2"]]);
+});
+
 test("an ambiguous timeout is reported as such", async () => {
   const silent = memory();
   silent.publish = async () => { throw new core.AmbiguousOutcome("no answer"); };
@@ -281,6 +291,8 @@ test("a clean checkout's build id is a bare commit, a changed file adds -dirty, 
   const dir = path.join(repo, "clients/javascript");
   const clean = buildId(dir);
   assert.match(clean, /^[0-9a-f]{12}$/, clean);
+  writeFileSync(path.join(dir, "untracked_build_output.js"), "junk\n"); // untracked build output must not count
+  assert.equal(buildId(dir), clean);
   writeFileSync(path.join(dir, "index.js"), "export const x = 1;\n");
   assert.equal(buildId(dir), clean + "-dirty");
   assert.equal(buildId(mkdtempSync(path.join(tmpdir(), "notarepo-"))), "unknown");

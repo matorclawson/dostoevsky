@@ -39,7 +39,7 @@ worker_cmd() { # lang engine addr workers count window -> the command line (toke
   override=$(eval "echo \"\${WORKER_CMD_$l:-}\"")
   if [ -n "$override" ]; then echo "$override --engine $e --addr $a --workers $w --target $c --window $win"; return; fi
   case "$l" in
-    python) echo "${PYTHON_BIN:-.dev/bench-venv/bin/python} benchmarks/clients/python/worker.py --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
+    python) echo "env PYTHONPATH=clients/python ${PYTHON_BIN:-.dev/bench-venv/bin/python} benchmarks/clients/python/worker.py --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
     javascript) echo "node benchmarks/clients/javascript/worker.mjs --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
     java) echo "java -Xmx${JAVA_HEAP:-256m} -Dbench.deps=benchmarks/clients/java/deps.lock -Dbench.repo=. -cp '.dev/bench-java/classes:.dev/bench-java/lib/*' io.github.rodriveracom.dostoevsky.bench.Main --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
     rust) echo "env BENCH_REPO=. benchmarks/clients/rust/worker/target/release/worker --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
@@ -165,7 +165,8 @@ run_cell() {
     line=$(head -n 1 "$d/wout" 2>/dev/null)
     # The worker's first error line, read by the shell (never an argument of another program), masked, THEN cut to 120
     # characters and reduced to a safe alphabet; the token is only ever handled by shell builtins.
-    raw=$(head -n 1 "$d/werr" 2>/dev/null | head -c 4096)
+    # The LAST line, not the first: a Python traceback begins with "Traceback (most recent call last):" and ends with the error.
+    raw=$(tail -n 1 "$d/werr" 2>/dev/null | head -c 4096)
     raw=$(mask_token "$token" "$raw")
     diag=$(printf '%s' "$raw" | head -c 120 | sed 's/[^A-Za-z0-9_.:,()\/-]/_/g')
   fi
@@ -199,6 +200,12 @@ run_cell() {
   cleanup_trial
   return $rc
 }
+
+# RUN_SH_PRINT_COMMANDS=1: print the command each language's worker would run (no token), then exit. For the tests.
+if [ -n "${RUN_SH_PRINT_COMMANDS:-}" ]; then
+  for l in $langs; do echo "$l: $(worker_cmd "$l" kafka 127.0.0.1:1 8 10 0)"; done
+  exit 0
+fi
 
 cells=""
 for l in $langs; do for e in $engines; do cells="$cells $l:$e"; done; done

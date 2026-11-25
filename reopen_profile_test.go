@@ -53,6 +53,12 @@ func reopenConfig() Config {
 // buildReopenJournal writes the journal in groups of 64 frames per sync, so building
 // 16,000 records takes a moment rather than the gate's seconds.
 func buildReopenJournal(tb testing.TB, dir string, records int) {
+	buildReopenJournalBatched(tb, dir, records, 64)
+}
+
+// buildReopenJournalBatched syncs once per batch frames (the baseline builder uses 1,000
+// so a 10M-record journal builds in minutes; this is a builder, not a publish measurement).
+func buildReopenJournalBatched(tb testing.TB, dir string, records, batchFrames int) {
 	n, err := Open(dir, reopenConfig())
 	if err != nil {
 		tb.Fatal(err)
@@ -68,7 +74,7 @@ func buildReopenJournal(tb testing.TB, dir string, records int) {
 		if batch, ferr = appendEncodedFrame(batch, e, 1<<30); ferr != nil {
 			tb.Fatal(ferr)
 		}
-		if (i+1)%64 == 0 || i == records-1 {
+		if (i+1)%batchFrames == 0 || i == records-1 {
 			if err = n.j.writeFrames(batch); err != nil {
 				tb.Fatal(err)
 			}

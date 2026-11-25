@@ -2,7 +2,7 @@
 
 ## An HTTP service
 
-A handler can publish to an embedded node directly. The response means the event is durable, and an `Idempotency-Key` header becomes the message ID so a client retry cannot duplicate it (copied from [`getting_started_test.go`](../getting_started_test.go), which runs it):
+A handler can publish to an embedded node directly. The response means the event is durable, and a stable, non-empty `Idempotency-Key` header becomes the message ID so a client retry cannot duplicate it (without the header there is no ID and no deduplication) (copied from [`getting_started_test.go`](../getting_started_test.go), which runs it):
 
 <!-- snippet:http -->
 ```go
@@ -54,7 +54,7 @@ This table is a summary, not a benchmark. Check each system's documentation for 
 
 | | Dostoevsky | NATS JetStream | Apache Kafka | Redis Streams | SQLite as a queue |
 |---|---|---|---|---|---|
-| Runs as | Library in your Go process | Server (also embeddable in Go) | Broker cluster | Server | Library, one file |
+| Runs as | Library in your Go process | Server (also embeddable in Go) | Broker cluster | Server | Library (a database file, plus WAL files in WAL mode) |
 | Language clients | Go | Many | Many | Many | Many |
 | Replication and failover | No | Yes (Raft) | Yes in a cluster (a single broker also runs) | Primary and replicas, asynchronous by default | No |
 | Durability | Journal synced before acknowledgment | Configurable file sync | Replication and configurable flush | Optional append-only file (off in the default configuration) with a configurable sync policy | Write-ahead log: WAL mode with `synchronous=FULL` syncs every commit; other settings trade that away |

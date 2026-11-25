@@ -87,6 +87,7 @@ func Example_consumerGroups() {
 func Example_restartAndResume() {
 	dir, cfg, node, ctx, p, done := demo()
 	defer func() { node.Close(); done() }()
+	var err error // the guide's setup block declares it
 	// snippet:restart
 	for _, id := range []string{"a", "b"} {
 		if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: id, Value: []byte(id)}); err != nil {
@@ -100,7 +101,7 @@ func Example_restartAndResume() {
 		panic(err)
 	}
 	// Reopening the same directory recovers records, offsets and group state.
-	node, err := dostoevsky.Open(dir, cfg)
+	node, err = dostoevsky.Open(dir, cfg)
 	if err != nil {
 		panic(err)
 	}

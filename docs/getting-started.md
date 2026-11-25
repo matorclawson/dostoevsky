@@ -4,7 +4,10 @@ This guide takes you from an empty directory to a durable event log you can rest
 
 ## 1. Install
 
+In an empty directory:
+
 ```sh
+go mod init example.com/guide
 go get github.com/rodriveracom/dostoevsky@latest
 ```
 
@@ -12,18 +15,25 @@ Go 1.22 or later. The module has no dependencies outside the standard library.
 
 ## 2. Open a store
 
-A store is a directory. The configuration names this node, lists all nodes (one, here) and declares each topic with its partition count:
+A store is a directory. The configuration names this node, lists all nodes (one, here) and declares each topic with its partition count. Paste this once at the top of `func main()`; every step below is pasted after it, as its own block:
 
 ```go
+dir, err := os.MkdirTemp("", "dostoevsky-guide")
+if err != nil {
+	panic(err)
+}
 cfg := dostoevsky.Config{Node: "app", Nodes: []string{"app"}, Topics: map[string]int{"orders": 1}}
 node, err := dostoevsky.Open(dir, cfg)
 if err != nil {
 	panic(err)
 }
 defer node.Close()
+ctx := context.Background()
+p := dostoevsky.Partition{Topic: "orders", Number: 0}
+backupDir := dir + "-backup" // step 7's destination; it must not exist
 ```
 
-The steps below assume `cfg`, `dir`, `node`, a context `ctx`, and `p := dostoevsky.Partition{Topic: "orders", Number: 0}`. **Each step is self-contained**: it starts from an empty store (the test helper opens a fresh one for every step) and publishes whatever records it needs, so you can run any step on its own. They are not one continuous session, and offsets in one step do not carry into the next. Only one process can open a directory at a time. A second `Open` fails on the lock instead of corrupting the journal.
+**Each step is self-contained**: its block publishes whatever records it needs, so you can paste any step after the setup on its own. The steps are not one continuous session: pasted one after another against the same store, later steps would meet the records and cursors of earlier ones (for example, step 5 commits offset 0 of a group that step 4 already moved). The test `TestGuideCodeBlocksCompile` pastes every block in reading order, each step in its own braces, and compiles the result with `go vet`. Only one process can open a directory at a time. A second `Open` fails on the lock instead of corrupting the journal.
 
 ## 3. Publish and read
 
@@ -93,7 +103,7 @@ if err := node.Close(); err != nil {
 	panic(err)
 }
 // Reopening the same directory recovers records, offsets and group state.
-node, err := dostoevsky.Open(dir, cfg)
+node, err = dostoevsky.Open(dir, cfg)
 if err != nil {
 	panic(err)
 }

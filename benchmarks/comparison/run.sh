@@ -7,7 +7,8 @@
 #   KAFKA_HOME=/opt/bench/kafka_2.13-4.4.0 JAVA_HOME=/opt/bench/jdk-21 \
 #   RABBIT_HOME=/opt/bench/rabbitmq_server-4.4.1 \
 #   sh benchmarks/comparison/run.sh
-# Every trial prints one receipt line. A trial that fails is printed as a
+# A smoke pass (one 200-record trial per engine and producer count) runs first and stops
+# the run with exit 3 if anything fails. Every trial prints one receipt line. A trial that fails is printed as a
 # FAILED line and counted, never retried, and the script exits 1 at the end.
 set -u
 engines=${BENCH_ENGINES:?set BENCH_ENGINES to a space separated list}
@@ -31,6 +32,31 @@ run_engine() { # engine workers
   *) echo "unknown engine $1" >&2; return 2 ;;
  esac
 }
+
+# Smoke first: one 200-record trial per engine and producer count, before any timed
+# trial. A failed smoke stops the run (exit 3) with nothing on stdout, so a harness or
+# installation problem is found in minutes, not after a full run. Smoke lines go to
+# stderr and are not part of the receipt. BENCH_SKIP_SMOKE=1 skips it.
+if [ "${BENCH_SKIP_SMOKE:-0}" != 1 ]; then
+ saved_count=$count
+ count=${BENCH_SMOKE_COUNT:-200}
+ smoke_failed=0
+ for e in $engines; do
+  for w in 1 8 32; do
+   if line=$(run_engine "$e" "$w" 2>.dev/embedded/smoke-error.log); then
+    printf 'smoke %s\n' "$line" >&2
+   else
+    smoke_failed=$((smoke_failed + 1))
+    printf 'smoke FAILED engine=%s workers=%s %s\n' "$e" "$w" "$(tr '\n' ' ' < .dev/embedded/smoke-error.log | cut -c1-200)" >&2
+   fi
+  done
+ done
+ count=$saved_count
+ if [ "$smoke_failed" -ne 0 ]; then
+  echo "smoke failed ($smoke_failed trials): no timed trial was run" >&2
+  exit 3
+ fi
+fi
 
 rep=1
 while [ "$rep" -le "$rounds" ]; do

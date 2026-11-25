@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,5 +33,18 @@ func TestClientDoesNotRetryOrDeduplicate(t *testing.T) {
 	// franz-go's options are opaque; at least check we pass the set the ruling needs.
 	if n := len(clientOptions("127.0.0.1:1")); n != 4 {
 		t.Fatalf("%d client options, want seeds, acks=all, no idempotence, no retries (and no auto topic creation)", n)
+	}
+}
+
+func TestCleanShutdownNeedsKafkasOwnMarker(t *testing.T) {
+	dir := t.TempDir()
+	if err := cleanShutdown(dir); err == nil || !strings.Contains(err.Error(), ".kafka_cleanshutdown") {
+		t.Fatalf("a log directory without the marker was accepted: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".kafka_cleanshutdown"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanShutdown(dir); err != nil {
+		t.Fatal(err)
 	}
 }

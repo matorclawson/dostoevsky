@@ -155,3 +155,7 @@ dev-client-interop: ## All clients against one gateway across a restart, disposa
 	@mkdir -p .dev/bin
 	@CGO_ENABLED=0 "$(GO)" build -o .dev/bin/dostoevsky-gateway ./cmd/dostoevsky-gateway
 	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python python3 scripts/client_interop.py $(CLIENT_LANGUAGES)
+
+.PHONY: test-scripts
+test-scripts: ## Test the scripts' own plumbing (the interop startup deadline); stdlib Python only, no gateway needed
+	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python python3 scripts/test_client_interop.py

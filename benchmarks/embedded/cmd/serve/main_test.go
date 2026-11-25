@@ -157,3 +157,27 @@ func TestTheStubReallyWasRunningAndIsGoneAfterTheCancel(t *testing.T) {
 		t.Fatalf("pid %d was orphaned by a cancel during startup", pid)
 	}
 }
+
+// The order is decided by the command line the user types, flag default included: the earlier test
+// called serverBin directly and could not see a flag default that beat the engine's variable.
+func TestTheCommandLineResolvesTheBinaryInTheDocumentedOrder(t *testing.T) {
+	env := map[string]string{"BENCH_REDIS_SERVER": "/opt/redis-server", "BENCH_SERVER_BIN": "/generic"}
+	get := func(k string) string { return env[k] }
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-engine", "redis", "-bin", "/flag"}, "/flag"},
+		{[]string{"-engine", "redis"}, "/opt/redis-server"}, // the engine's variable beats the generic one
+		{[]string{"-engine", "nats"}, "/generic"},
+		{[]string{"-engine=gateway"}, "/generic"},
+	} {
+		_, got, err := parseArgs(tc.args, get)
+		if err != nil || got != tc.want {
+			t.Errorf("%v: %q, %v; want %q", tc.args, got, err, tc.want)
+		}
+	}
+	if _, _, err := parseArgs([]string{"-nope"}, get); err == nil {
+		t.Error("an unknown flag was accepted")
+	}
+}

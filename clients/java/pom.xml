@@ -1,8 +1,13 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>io.dostoevsky</groupId>
+  <groupId>io.github.rodriveracom</groupId>
   <artifactId>dostoevsky-client</artifactId>
   <version>0.1.0</version>
+  <name>dostoevsky-client</name>
+  <description>Dependency-free Java client for Dostoevsky durable streams (HTTP API)</description>
+  <url>https://github.com/rodriveracom/dostoevsky</url>
+  <licenses><license><name>MIT</name><url>https://opensource.org/license/mit</url></license></licenses>
+  <scm><url>https://github.com/rodriveracom/dostoevsky</url><connection>scm:git:https://github.com/rodriveracom/dostoevsky.git</connection></scm>
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

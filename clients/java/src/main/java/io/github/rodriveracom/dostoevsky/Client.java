@@ -1,4 +1,4 @@
-package io.dostoevsky;
+package io.github.rodriveracom.dostoevsky;
 
 import java.io.IOException;
 import java.net.URI;

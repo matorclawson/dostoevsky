@@ -1,4 +1,4 @@
-import io.dostoevsky.Client;
+import io.github.rodriveracom.dostoevsky.Client;
 import java.nio.charset.StandardCharsets;
 
 public class Worker {

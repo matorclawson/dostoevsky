@@ -1,0 +1,56 @@
+2026-11-24T21:38:00Z
+head=8b5953ac794889d1e151a6f85fdf30855f5d9224 tree=8bd75aee6e12fed4f89d76a6b685670c70785624
+Linux zeo-internal-production-03 7.0.0-34-generic #34-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:34:54 UTC 2026 aarch64 GNU/Linux
+Architecture:                            aarch64
+CPU op-mode(s):                          32-bit, 64-bit
+Byte Order:                              Little Endian
+CPU(s):                                  2
+On-line CPU(s) list:                     0,1
+Vendor ID:                               ARM
+Model name:                              Neoverse-N1
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      2
+Socket(s):                               1
+Stepping:                                r3p1
+BogoMIPS:                                50.00
+Flags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0,1
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; CSV2, BHB
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+Filesystem     Type  Size  Used Avail Use% Mounted on
+/dev/sda1      ext4   38G   16G   20G  45% /
+SOURCE    FSTYPE TARGET OPTIONS
+/dev/sda1 ext4   /      rw,relatime
+NAME     SIZE TYPE FSTYPE MODEL         MOUNTPOINTS
+sda     38.1G disk        QEMU HARDDISK 
+├─sda1  37.9G part ext4                 /
+├─sda14    1M part                      
+└─sda15  256M part vfat                 /boot/efi
+sr0     1024M rom         QEMU CD-ROM   
+TMPDIR=/srv/zeo-gates/home/.dostoevsky-publish-4596.u8rLKW9H/tmp
+go version go1.26.0 linux/arm64
+local
+https://proxy.golang.org,direct
+sum.golang.org
+linux
+arm64
+toolchain_archive_sha256=bd03b743eb6eb4193ea3c3fd3956546bf0e3ca5b7076c8226334afe6b75704cd

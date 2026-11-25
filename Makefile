@@ -114,6 +114,7 @@ dev-bench-publish-gate: ## Compare median throughput and peak RSS with JetStream
 .PHONY: plots
 plots: ## Regenerate docs/img/*.svg from the raw receipts (standard library only)
 	@"$(GO)" run ./cmd/plots
+	@"$(GO)" run ./cmd/plots -receipt docs/receipts/production-03/explicit-2.log -section '*' -meta docs/receipts/production-03/meta.txt -sketch /nonexistent -architecture=false -out docs/img/production-03
 
 .PHONY: sketch-report
 sketch-report: ## Measure sketch accuracy against exact values and write docs/sketch-accuracy-results.txt

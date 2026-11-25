@@ -75,7 +75,7 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 	var first map[string]string
 	for round := 0; round < 2; round++ {
 		out := filepath.Join(dir, "out")
-		if err := run(r, m, s, out, 0); err != nil {
+		if err := run(r, "gate", m, s, out, 0); err != nil {
 			t.Fatal(err)
 		}
 		got := map[string]string{}
@@ -130,7 +130,7 @@ func TestRunWithoutSketchReceiptSkipsThatChart(t *testing.T) {
 	r := write(t, dir, "r.txt", receipt)
 	m := write(t, dir, "m.txt", meta)
 	out := filepath.Join(dir, "out")
-	if err := run(r, m, filepath.Join(dir, "missing.txt"), out, 0); err != nil {
+	if err := run(r, "gate", m, filepath.Join(dir, "missing.txt"), out, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(out, "sketch-accuracy.svg")); err == nil {
@@ -142,7 +142,7 @@ func TestRunRejectsReceiptWithoutTrials(t *testing.T) {
 	dir := t.TempDir()
 	r := write(t, dir, "r.txt", "nothing here\n")
 	m := write(t, dir, "m.txt", meta)
-	if err := run(r, m, filepath.Join(dir, "none"), filepath.Join(dir, "out"), 0); err == nil {
+	if err := run(r, "gate", m, filepath.Join(dir, "none"), filepath.Join(dir, "out"), 0); err == nil {
 		t.Fatal("empty receipt accepted")
 	}
 }
@@ -163,7 +163,7 @@ func TestRunRequiresTheExpectedTrialCount(t *testing.T) {
 	dir := t.TempDir()
 	r := write(t, dir, "r.txt", receipt)
 	m := write(t, dir, "m.txt", meta)
-	if err := run(r, m, filepath.Join(dir, "none"), filepath.Join(dir, "out"), 5); err == nil || !strings.Contains(err.Error(), "trials") {
+	if err := run(r, "gate", m, filepath.Join(dir, "none"), filepath.Join(dir, "out"), 5); err == nil || !strings.Contains(err.Error(), "trials") {
 		t.Fatalf("receipt with 3 trials accepted for 5: %v", err)
 	}
 }
@@ -275,6 +275,40 @@ func TestWinnersAreDerivedFromTheData(t *testing.T) {
 	}
 }
 
+// zeo-rt's production-03 run (docs/receipts/production-03) must chart to the
+// medians in its own RESULT.md, and its raw log has no section headers.
+func TestProduction03MediansMatchResult(t *testing.T) {
+	trials, err := parseTrials("../../docs/receipts/production-03/explicit-2.log", "*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGroups(trials, 5); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[int]float64{
+		"dostoevsky": {1: 880, 8: 2947, 32: 7764},
+		"jetstream":  {1: 746, 8: 823, 32: 815},
+	}
+	for _, s := range collect(trials, "records/s", 1) {
+		for w, vs := range s.values {
+			if got := median(vs); got != want[s.engine][w] {
+				t.Errorf("%s at %d producers: median %v, RESULT.md says %v", s.engine, w, got, want[s.engine][w])
+			}
+		}
+	}
+	rss := map[string]map[int]float64{
+		"dostoevsky": {1: 9532, 8: 10152, 32: 10300},
+		"jetstream":  {1: 44216, 8: 44200, 32: 44664},
+	}
+	for _, s := range collect(trials, "peakRSS_KiB", 1) {
+		for w, vs := range s.values {
+			if got := median(vs); got != rss[s.engine][w] {
+				t.Errorf("%s at %d producers: median RSS %v KiB, RESULT.md says %v", s.engine, w, got, rss[s.engine][w])
+			}
+		}
+	}
+}
+
 // A chart metric missing from a group must stop the plotter, not leave a
 // single engine to "win" without an opponent.
 func TestMissingMetricStopsThePlotterAndNeverAwardsAWin(t *testing.T) {
@@ -295,7 +329,7 @@ func TestMissingMetricStopsThePlotterAndNeverAwardsAWin(t *testing.T) {
 	r := write(t, dir, "r.txt", b.String())
 	m := write(t, dir, "m.txt", meta)
 	out := filepath.Join(dir, "out")
-	err := run(r, m, filepath.Join(dir, "none"), out, 2)
+	err := run(r, "gate", m, filepath.Join(dir, "none"), out, 2)
 	if err == nil || !strings.Contains(err.Error(), "reopen_ms") {
 		t.Fatalf("missing reopen_ms accepted: %v", err)
 	}

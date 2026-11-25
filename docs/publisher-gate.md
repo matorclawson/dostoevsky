@@ -19,6 +19,25 @@ The measurements below come from shared Linux AMD64 with an overlay filesystem, 
 | 32 | dostoevsky | 36,422 | 3.229 | 11.11 |
 | 32 | jetstream | 4,020 | 17.423 | 43.57 |
 
+## production-03: ARM64 on a real, virtualized disk
+
+zeo-rt ran the same gate on production-03 (delivery 4596, commit `8b5953ac`, which is main after the group-commit integration): Linux 7.0.0-34 aarch64, two Neoverse-N1 vCPUs, ext4 on a QEMU virtual disk, Go 1.26.0, `CGO_ENABLED=0`, `GOMAXPROCS=2`, native processes, one fresh directory per trial, 16,000 records of 512 bytes per trial, five alternating trials per point, every record verified after reopen. Absolute numbers are lower than on the AMD64 host above because each sync is a real flush to a virtual disk. The pattern is the same, with a larger gap at 32 producers.
+
+| Producers | Engine | Median messages/s | Median trial p99 (ms) | Median peak RSS (MiB) | Median reopen (ms) |
+|---:|---|---:|---:|---:|---:|
+| 1 | dostoevsky | 880 | 3.19 | 9.31 | 199.86 |
+| 1 | jetstream | 746 | 4.27 | 43.18 | 16.85 |
+| 8 | dostoevsky | 2,947 | 6.99 | 9.91 | 202.85 |
+| 8 | jetstream | 823 | 22.67 | 43.16 | 14.52 |
+| 32 | dostoevsky | 7,764 | 9.69 | 10.06 | 203.78 |
+| 32 | jetstream | 815 | 75.87 | 43.62 | 15.16 |
+
+Dostoevsky is ahead on throughput, p99 and memory at every producer count. **JetStream reopens 12 to 14 times faster**: Dostoevsky replays its journal on open and the time does not depend on the number of producers. A second run with `GOMAXPROCS` unset (the wrapper then defaults to 2) gave 738 / 2,507 / 7,826 messages/s against 668 / 792 / 752 (`unset.log`).
+
+![Median messages per second on production-03.](img/production-03/throughput.svg)
+
+Receipts, host description and checksums: [explicit-2.log](receipts/production-03/explicit-2.log), [unset.log](receipts/production-03/unset.log), [HOST.log](receipts/production-03/HOST.log), [RESULT.md](receipts/production-03/RESULT.md), [SHA256SUMS](receipts/production-03/SHA256SUMS). The medians above are computed from `explicit-2.log`; `TestProduction03MediansMatchResult` checks the throughput and memory columns against the values recorded in `RESULT.md`. The other charts are in `docs/img/production-03/`.
+
 ## Single-producer history
 
 Five rotated trials per candidate, 10,000 records per trial, on the same volume. All three used the same synchronous harness.

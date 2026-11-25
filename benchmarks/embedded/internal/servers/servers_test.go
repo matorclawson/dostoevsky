@@ -16,7 +16,7 @@ func TestMain(m *testing.M) {
 
 func TestEachEngineStartsAnswersAsItselfAndStops(t *testing.T) {
 	exe, _ := os.Executable()
-	for _, engine := range Engines {
+	for _, engine := range []string{"gateway", "redis", "nats"} { // kafka has no stub: it needs a real broker
 		t.Run(engine, func(t *testing.T) {
 			t.Setenv("SERVERS_STUB", engine)
 			s, err := Start(engine, Options{Bin: exe, Dir: t.TempDir()})
@@ -111,5 +111,18 @@ func TestAServerThatStopsAtOnceStillHasAReading(t *testing.T) {
 		if err != nil || kib == 0 {
 			t.Fatalf("%s: no reading for a server that stopped at once: %d KiB, %v", engine, kib, err)
 		}
+	}
+}
+
+func TestKafkaNeedsItsHomesAndIsAnEngine(t *testing.T) {
+	found := false
+	for _, e := range Engines {
+		found = found || e == "kafka"
+	}
+	if !found {
+		t.Fatal("kafka is not listed as an engine")
+	}
+	if _, err := Start("kafka", Options{Dir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "BENCH_KAFKA_HOME") {
+		t.Fatalf("kafka started without its homes: %v", err)
 	}
 }

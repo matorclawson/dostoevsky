@@ -4,6 +4,7 @@
 // comparison runs (internal/servers).
 //
 //	serve -engine gateway|redis|nats -bin /path/to/server
+//	serve -engine kafka        (BENCH_KAFKA_HOME and BENCH_JAVA_HOME set)
 //
 // Standard output carries two lines for the driver and nothing else:
 //
@@ -29,9 +30,10 @@ import (
 )
 
 func main() {
-	engine := flag.String("engine", "", "gateway, redis or nats")
-	bin := flag.String("bin", os.Getenv("BENCH_SERVER_BIN"), "server executable (default $BENCH_SERVER_BIN)")
+	engine := flag.String("engine", "", "gateway, redis, nats or kafka")
+	bin := flag.String("bin", os.Getenv("BENCH_SERVER_BIN"), "server executable (default $BENCH_SERVER_BIN; not used by kafka)")
 	flag.Parse()
+	// kafka: the unpacked release and the JDK come from BENCH_KAFKA_HOME and BENCH_JAVA_HOME.
 	if err := serve(*engine, *bin, os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)
@@ -48,7 +50,7 @@ func serve(engine, bin string, stdin io.Reader, out io.Writer) (err error) {
 			err = rerr
 		}
 	}()
-	s, err := servers.Start(engine, servers.Options{Bin: bin, Dir: dir})
+	s, err := servers.Start(engine, servers.Options{Bin: bin, Home: os.Getenv("BENCH_KAFKA_HOME"), Java: os.Getenv("BENCH_JAVA_HOME"), Dir: dir})
 	if err != nil {
 		return err
 	}
@@ -58,7 +60,11 @@ func serve(engine, bin string, stdin io.Reader, out io.Writer) (err error) {
 			s.Stop()
 		}
 	}()
-	fmt.Fprintf(out, "READY addr=%s pid=%d token=%s\n", s.Addr, s.Proc.Pid(), s.Token)
+	token := s.Token
+	if token == "" {
+		token = "none" // kafka has no token
+	}
+	fmt.Fprintf(out, "READY addr=%s pid=%d token=%s\n", s.Addr, s.Proc.Pid(), token)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)

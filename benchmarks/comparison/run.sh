@@ -21,6 +21,15 @@ rounds=${BENCH_ROUNDS:-5}
 export GOMAXPROCS="${GOMAXPROCS:-2}"
 failed=0
 
+# Every invocation's stderr is appended, under its trial key, to stderr-all.log, and the
+# engines that write raw readbacks (redpanda) keep them under BENCH_EVIDENCE_DIR, keyed by
+# the same BENCH_TRIAL_KEY. Nothing is overwritten: these files are part of the receipt.
+mkdir -p .dev/embedded
+BENCH_EVIDENCE_DIR="${BENCH_EVIDENCE_DIR:-.dev/embedded/evidence}"; export BENCH_EVIDENCE_DIR
+mkdir -p "$BENCH_EVIDENCE_DIR"
+keep_stderr() { # key file
+ { printf '== %s\n' "$1"; cat "$2"; } >> .dev/embedded/stderr-all.log
+}
 run_engine() { # engine workers
  case "$1" in
   dostoevsky) .dev/embedded/dost -workers "$2" -count "$count" ;;
@@ -45,7 +54,10 @@ if [ "${BENCH_SKIP_SMOKE:-0}" != 1 ]; then
  smoke_failed=0
  for e in $engines; do
   for w in 1 8 32; do
-   if line=$(run_engine "$e" "$w" 2>.dev/embedded/smoke-error.log); then
+   BENCH_TRIAL_KEY="smoke-$e-w$w"; export BENCH_TRIAL_KEY
+   line=$(run_engine "$e" "$w" 2>.dev/embedded/smoke-error.log); rc=$?
+   keep_stderr "$BENCH_TRIAL_KEY" .dev/embedded/smoke-error.log
+   if [ "$rc" -eq 0 ]; then
     printf 'smoke %s\n' "$line" >&2
    else
     smoke_failed=$((smoke_failed + 1))
@@ -78,7 +90,10 @@ while [ "$rep" -le "$rounds" ]; do
  done
  for w in 1 8 32; do
   for e in $order; do
-   if line=$(run_engine "$e" "$w" 2>.dev/embedded/last-error.log); then
+   BENCH_TRIAL_KEY="trial$rep-$e-w$w"; export BENCH_TRIAL_KEY
+   line=$(run_engine "$e" "$w" 2>.dev/embedded/last-error.log); rc=$?
+   keep_stderr "$BENCH_TRIAL_KEY" .dev/embedded/last-error.log
+   if [ "$rc" -eq 0 ]; then
     printf 'trial=%s %s\n' "$rep" "$line"
    else
     failed=$((failed + 1))

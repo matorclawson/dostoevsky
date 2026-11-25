@@ -23,6 +23,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -112,10 +113,27 @@ func raiseNofile() error {
 	return nil
 }
 
-// checkNodeConfig requires the admin API's node configuration to show this trial's
-// data directory (so the process that answers is the one we launched) and developer
-// mode off. Anything missing is a failure: a value that cannot be read back is not
-// assumed.
+// dataDirectory reads the node configuration's data_directory, which the admin API may
+// give as a string or as an object holding the path.
+func dataDirectory(v any) (string, bool) {
+	switch d := v.(type) {
+	case string:
+		return d, true
+	case map[string]any:
+		for _, k := range []string{"path", "directory"} {
+			if p, ok := d[k].(string); ok {
+				return p, true
+			}
+		}
+	}
+	return "", false
+}
+
+// checkNodeConfig requires the admin API's node configuration to give exactly this
+// trial's data directory (so the process that answers is the one we launched) and
+// developer mode off. The field is parsed and compared in full: a missing field, a
+// directory that only shares a prefix, or the path appearing elsewhere in the document
+// all fail. A value that cannot be read back is not assumed.
 func checkNodeConfig(body []byte, dir string) error {
 	var cfg map[string]any
 	if err := json.Unmarshal(body, &cfg); err != nil {
@@ -128,8 +146,13 @@ func checkNodeConfig(body []byte, dir string) error {
 	if dev {
 		return fmt.Errorf("developer_mode is true: fsync would be bypassed")
 	}
-	if !strings.Contains(string(body), filepath.Join(dir, "data")) {
-		return fmt.Errorf("node_config does not show this trial's data directory %s", filepath.Join(dir, "data"))
+	want := filepath.Join(dir, "data")
+	got, ok := dataDirectory(cfg["data_directory"])
+	if !ok {
+		return fmt.Errorf("node_config has no readable data_directory")
+	}
+	if filepath.Clean(got) != want {
+		return fmt.Errorf("node_config data_directory is %q, not this trial's %q", got, want)
 	}
 	return nil
 }
@@ -148,6 +171,72 @@ func checkClusterConfig(body []byte) error {
 		return fmt.Errorf("write_caching_default is true: acknowledgments would not wait for the disk")
 	}
 	return nil
+}
+
+// checkTopicWriteCaching requires the benchmark topic's effective write.caching, as
+// the broker reports it for that exact topic, to be present and "false". A cluster
+// default of false does not prove it: a topic override supersedes the default.
+func checkTopicWriteCaching(resp *kmsg.DescribeConfigsResponse, name string) error {
+	for _, res := range resp.Resources {
+		if res.ResourceName != name {
+			continue
+		}
+		if res.ErrorCode != 0 {
+			return fmt.Errorf("describe configs for %s: error code %d", name, res.ErrorCode)
+		}
+		for _, c := range res.Configs {
+			if c.Name != "write.caching" {
+				continue
+			}
+			if c.Value == nil {
+				return fmt.Errorf("topic %s: write.caching has no value", name)
+			}
+			if *c.Value != "false" {
+				return fmt.Errorf("topic %s: effective write.caching is %q: acknowledgments would not wait for the disk", name, *c.Value)
+			}
+			return nil
+		}
+		return fmt.Errorf("topic %s: the broker did not report write.caching", name)
+	}
+	return fmt.Errorf("describe configs returned no resource for topic %s", name)
+}
+
+func readTopicWriteCaching(client *kgo.Client) (*kmsg.DescribeConfigsResponse, error) {
+	req := kmsg.NewPtrDescribeConfigsRequest()
+	res := kmsg.NewDescribeConfigsRequestResource()
+	res.ResourceType, res.ResourceName, res.ConfigNames = kmsg.ConfigResourceTypeTopic, topic, []string{"write.caching"}
+	req.Resources = append(req.Resources, res)
+	ctx, cancel := context.WithTimeout(run.Context(), 30*time.Second)
+	defer cancel()
+	resp, err := client.Request(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("describe configs: %w", err)
+	}
+	return resp.(*kmsg.DescribeConfigsResponse), nil
+}
+
+// saveEvidence keeps a raw readback under BENCH_EVIDENCE_DIR, keyed by the trial
+// (BENCH_TRIAL_KEY, set by run.sh) and by which open of the trial it was; without
+// BENCH_EVIDENCE_DIR nothing is written. The files are receipts: they are never
+// edited or overwritten, and a failure to write one fails the trial.
+func saveEvidence(open, name string, body []byte) error {
+	dir := os.Getenv("BENCH_EVIDENCE_DIR")
+	if dir == "" {
+		return nil
+	}
+	key := os.Getenv("BENCH_TRIAL_KEY")
+	if key == "" {
+		key = "manual-" + strconv.Itoa(os.Getpid())
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, key+"."+open+"."+name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(body)
+	return errors.Join(err, f.Close())
 }
 
 func checkReady(body []byte) (bool, error) {
@@ -398,8 +487,12 @@ func main() {
 		if err != nil {
 			return fail(err)
 		}
+		open := "open2-reopen"
 		if fresh {
-			fmt.Fprintf(os.Stderr, "redpanda readback: developer_mode=false write_caching_default=false data_directory=%s\n", filepath.Join(dir, "data"))
+			open = "open1-fresh"
+		}
+		if err = errors.Join(saveEvidence(open, "node_config.json", node), saveEvidence(open, "cluster_config.json", cluster)); err != nil {
+			return fail(err)
 		}
 		client, err := kgo.NewClient(clientOptions(kaddr)...)
 		if err != nil {
@@ -409,6 +502,20 @@ func main() {
 			closeClient(client)
 			return fail(err)
 		}
+		// The topic's own effective write.caching, on every open (fresh and reopen), before
+		// any timed work: a topic override would supersede the cluster default read above.
+		desc, err := readTopicWriteCaching(client)
+		if err == nil {
+			raw, _ := json.Marshal(desc)
+			if err = saveEvidence(open, "topic_describe_configs.json", raw); err == nil {
+				err = checkTopicWriteCaching(desc, topic)
+			}
+		}
+		if err != nil {
+			closeClient(client)
+			return fail(err)
+		}
+		fmt.Fprintf(os.Stderr, "redpanda readback (%s): developer_mode=false write_caching_default=false topic write.caching=false data_directory=%s\n", open, filepath.Join(dir, "data"))
 		return &store{client: client, proc: proc, addr: kaddr}, nil
 	})
 }

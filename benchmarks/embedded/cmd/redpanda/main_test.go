@@ -1,8 +1,12 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestBrokerConfigIsPrivateAndNotDeveloperMode(t *testing.T) {
@@ -59,23 +63,90 @@ func TestLaunchFlagsAndLoaders(t *testing.T) {
 }
 
 func TestNodeConfigReadbackIsStrict(t *testing.T) {
-	good := `{"developer_mode": false, "data_directory": {"path": "/data/trial-1/data"}}`
-	if err := checkNodeConfig([]byte(good), "/data/trial-1"); err != nil {
-		t.Fatal(err)
+	for name, good := range map[string]string{
+		"object": `{"developer_mode": false, "data_directory": {"path": "/data/trial-1/data"}}`,
+		"string": `{"developer_mode": false, "data_directory": "/data/trial-1/data"}`,
+		"clean":  `{"developer_mode": false, "data_directory": "/data/trial-1/data/"}`,
+	} {
+		if err := checkNodeConfig([]byte(good), "/data/trial-1"); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 	for name, body := range map[string]string{
-		"developer":   `{"developer_mode": true, "data_directory": "/data/trial-1/data"}`,
-		"absent":      `{"data_directory": "/data/trial-1/data"}`,
-		"string":      `{"developer_mode": "false", "data_directory": "/data/trial-1/data"}`,
-		"other dir":   `{"developer_mode": false, "data_directory": "/data/trial-2/data"}`,
-		"not json":    `nope`,
-		"empty":       `{}`,
-		"null":        `null`,
-		"wrong shape": `[1]`,
+		"developer":            `{"developer_mode": true, "data_directory": "/data/trial-1/data"}`,
+		"absent developer":     `{"data_directory": "/data/trial-1/data"}`,
+		"string developer":     `{"developer_mode": "false", "data_directory": "/data/trial-1/data"}`,
+		"other trial":          `{"developer_mode": false, "data_directory": "/data/trial-2/data"}`,
+		"shared prefix":        `{"developer_mode": false, "data_directory": "/data/trial-1/data2"}`,
+		"shared prefix longer": `{"developer_mode": false, "data_directory": "/data/trial-1/data-old"}`,
+		"parent only":          `{"developer_mode": false, "data_directory": "/data/trial-1"}`,
+		"path elsewhere":       `{"developer_mode": false, "wal_directory": "/data/trial-1/data"}`,
+		"path in another key":  `{"developer_mode": false, "data_directory": "", "x": "/data/trial-1/data"}`,
+		"object without path":  `{"developer_mode": false, "data_directory": {"other": "/data/trial-1/data"}}`,
+		"wrong type":           `{"developer_mode": false, "data_directory": 7}`,
+		"not json":             `nope`,
+		"empty":                `{}`,
+		"null":                 `null`,
+		"wrong shape":          `[1]`,
 	} {
 		if err := checkNodeConfig([]byte(body), "/data/trial-1"); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+}
+
+func topicConfigs(name, cfg string, value *string, code int16) *kmsg.DescribeConfigsResponse {
+	r := kmsg.NewPtrDescribeConfigsResponse()
+	res := kmsg.NewDescribeConfigsResponseResource()
+	res.ResourceName, res.ErrorCode = name, code
+	if cfg != "" {
+		c := kmsg.NewDescribeConfigsResponseResourceConfig()
+		c.Name, c.Value = cfg, value
+		res.Configs = append(res.Configs, c)
+	}
+	r.Resources = append(r.Resources, res)
+	return r
+}
+
+func TestTopicWriteCachingReadbackIsStrict(t *testing.T) {
+	f, tr := "false", "true"
+	if err := checkTopicWriteCaching(topicConfigs("events", "write.caching", &f, 0), "events"); err != nil {
+		t.Fatal(err)
+	}
+	for name, resp := range map[string]*kmsg.DescribeConfigsResponse{
+		"topic override on":  topicConfigs("events", "write.caching", &tr, 0),
+		"no value":           topicConfigs("events", "write.caching", nil, 0),
+		"not reported":       topicConfigs("events", "flush.ms", &f, 0),
+		"no configs":         topicConfigs("events", "", nil, 0),
+		"broker error":       topicConfigs("events", "write.caching", &f, 3),
+		"another topic only": topicConfigs("other", "write.caching", &f, 0),
+		"no resources":       kmsg.NewPtrDescribeConfigsResponse(),
+	} {
+		if err := checkTopicWriteCaching(resp, "events"); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+func TestEvidenceIsKeptPerTrialAndNeverOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BENCH_EVIDENCE_DIR", dir)
+	t.Setenv("BENCH_TRIAL_KEY", "trial1-redpanda-w8")
+	if err := saveEvidence("open1-fresh", "node_config.json", []byte(`{"a":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveEvidence("open2-reopen", "node_config.json", []byte(`{"a":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	for open, want := range map[string]string{"open1-fresh": `{"a":1}`, "open2-reopen": `{"a":2}`} {
+		got, err := os.ReadFile(filepath.Join(dir, "trial1-redpanda-w8."+open+".node_config.json"))
+		if err != nil || string(got) != want {
+			t.Fatalf("%s: %q %v", open, got, err)
+		}
+	}
+	t.Setenv("BENCH_EVIDENCE_DIR", "")
+	if err := saveEvidence("x", "y", nil); err != nil {
+		t.Fatal(err)
 	}
 }
 

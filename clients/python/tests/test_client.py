@@ -1,5 +1,5 @@
-import os, sys, threading, unittest
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import os, sys, threading, time, unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -7,9 +7,17 @@ from dostoevsky import Client, ClientError  # noqa: E402
 
 TOKEN = "a-test-token-with-entropy"
 LOG = []  # (path, query, body) of every request the stub saw
+CONNECTIONS = []  # one entry per accepted connection
+DROP_NEXT = []  # when non-empty, the next request is read and then the connection is closed unanswered
 
 
 class Stub(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"  # keep-alive
+
+    def setup(self):
+        super().setup()
+        CONNECTIONS.append(self.client_address)
+
     def log_message(self, *a):
         pass
 
@@ -19,6 +27,12 @@ class Stub(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
         LOG.append((u.path, q, body, self.headers.get("Authorization")))
+        if DROP_NEXT:
+            DROP_NEXT.pop()
+            self.close_connection = True
+            return
+        if q.get("topic") == "closing":
+            self.close_connection = True
         op = u.path.rsplit("/", 1)[1]
         if self.headers.get("Authorization") != "Bearer " + TOKEN:
             return self._send(401, b"unauthorized\n")
@@ -48,6 +62,8 @@ class Stub(BaseHTTPRequestHandler):
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.send_header("Content-Length", str(len(body)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
@@ -57,7 +73,9 @@ class Stub(BaseHTTPRequestHandler):
 class ClientTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.srv = HTTPServer(("127.0.0.1", 0), Stub)
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Stub)  # keep-alive needs a thread per connection
+        cls.srv.daemon_threads = True
+        cls.srv.block_on_close = False
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.url = "http://127.0.0.1:%d/" % cls.srv.server_port
 
@@ -68,7 +86,10 @@ class ClientTest(unittest.TestCase):
 
     def setUp(self):
         LOG.clear()
+        CONNECTIONS.clear()
+        DROP_NEXT.clear()
         self.c = Client(self.url, TOKEN)
+        self.addCleanup(self.c.close)
 
     def test_publish_sends_binary_body_token_and_escaped_params(self):
         ack = self.c.publish("jobs", b"\x00\xff", key="+/λ", id="once")
@@ -105,6 +126,53 @@ class ClientTest(unittest.TestCase):
         with self.assertRaises(ClientError) as e:
             self.c.read("jobs", 0, 77)
         self.assertEqual(e.exception.code, "oversized_response")
+
+    def test_one_connection_serves_many_calls(self):
+        for i in range(20):
+            self.c.publish("jobs", b"x", id="i%d" % i)
+            self.c.read("jobs", 0, 5)
+        self.assertEqual(len(CONNECTIONS), 1)
+
+    def test_threads_share_a_small_pool(self):
+        def work():
+            for _ in range(20):
+                self.c.read("jobs", 0, 5)
+        threads = [threading.Thread(target=work) for _ in range(8)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        self.assertLessEqual(len(CONNECTIONS), 8)
+        self.assertLessEqual(len(self.c._idle), 16)
+
+    def test_a_server_that_closes_the_connection_is_followed_by_a_new_one(self):
+        self.c.publish("closing", b"x", id="a")
+        self.c.publish("closing", b"x", id="b")
+        self.assertEqual(len(CONNECTIONS), 2)
+
+    def test_an_idle_connection_past_the_limit_is_replaced(self):
+        self.c._idle_limit = 0.0
+        self.c.read("jobs", 0, 5)
+        time.sleep(0.01)
+        self.c.read("jobs", 0, 5)
+        self.assertEqual(len(CONNECTIONS), 2)
+
+    def test_a_stale_reused_connection_is_retried_for_safe_calls_only(self):
+        self.c.read("jobs", 0, 5)            # the connection is now pooled
+        DROP_NEXT.append(1)
+        self.assertEqual(self.c.read("jobs", 0, 5).offset, 5)   # retried on a fresh connection
+        self.assertEqual(len(CONNECTIONS), 2)
+        self.c.publish("jobs", b"x", id="safe")
+        DROP_NEXT.append(1)
+        self.assertEqual(self.c.publish("jobs", b"x", id="safe").offset, 7)  # carries an id: retried
+        before = len([1 for entry in LOG if entry[0].endswith("publish")])
+        DROP_NEXT.append(1)
+        with self.assertRaises(ConnectionError):                 # no id: never repeated automatically
+            self.c.publish("jobs", b"x")
+        after = len([1 for entry in LOG if entry[0].endswith("publish")])
+        self.assertEqual(after - before, 1)
+        self.c.read("jobs", 0, 5)
+        DROP_NEXT.append(1)
+        with self.assertRaises(ConnectionError):                 # commit is never repeated
+            self.c.commit("jobs", 0, "g", 3)
 
     def test_errors_carry_status_and_word(self):
         with self.assertRaises(ClientError) as e:

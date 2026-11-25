@@ -5,10 +5,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AmbiguousOutcome } from "./core.mjs";
+import { AmbiguousOutcome, LABEL, protocolLabel, takeWhenItArrives } from "./core.mjs";
 
 const TOPIC = "events";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Terminal-only diagnostics, switched on by the worker's --debug-errors: raw engine detail on stderr, never in a receipt.
+export const debug = { on: false, log: (...a) => { if (debug.on) console.error("debug:", ...a); } };
 
 // '<package>-<version>' of an INSTALLED package, read from its own package.json. A package's
 // "exports" map may hide ./package.json (@nats-io/jetstream does), so the package is resolved by its
@@ -37,7 +40,7 @@ export function ownClientName() {
 export function buildId(dir = OWN_CLIENT_DIR) {
   try {
     const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"] }).trim(); // git's own error text is discarded
-    return git("rev-parse", "--short=12", "HEAD") + (git("status", "--porcelain", "--", ".") ? "-dirty" : "");
+    return git("rev-parse", "--short=12", "HEAD") + (git("status", "--porcelain", "--untracked-files=no", "--", ".") ? "-dirty" : "");
   } catch { return "unknown"; }
 }
 
@@ -72,10 +75,23 @@ export async function dostoevsky(addr, token) {
   };
 }
 
+// The two kafkajs clients. A consumer INHERITS the retry settings of the client it is created from, so the read-back
+// consumer must come from a client of its own: the producer's client has retries 0 (a publish is never retried), and a
+// consumer group on a fresh broker needs retries, because the group coordinator (the __consumer_offsets topic) is
+// created lazily and the first FindCoordinator is answered "not available". The second rehearsal failed exactly there.
+export function kafkaClientConfigs(addr, logLevel) {
+  return {
+    writer: { brokers: [addr], clientId: "bench", logLevel, retry: { retries: 0 } },
+    reader: { brokers: [addr], clientId: "bench-verify", logLevel }, // kafkajs's default retries
+  };
+}
+
 // kafkajs: acks=all (-1), no idempotence, no retries, one message per send.
 export async function kafka(addr, token) {
   const { Kafka, logLevel } = await import("kafkajs");
-  const k = new Kafka({ brokers: [addr], clientId: "bench", logLevel: logLevel.NOTHING, retry: { retries: 0 } });
+  const cfg = kafkaClientConfigs(addr, logLevel.NOTHING);
+  const k = new Kafka(cfg.writer);
+  const readerClient = new Kafka(cfg.reader);
   const producer = k.producer({ allowAutoTopicCreation: false, idempotent: false, retry: { retries: 0 } });
   await producer.connect();
   let consumer = null;
@@ -90,18 +106,70 @@ export async function kafka(addr, token) {
     },
     read: async (offset) => {
       if (consumer === null) {
-        consumer = k.consumer({ groupId: "verify", retry: { retries: 0 } });
-        await consumer.connect();
-        await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
-        await consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } });
+        // Read-back is not a publish: the no-retry rule is about acknowledged writes. This consumer belongs to the reader
+        // client (default retries), not the producer's client (retries 0), which it would otherwise inherit.
+        consumer = readerClient.consumer({ groupId: "verify" });
+        // Do not read until the group has actually been joined and a partition assigned; a crash is an error with its
+        // cause, not a silent wait. (A "negative timeout" warning from kafkajs's own heartbeat timer is harmless noise.)
+        const watch = joinWatcher(consumer, 60000);
+        await startAndJoin(async () => { // every step is fenced by the one deadline
+          await watch.step(() => consumer.connect());
+          await watch.step(() => consumer.subscribe({ topic: TOPIC, fromBeginning: true }));
+          await watch.step(() => consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } }));
+        }, watch);
+        consumer.seek({ topic: TOPIC, partition: 0, offset: "0" }); // from the beginning, whatever the group's own position
       }
-      for (const deadline = Date.now() + 60000; Date.now() < deadline; await sleep(20)) {
-        if (loaded.has(offset)) { const v = loaded.get(offset); loaded.delete(offset); return v; }
+      try {
+        return await takeWhenItArrives(loaded, offset, 60000);
+      } catch (e) {
+        debug.log(`read of offset ${offset} failed: ${e.message}; ${loaded.size} messages are waiting in memory`);
+        throw new Error(`offset ${offset} not found within the verification deadline`);
       }
-      throw new Error(`offset ${offset} not found within the verification deadline`);
     },
     close: async () => { if (consumer) await consumer.disconnect(); await producer.disconnect(); },
   };
+}
+
+// Resolves when the consumer has joined its group and been assigned a partition. kafkajs reports a failure as CRASH with
+// `restart`: true when it will start the consumer again itself (a coordinator not yet elected on a fresh broker is
+// the usual cause), so that crash only waits, within the budget, for the next join; a crash with restart false is
+// terminal and rejects at once. On a timeout the error carries the last crash's type, so a receipt can tell
+// "no coordinator yet" from "topic not found". Call it BEFORE consumer.connect(): the listeners must exist first.
+export function joinWatcher(consumer, budgetMs, now = () => performance.now()) {
+  const { GROUP_JOIN, CRASH, REBALANCING, FETCH_START } = consumer.events;
+  const deadline = now() + budgetMs; // ONE monotonic deadline, taken at the start
+  let timer, last = null, fired = false;
+  const expired = () => fired || now() >= deadline;
+  const lateError = () => {
+    const err = new Error("consumer group not joined within the budget");
+    if (last) err[LABEL] = protocolLabel(last);
+    return err;
+  };
+  const joined = new Promise((resolve, reject) => {
+    // A join that arrives after the deadline (before the overdue timer ran) is a failure, never result=ok past the budget.
+    consumer.on(GROUP_JOIN, (e) => { debug.log("group join", JSON.stringify(e.payload.memberAssignment)); if (expired()) reject(lateError()); else resolve(); });
+    consumer.on(CRASH, (e) => {
+      debug.log("consumer crash", e.payload.restart ? "(restart scheduled)" : "(terminal)", e.payload.error);
+      if (e.payload.restart === false) reject(e.payload.error); else last = e.payload.error;
+    });
+    consumer.on(REBALANCING, (e) => debug.log("rebalancing", e.payload.groupId));
+    consumer.on(FETCH_START, () => debug.log("fetch start"));
+    timer = setTimeout(() => { fired = true; reject(lateError()); }, budgetMs);
+  }).finally(() => clearTimeout(timer));
+  // The fence: once the deadline has passed (or the watcher has failed), a startup step that completes late must do nothing more.
+  joined.step = async (fn) => {
+    if (expired()) throw lateError();
+    const r = await fn();
+    if (expired()) throw lateError();
+    return r;
+  };
+  return joined;
+}
+
+// Runs the startup steps and waits for the join together, so a join failure (a terminal crash or the budget) is handled
+// at once, even while connect/subscribe/run is still pending, and is never an unhandled rejection.
+export function startAndJoin(startup, joined) {
+  return Promise.all([startup(), joined]).then(() => undefined);
 }
 
 // @nats-io/transport-node + @nats-io/jetstream (the v3 client).

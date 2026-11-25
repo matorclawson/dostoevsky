@@ -6,7 +6,15 @@ import java.util.Map;
 public final class Main {
     private Main() {}
 
-    public static void main(String[] args) throws Exception {
-        System.exit(Worker.run(args, System.getenv(), System.out, System.err, Adapters.ENGINES));
+    public static void main(String[] args) {
+        int code;
+        try {
+            code = Worker.run(args, System.getenv(), System.out, System.err, Adapters.ENGINES);
+        } catch (Throwable t) {
+            // One deliberate final line (class only: a message can carry anything), not a stack trace the driver would cut.
+            System.err.println("worker error: " + Core.reason(t));
+            code = 1;
+        }
+        System.exit(code);
     }
 }

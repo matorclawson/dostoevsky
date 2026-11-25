@@ -25,7 +25,20 @@ export function reason(e) {
   else if (/timeout/i.test(name) || code === "ETIMEDOUT" || code === "ABORT_ERR") word = "timeout";
   else if (/^(ECONN|EPIPE|ENOTFOUND|EAI_)/.test(code) || /connection/i.test(name)) word = "connection";
   else if (e instanceof TypeError || e instanceof RangeError || e instanceof SyntaxError) word = "protocol";
-  return `${name}:${word}`;
+  const label = e?.[LABEL] ?? protocolLabel(e);
+  return `${name}:${word}${label ? ":" + label : ""}`;
+}
+
+// A kafkajs protocol error's numeric code, looked up in a FIXED list here: only these labels can ever be printed, anything
+// else is UNKNOWN (an error's own `type` text is never trusted). Tells a missing topic from a leader election.
+const PROTOCOL_LABELS = { 1: "OFFSET_OUT_OF_RANGE", 3: "UNKNOWN_TOPIC_OR_PARTITION", 5: "LEADER_NOT_AVAILABLE", 6: "NOT_LEADER_FOR_PARTITION",
+  7: "REQUEST_TIMED_OUT", 15: "COORDINATOR_NOT_AVAILABLE", 16: "NOT_COORDINATOR", 25: "UNKNOWN_MEMBER_ID", 27: "REBALANCE_IN_PROGRESS",
+  35: "UNSUPPORTED_VERSION", 36: "TOPIC_ALREADY_EXISTS", 79: "MEMBER_ID_REQUIRED" };
+export const LABEL = Symbol("protocolLabel"); // set only by our own code, so no engine error can spoof it
+export function protocolLabel(e) {
+  if (e?.name !== "KafkaJSProtocolError") return "";
+  const code = Number.isSafeInteger(e.code) ? e.code : -1;
+  return `${PROTOCOL_LABELS[code] ?? "UNKNOWN"},${code}`;
 }
 
 export class Hist {
@@ -105,18 +118,34 @@ export async function runWorkload(adapter, workers, target, windowSeconds, clock
 }
 
 // Reads every acknowledged record back in offset order; returns "" or a plain-words failure.
-export async function verify(adapter, records) {
+// `onError(where, error)`, when given, receives the RAW error (for a person debugging by hand at a terminal, never a receipt).
+export async function verify(adapter, records, onError = () => {}) {
   const sorted = [...records].sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
   for (const [i, offset] of sorted) {
     let got;
     try {
       got = await adapter.read(offset);
     } catch (e) {
+      onError(`read record ${i} at ${offset}`, e);
       return `record ${i} at ${offset}: read ${reason(e)}`;
     }
     if (!Buffer.from(got).equals(payload(i))) return `record ${i} at ${offset}: the bytes read back differ from the bytes published`;
   }
   return "";
+}
+
+// Waits up to `budgetMs` for `key` to appear in `map` (filled by a consumer callback) and takes it out. The deadline is
+// ABSOLUTE and fixed before the first look (now + budget); a budget that is not a positive finite number is refused
+// loudly, so a deadline can never silently be "already past". Returns the value, or throws with how long it waited.
+export async function takeWhenItArrives(map, key, budgetMs, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
+  if (!Number.isFinite(budgetMs) || budgetMs <= 0) throw new RangeError(`the wait budget must be a positive number of milliseconds, not ${budgetMs}`);
+  const started = now();
+  const limit = started + budgetMs;
+  while (now() < limit) {
+    if (map.has(key)) { const v = map.get(key); map.delete(key); return v; }
+    await sleep(Math.min(20, Math.max(1, limit - now())));
+  }
+  throw new Error(`${String(key)} did not arrive within ${now() - started} ms`);
 }
 
 export function peakRssKiB() { return process.resourceUsage().maxRSS; } // KiB on every platform libuv supports

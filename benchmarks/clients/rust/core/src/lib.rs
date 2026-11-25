@@ -352,6 +352,19 @@ impl Rss {
     }
 }
 
+// ---- panics ----
+
+/// The sentence a panic prints, in place of the default hook's message and payload: a panic raised by an adapter or by a
+/// client library can carry anything (an address, a credential), and the default hook would print it to stderr.
+pub const PANIC_SENTENCE: &str = "worker: an internal error stopped the run (details are withheld)";
+
+/// Replaces the panic hook with one that prints only `PANIC_SENTENCE`. Call it first thing in `main`.
+pub fn quiet_panics() {
+    std::panic::set_hook(Box::new(|_| {
+        let _ = writeln!(std::io::stderr(), "{PANIC_SENTENCE}");
+    }));
+}
+
 // ---- the command line ----
 
 /// Creates one adapter from (address, token, workers); it may connect.

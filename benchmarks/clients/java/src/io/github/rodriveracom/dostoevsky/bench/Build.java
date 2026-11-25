@@ -10,14 +10,14 @@ public final class Build {
 
     /**
      * "&lt;12 hex&gt;" of the commit the checkout holding {@code dir} is at, plus "-dirty" when that directory has
-     * uncommitted changes, or "unknown" when git cannot say. The status is asked about "." relative to {@code dir}
+     * uncommitted changes to TRACKED files (untracked build output such as node_modules does not count), or "unknown" when git cannot say. The status is asked about "." relative to {@code dir}
      * (not a path that would be resolved against {@code dir} a second time), and git's own error text is
      * discarded: it never reaches the status or the receipt.
      */
     public static String id(Path dir) {
         try {
             String sha = git(dir, "rev-parse", "--short=12", "HEAD");
-            String dirty = git(dir, "status", "--porcelain", "--", ".");
+            String dirty = git(dir, "status", "--porcelain", "--untracked-files=no", "--", ".");
             return sha + (dirty.isEmpty() ? "" : "-dirty");
         } catch (Exception e) {
             return "unknown";

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import * as core from "../core.mjs";
 import { main } from "../worker.mjs";
-import { buildId, identity, ownClientName, packId, unpackId, version } from "../adapters.mjs";
+import { buildId, identity, joinWatcher, startAndJoin, kafkaClientConfigs, ownClientName, packId, unpackId, version } from "../adapters.mjs";
 
 const here = (rel) => new URL(rel, import.meta.url);
 const EXAMPLES = readFileSync(here("../../receipt_examples.txt"), "utf8").split("\n").filter((l) => l.trim() && !l.startsWith("#"));
@@ -222,6 +222,16 @@ test("error text never reaches the receipt, only the class and a fixed word", as
   assert.equal(core.reason(Object.assign(new Error("x"), { code: "ECONNRESET" })), "Error:connection");
 });
 
+test("the debug callback sees the raw read error while the receipt text stays sanitized", async () => {
+  const m = memory();
+  const r = await core.runWorkload(m, 1, 3, 0);
+  m.read = async () => { throw new Error("coordinator is not available hunter2"); };
+  const seen = [];
+  const why = await core.verify(m, r.records, (where, e) => seen.push([where, e.message]));
+  assert.ok(!why.includes("hunter2") && !why.includes("coordinator"), why);
+  assert.deepEqual(seen, [["read record 0 at 0", "coordinator is not available hunter2"]]);
+});
+
 test("an ambiguous timeout is reported as such", async () => {
   const silent = memory();
   silent.publish = async () => { throw new core.AmbiguousOutcome("no answer"); };
@@ -281,7 +291,123 @@ test("a clean checkout's build id is a bare commit, a changed file adds -dirty, 
   const dir = path.join(repo, "clients/javascript");
   const clean = buildId(dir);
   assert.match(clean, /^[0-9a-f]{12}$/, clean);
+  writeFileSync(path.join(dir, "untracked_build_output.js"), "junk\n"); // untracked build output must not count
+  assert.equal(buildId(dir), clean);
   writeFileSync(path.join(dir, "index.js"), "export const x = 1;\n");
   assert.equal(buildId(dir), clean + "-dirty");
   assert.equal(buildId(mkdtempSync(path.join(tmpdir(), "notarepo-"))), "unknown");
+});
+
+test("a read with a fresh deadline WAITS for the message instead of giving up at once", async () => {
+  const map = new Map();
+  setTimeout(() => map.set(5n, "late"), 150);
+  const begin = Date.now();
+  assert.equal(await core.takeWhenItArrives(map, 5n, 5000), "late");
+  const waited = Date.now() - begin;
+  assert.ok(waited >= 100 && waited < 3000, `waited ${waited} ms`);
+  assert.equal(map.has(5n), false, "the value is taken out");
+});
+
+test("a message that never arrives is waited for the whole budget, not given up on at once", async () => {
+  const begin = Date.now();
+  await assert.rejects(core.takeWhenItArrives(new Map(), 1n, 300), /did not arrive within \d+ ms/);
+  assert.ok(Date.now() - begin >= 250, `gave up after ${Date.now() - begin} ms`);
+});
+
+test("a budget that is not a positive finite number is refused loudly", async () => {
+  for (const bad of [0, -1, NaN, Infinity, undefined, -Date.now()]) {
+    await assert.rejects(core.takeWhenItArrives(new Map([[1n, "x"]]), 1n, bad), RangeError, String(bad));
+  }
+});
+
+test("the deadline is absolute: a clock that starts at zero cannot make it negative", async () => {
+  let t = 0; // a fake clock that has just started
+  const now = () => t;
+  const map = new Map();
+  const sleep = async (ms) => { t += ms; if (t >= 60) map.set(7n, "ok"); };
+  assert.equal(await core.takeWhenItArrives(map, 7n, 1000, now, sleep), "ok");
+});
+
+test("the verification consumer's client keeps kafkajs's default retries while the producer's client never retries", () => {
+  const { writer, reader } = kafkaClientConfigs("127.0.0.1:9", 0);
+  assert.deepEqual(writer.retry, { retries: 0 }, "a publish is never retried");
+  assert.equal("retry" in reader, false, "the reader client must not carry the producer's retry setting (a consumer inherits it)");
+  assert.notEqual(reader.clientId, writer.clientId);
+  assert.deepEqual([writer.brokers, reader.brokers], [["127.0.0.1:9"], ["127.0.0.1:9"]]);
+});
+
+// A fake consumer with kafkajs's event names; `fire` delivers an event to what joinWatcher registered.
+function fakeConsumer() {
+  const handlers = {};
+  return { events: { GROUP_JOIN: "join", CRASH: "crash", REBALANCING: "reb", FETCH_START: "fetch" },
+    on: (name, fn) => { handlers[name] = fn; }, fire: (name, payload) => handlers[name]({ payload }) };
+}
+
+test("a crash kafkajs will restart waits for the next join; a terminal crash rejects at once", async () => {
+  const c = fakeConsumer();
+  const p = joinWatcher(c, 5000);
+  const err = Object.assign(new Error("coordinator"), { type: "GROUP_COORDINATOR_NOT_AVAILABLE" });
+  c.fire("crash", { error: err, restart: true });
+  c.fire("join", { memberAssignment: {} }); // the restarted consumer joins
+  await p; // resolved, not rejected
+
+  const c2 = fakeConsumer();
+  const p2 = joinWatcher(c2, 5000);
+  c2.fire("crash", { error: err, restart: false });
+  await assert.rejects(p2, (e) => e === err);
+});
+
+test("a restartable crash that never joins ends at the budget with the crash's type for the receipt", async () => {
+  const c = fakeConsumer();
+  const p = joinWatcher(c, 30);
+  c.fire("crash", { error: Object.assign(new Error("x"), { name: "KafkaJSProtocolError", code: 3 }), restart: true });
+  await assert.rejects(p, (e) => core.reason(e) === "Error:engine-error:UNKNOWN_TOPIC_OR_PARTITION,3");
+});
+
+test("reason labels a kafkajs protocol error from a fixed table by its code; its type, message and any other error are never printed", () => {
+  const e = Object.assign(new Error("secret message token=abc"), { name: "KafkaJSProtocolError", type: "SECRET_TYPE", code: 3 });
+  assert.equal(core.reason(e), "KafkaJSProtocolError:engine-error:UNKNOWN_TOPIC_OR_PARTITION,3");
+  assert.equal(core.reason(Object.assign(new Error("m"), { name: "KafkaJSProtocolError", code: 9999 })), "KafkaJSProtocolError:engine-error:UNKNOWN,9999");
+  assert.equal(core.reason(Object.assign(new Error("m"), { type: "SECRET_TYPE", code: 3 })), "Error:engine-error", "a generic error's type is not trusted");
+  assert.equal(core.reason(Object.assign(new Error("m"), { kafkaLabel: "SPOOF" })), "Error:engine-error");
+});
+
+test("a join that fails while startup is still pending is handled within the budget, not left unhandled", async () => {
+  const c = fakeConsumer();
+  const begin = Date.now();
+  await assert.rejects(startAndJoin(() => new Promise((r) => setTimeout(r, 300)), joinWatcher(c, 30)), /not joined/);
+  assert.ok(Date.now() - begin < 250, "it ended at the budget, not when startup finished");
+  await new Promise((r) => setTimeout(r, 400)); // an unhandled rejection would crash the test process here
+});
+
+test("--debug-errors is refused under the benchmark driver", async () => {
+  const lines = [];
+  const orig = console.error; console.error = (m) => lines.push(String(m));
+  try {
+    assert.equal(await main(["--engine", "x", "--addr", "a:1", "--debug-errors"], { BENCH_DRIVER: "1" }, () => {}, {}), 2);
+  } finally { console.error = orig; }
+  assert.match(lines.join("\n"), /refused under the benchmark driver/);
+});
+
+test("a join that arrives after the deadline fails even though the overdue timer has not run yet", async () => {
+  const c = fakeConsumer();
+  let t = 0;
+  const p = joinWatcher(c, 30, () => t);
+  t = 107; // the event loop was busy: the deadline passed, the timer callback did not run
+  c.fire("join", { memberAssignment: {} });
+  await assert.rejects(p, /not joined/);
+});
+
+test("a connect that completes after the deadline does not go on to subscribe or run", async () => {
+  const c = fakeConsumer();
+  const calls = [];
+  const watch = joinWatcher(c, 30);
+  const startup = async () => {
+    await watch.step(() => new Promise((r) => setTimeout(() => { calls.push("connect"); r(); }, 120)));
+    await watch.step(async () => calls.push("subscribe"));
+    await watch.step(async () => calls.push("run"));
+  };
+  await assert.rejects(startAndJoin(startup, watch), /not joined/);
+  await new Promise((r) => setTimeout(r, 250)); // the late connect has completed by now
+  assert.deepEqual(calls, ["connect"], "nothing after the late connect ran");
 });

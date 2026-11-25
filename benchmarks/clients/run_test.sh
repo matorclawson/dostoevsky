@@ -133,6 +133,30 @@ for bad in WORKER_MAX=ten WORKER_MAX=0 STOP_WAIT=-5 READY_WAIT=1.5 BENCH_WINDOW=
   check "an invalid '$bad' is refused before anything starts (exit 2, no trial line)" "[ $code -eq 2 ] && [ \$(grep -c '^trial=' $t/out) -eq 0 ] && grep -q 'must be' $t/err"
 done
 
+# The window is capped at 24 hours exactly as in every worker, in the preflight.
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 BENCH_WINDOW=86401 CLIENT_ENGINES=dostoevsky
+check "BENCH_WINDOW above 86400 is refused before anything starts" "[ $code -eq 2 ] && [ \$(grep -c '^trial=' $t/out) -eq 0 ] && grep -q 'at most 86400' $t/err"
+out=$(env RUN_SH_PRINT_COMMANDS=1 BENCH_WINDOW=86400 CLIENT_LANGS=python SERVE_BIN="$t/serve" sh "$here/run.sh" 2>&1)
+check "BENCH_WINDOW of exactly 86400 passes the preflight" "printf '%s\n' \"$out\" | grep -q '^python: '"
+
+# The Python worker must be started with the client on its path (a rehearsal failed without it).
+out=$(env RUN_SH_PRINT_COMMANDS=1 CLIENT_LANGS="python javascript java rust" SERVE_BIN="$t/serve" sh "$here/run.sh" 2>&1)
+check "the python worker command sets PYTHONPATH=clients/python and runs the venv's interpreter" "printf '%s\n' \"$out\" | grep -q '^python: env PYTHONPATH=clients/python .dev/bench-venv/bin/python benchmarks/clients/python/worker.py'"
+check "every language has a worker command, none with a token" "[ \$(printf '%s\n' \"$out\" | grep -c ': ') -eq 4 ] && ! printf '%s' \"$out\" | grep -q $SECRET"
+
+# A Python traceback's FIRST line says nothing; the diagnostic is the LAST line of stderr, masked and reduced.
+cat > "$t/worker_tb" <<STUB
+#!/bin/sh
+[ "\${BENCH_TOKEN:-}" = "$SECRET" ] || exit 9
+echo "Traceback (most recent call last):" >&2
+echo "  File \"worker.py\", line 1" >&2
+echo "ModuleNotFoundError: No module named dostoevsky_client token $SECRET" >&2
+exit 1
+STUB
+chmod +x "$t/worker_tb"
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 CLIENT_ENGINES=dostoevsky WORKER_CMD_python="sh $t/worker_tb"
+check "the failure detail is the last stderr line (the error), not 'Traceback', with the token masked" "grep -q 'FAILED worker_exit_1:ModuleNotFoundError:_No_module_named_dostoevsky_client_token__token_' $t/out && ! grep -q Traceback $t/out && ! grep -q $SECRET $t/out"
+
 # TERM during readiness: the server is stopped and the directory with the token is removed.
 : > "$t/argv.log"; rm -f "$t/serve.pid"
 env TMPDIR="$t/tmp" SERVE_BIN="$t/serve" WORKER_CMD_python="sh $t/worker" CLIENT_LANGS=python CLIENT_ENGINES=dostoevsky BENCH_SKIP_SMOKE=1 BENCH_ROUNDS=1 STUB_SERVE_HANG=1 STOP_WAIT=3 \

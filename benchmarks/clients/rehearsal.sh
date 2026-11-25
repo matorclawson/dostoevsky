@@ -52,7 +52,7 @@ JAVAC="$java_home/bin/javac" PATH="$java_home/bin:$PATH" sh benchmarks/clients/j
 {
   echo "rehearsal=$stamp window_s=$window rounds=1"
   echo "host=$(uname -srm)"
-  echo "git_head=$(git rev-parse HEAD) dirty=$(git status --porcelain | wc -l | tr -d ' ')"
+  echo "git_head=$(git rev-parse HEAD) dirty=$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ') (tracked files only: node_modules, __pycache__ and build output do not count)"
   echo "nats-server=$("$nats" --version) sha256=$(sha "$nats")"
   echo "redis-server=$("$redis" --version) sha256=$(sha "$redis")"
   echo "kafka_home=$kafka_home version=$(JAVA_HOME="$java_home" "$kafka_home/bin/kafka-topics.sh" --version 2>/dev/null | head -1)"

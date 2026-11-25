@@ -17,8 +17,12 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
     args = parseArgs({ args: argv, options: {
       engine: { type: "string" }, addr: { type: "string" }, workers: { type: "string", default: "1" },
       target: { type: "string", default: "2000" }, window: { type: "string", default: "0" },
-      "require-known-build": { type: "boolean", default: false } } }).values;
+      "require-known-build": { type: "boolean", default: false },
+      // Prints the raw engine error to stderr for a person at a terminal. run.sh never passes it; the receipt never has it.
+      "debug-errors": { type: "boolean", default: false } } }).values;
   } catch (e) { console.error(e.message); return 2; }
+  // A raw engine error can carry anything: never under the driver, which keeps the last stderr line of a failed worker.
+  if (args["debug-errors"] && env.BENCH_DRIVER) { console.error("--debug-errors is for a person at a terminal; it is refused under the benchmark driver"); return 2; }
   const workers = Number(args.workers), target = Number(args.target), windowS = Number(args.window);
   // Whole numbers a double holds exactly, and a finite window: "--workers 1e9999" or "--target 2.5" is a usage error.
   if (!args.engine || !args.addr || !Number.isSafeInteger(workers) || workers < 1 || !Number.isSafeInteger(target) || target < 1
@@ -26,7 +30,9 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
     console.error("usage: --engine E --addr host:port [--workers N>=1, an integer] [--target N>=1, an integer] [--window S, 0 to 86400] [--require-known-build]");
     return 2;
   }
-  engines ??= (await import("./adapters.mjs")).ENGINES;
+  const adapterModule = engines === null ? await import("./adapters.mjs") : null;
+  if (adapterModule) adapterModule.debug.on = args["debug-errors"];
+  engines ??= adapterModule.ENGINES;
   if (!(args.engine in engines)) { console.error(`unknown engine '${args.engine}' (have ${Object.keys(engines).sort().join(", ")})`); return 2; }
   const adapter = await engines[args.engine](args.addr, env.BENCH_TOKEN ?? "");
   if (args["require-known-build"] && adapter.clientBuild === "unknown") {
@@ -38,7 +44,7 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
   try {
     res = await core.runWorkload(adapter, workers, target, windowS);
     if (res.stop !== core.STOP.failed || res.records.length > 0) { // also read back what a failed run acknowledged
-      const why = await core.verify(adapter, res.records);
+      const why = await core.verify(adapter, res.records, args["debug-errors"] ? (where, e) => console.error("debug:", where, e) : undefined);
       if (why) { res.stop = core.STOP.verify; res.detail = why; } else verified = res.acked;
     }
   } finally {
@@ -49,5 +55,5 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).then((code) => process.exit(code), (e) => { console.error(e); process.exit(1); });
+  main(process.argv.slice(2)).then((code) => process.exit(code), (e) => { console.error(`worker error: ${core.reason(e)}`); process.exit(1); }); // one deliberate line, not a stack
 }

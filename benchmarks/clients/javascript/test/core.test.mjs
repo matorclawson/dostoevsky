@@ -388,3 +388,26 @@ test("--debug-errors is refused under the benchmark driver", async () => {
   } finally { console.error = orig; }
   assert.match(lines.join("\n"), /refused under the benchmark driver/);
 });
+
+test("a join that arrives after the deadline fails even though the overdue timer has not run yet", async () => {
+  const c = fakeConsumer();
+  let t = 0;
+  const p = joinWatcher(c, 30, () => t);
+  t = 107; // the event loop was busy: the deadline passed, the timer callback did not run
+  c.fire("join", { memberAssignment: {} });
+  await assert.rejects(p, /not joined/);
+});
+
+test("a connect that completes after the deadline does not go on to subscribe or run", async () => {
+  const c = fakeConsumer();
+  const calls = [];
+  const watch = joinWatcher(c, 30);
+  const startup = async () => {
+    await watch.step(() => new Promise((r) => setTimeout(() => { calls.push("connect"); r(); }, 120)));
+    await watch.step(async () => calls.push("subscribe"));
+    await watch.step(async () => calls.push("run"));
+  };
+  await assert.rejects(startAndJoin(startup, watch), /not joined/);
+  await new Promise((r) => setTimeout(r, 250)); // the late connect has completed by now
+  assert.deepEqual(calls, ["connect"], "nothing after the late connect ran");
+});

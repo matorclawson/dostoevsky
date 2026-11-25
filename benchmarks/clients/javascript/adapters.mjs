@@ -111,11 +111,12 @@ export async function kafka(addr, token) {
         consumer = readerClient.consumer({ groupId: "verify" });
         // Do not read until the group has actually been joined and a partition assigned; a crash is an error with its
         // cause, not a silent wait. (A "negative timeout" warning from kafkajs's own heartbeat timer is harmless noise.)
-        await startAndJoin(async () => {
-          await consumer.connect();
-          await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
-          await consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } });
-        }, joinWatcher(consumer, 60000));
+        const watch = joinWatcher(consumer, 60000);
+        await startAndJoin(async () => { // every step is fenced by the one deadline
+          await watch.step(() => consumer.connect());
+          await watch.step(() => consumer.subscribe({ topic: TOPIC, fromBeginning: true }));
+          await watch.step(() => consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } }));
+        }, watch);
         consumer.seek({ topic: TOPIC, partition: 0, offset: "0" }); // from the beginning, whatever the group's own position
       }
       try {
@@ -134,24 +135,35 @@ export async function kafka(addr, token) {
 // the usual cause), so that crash only waits, within the budget, for the next join; a crash with restart false is
 // terminal and rejects at once. On a timeout the error carries the last crash's type, so a receipt can tell
 // "no coordinator yet" from "topic not found". Call it BEFORE consumer.connect(): the listeners must exist first.
-export function joinWatcher(consumer, budgetMs) {
+export function joinWatcher(consumer, budgetMs, now = () => performance.now()) {
   const { GROUP_JOIN, CRASH, REBALANCING, FETCH_START } = consumer.events;
-  let timer, last = null;
+  const deadline = now() + budgetMs; // ONE monotonic deadline, taken at the start
+  let timer, last = null, fired = false;
+  const expired = () => fired || now() >= deadline;
+  const lateError = () => {
+    const err = new Error("consumer group not joined within the budget");
+    if (last) err[LABEL] = protocolLabel(last);
+    return err;
+  };
   const joined = new Promise((resolve, reject) => {
-    consumer.on(GROUP_JOIN, (e) => { debug.log("group join", JSON.stringify(e.payload.memberAssignment)); resolve(); });
+    // A join that arrives after the deadline (before the overdue timer ran) is a failure, never result=ok past the budget.
+    consumer.on(GROUP_JOIN, (e) => { debug.log("group join", JSON.stringify(e.payload.memberAssignment)); if (expired()) reject(lateError()); else resolve(); });
     consumer.on(CRASH, (e) => {
       debug.log("consumer crash", e.payload.restart ? "(restart scheduled)" : "(terminal)", e.payload.error);
       if (e.payload.restart === false) reject(e.payload.error); else last = e.payload.error;
     });
     consumer.on(REBALANCING, (e) => debug.log("rebalancing", e.payload.groupId));
     consumer.on(FETCH_START, () => debug.log("fetch start"));
-    timer = setTimeout(() => {
-      const err = new Error("consumer group not joined within the budget");
-      if (last) err[LABEL] = protocolLabel(last);
-      reject(err);
-    }, budgetMs);
-  });
-  return joined.finally(() => clearTimeout(timer));
+    timer = setTimeout(() => { fired = true; reject(lateError()); }, budgetMs);
+  }).finally(() => clearTimeout(timer));
+  // The fence: once the deadline has passed (or the watcher has failed), a startup step that completes late must do nothing more.
+  joined.step = async (fn) => {
+    if (expired()) throw lateError();
+    const r = await fn();
+    if (expired()) throw lateError();
+    return r;
+  };
+  return joined;
 }
 
 // Runs the startup steps and waits for the join together, so a join failure (a terminal crash or the budget) is handled

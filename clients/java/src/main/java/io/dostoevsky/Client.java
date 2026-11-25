@@ -73,9 +73,9 @@ public final class Client {
                 byte[] text = in.readNBytes(256);
                 throw new ClientException(code, new String(text, StandardCharsets.UTF_8).strip());
             }
-            byte[] body = in.readNBytes(MAX_BODY + 1);
-            if (body.length > MAX_BODY) throw new ClientException(code, "oversized_response");
-            return new Reply(code, res.headers(), body);
+            byte[] responseBytes = in.readNBytes(MAX_BODY + 1);
+            if (responseBytes.length > MAX_BODY) throw new ClientException(code, "oversized_response");
+            return new Reply(code, res.headers(), responseBytes);
         }
     }
 

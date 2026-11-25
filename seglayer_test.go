@@ -627,9 +627,9 @@ func TestSegLogCorruptionIsAnErrorAndChangesNothing(t *testing.T) {
 			n.vol = append(bytes.Clone(n.vol[:segHeaderSize]), rec...)
 			n.dur = bytes.Clone(n.vol)
 		},
-		"header only, no checkpoint": func(fs *memFS) { n := fs.ns[top]; n.vol = bytes.Clone(n.vol[:segHeaderSize]); n.dur = bytes.Clone(n.vol) },
+		"header only, no checkpoint": func(fs *memFS) {
 			n := fs.ns[top]
-			n.vol = append(n.vol[:segHeaderSize:segHeaderSize], make([]byte, 0)...)
+			n.vol = bytes.Clone(n.vol[:segHeaderSize])
 			n.dur = bytes.Clone(n.vol)
 		},
 		"shorter than the header":       func(fs *memFS) { n := fs.ns[top]; n.vol = n.vol[:10]; n.dur = bytes.Clone(n.vol) },

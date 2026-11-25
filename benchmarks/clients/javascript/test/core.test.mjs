@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import * as core from "../core.mjs";
 import { main } from "../worker.mjs";
 import { buildId, identity, ownClientName, packId, unpackId, version } from "../adapters.mjs";
@@ -265,4 +268,20 @@ test("a window of exactly 24 h is accepted, and the run still ends at its target
   const [code, lines] = await trial(["--engine", "memory", "--addr", "x:1", "--target", "3", "--window", "86400"], memory());
   assert.equal(code, 0);
   assert.match(lines[0], /stop=reached/);
+});
+
+test("a clean checkout's build id is a bare commit, a changed file adds -dirty, a non-repository is unknown", () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "buildid-"));
+  const git = (...a) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { stdio: "ignore" });
+  git("init", "-q");
+  mkdirSync(path.join(repo, "clients/javascript"), { recursive: true });
+  writeFileSync(path.join(repo, "clients/javascript/index.js"), "export {};\n");
+  git("add", ".");
+  git("commit", "-q", "-m", "one");
+  const dir = path.join(repo, "clients/javascript");
+  const clean = buildId(dir);
+  assert.match(clean, /^[0-9a-f]{12}$/, clean);
+  writeFileSync(path.join(dir, "index.js"), "export const x = 1;\n");
+  assert.equal(buildId(dir), clean + "-dirty");
+  assert.equal(buildId(mkdtempSync(path.join(tmpdir(), "notarepo-"))), "unknown");
 });

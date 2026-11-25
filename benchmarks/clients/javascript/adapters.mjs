@@ -36,8 +36,8 @@ export function ownClientName() {
 // The git commit of the checkout holding `dir`, "-dirty" when it has uncommitted changes there, or "unknown".
 export function buildId(dir = OWN_CLIENT_DIR) {
   try {
-    const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", timeout: 10000 }).trim();
-    return git("rev-parse", "--short=12", "HEAD") + (git("status", "--porcelain", "--", dir) ? "-dirty" : "");
+    const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"] }).trim(); // git's own error text is discarded
+    return git("rev-parse", "--short=12", "HEAD") + (git("status", "--porcelain", "--", ".") ? "-dirty" : "");
   } catch { return "unknown"; }
 }
 

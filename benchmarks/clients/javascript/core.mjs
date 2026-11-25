@@ -38,18 +38,20 @@ export class Hist {
   addNs(ns) { this.n[Hist.index(ns)]++; }
   merge(other) { other.n.forEach((c, i) => { this.n[i] += c; }); }
   total() { return this.n.reduce((a, b) => a + b, 0); }
-  // The upper edge of the bin holding the q-th quantile, in whole microseconds (the Go harness's rule).
-  quantileUs(q) {
+  // The upper edge of the bin holding the q-th quantile, in whole nanoseconds (the Go harness's rule).
+  quantileNs(q) {
     const total = this.total();
     if (total === 0) return 0;
     const rank = Math.max(Math.ceil(q * total), 1);
     let seen = 0;
     for (let i = 0; i < this.n.length; i++) {
       seen += this.n[i];
-      if (seen >= rank) return Math.trunc(Math.trunc(Math.pow(1.01, i + 1) * 1e3) / 1000);
+      if (seen >= rank) return Math.trunc(Math.pow(1.01, i + 1) * 1e3);
     }
     return 0;
   }
+  // As receipts print it: microseconds with three decimals, nothing rounded away.
+  quantileUsText(q) { return (this.quantileNs(q) / 1000).toFixed(3); }
 }
 
 export function payload(i) {
@@ -130,8 +132,8 @@ export function receiptLine(engine, workers, res, verified, client, rssKiB, buil
   const f = [
     `engine=${engine}`, `workers=${workers}`, `result=${ok ? "ok" : "FAILED"}`, `acked=${res.acked}`, `verified=${verified}`,
     `records/s=${rate.toFixed(0)}`, `elapsed_s=${res.elapsed.toFixed(2)}`,
-    `p50_us=${res.hist.quantileUs(0.5)}`, `p95_us=${res.hist.quantileUs(0.95)}`, `p99_us=${res.hist.quantileUs(0.99)}`,
-    `p99_9_us=${res.hist.quantileUs(0.999)}`, `p99_99_us=${res.hist.quantileUs(0.9999)}`, "quantiles=bin-upper-1pct",
+    `p50_us=${res.hist.quantileUsText(0.5)}`, `p95_us=${res.hist.quantileUsText(0.95)}`, `p99_us=${res.hist.quantileUsText(0.99)}`,
+    `p99_9_us=${res.hist.quantileUsText(0.999)}`, `p99_99_us=${res.hist.quantileUsText(0.9999)}`, "quantiles=bin-upper-1pct",
     `client_rss_KiB=${rssKiB}`, "client_rss_source=maxRSS", "lang=javascript", `client=${token(client)}`, `client_build=${token(build)}`,
   ];
   if (res.ambiguous) f.push("ambiguous=1");

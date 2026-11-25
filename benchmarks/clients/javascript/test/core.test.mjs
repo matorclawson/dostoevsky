@@ -39,14 +39,21 @@ test("histogram bins and quantiles match the shared vector", () => {
   for (const [ns, want] of Object.entries(VECTOR.index)) assert.equal(core.Hist.index(Number(ns)), want, ns);
   const h = new core.Hist();
   for (const ns of VECTOR.durations_ns) h.addNs(ns);
-  for (const [q, want] of Object.entries(VECTOR.quantiles_us)) assert.equal(h.quantileUs(Number(q)), want, q);
+  for (const [q, want] of Object.entries(VECTOR.quantiles_ns)) assert.equal(h.quantileNs(Number(q)), want, q);
 });
 
 test("an empty histogram has no quantiles; merging adds", () => {
   const a = new core.Hist(), b = new core.Hist();
-  assert.equal(a.quantileUs(0.99), 0);
+  assert.equal(a.quantileNs(0.99), 0);
   a.addNs(5000); b.addNs(5000); a.merge(b);
   assert.equal(a.total(), 2);
+});
+
+test("a short sample keeps its sub-microsecond precision", () => {
+  const h = new core.Hist();
+  h.addNs(1900);
+  const got = h.quantileNs(0.5);
+  assert.ok(got >= 1900 && got <= 1900 * 1.0101, String(got)); // not rounded down to 1 us
 });
 
 test("a record is 512 bytes starting with its index", () => {

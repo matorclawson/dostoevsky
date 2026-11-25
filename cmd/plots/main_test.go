@@ -108,7 +108,7 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 	if !strings.Contains(first["architecture.svg"], "ack only after sync") || !strings.Contains(first["architecture.svg"], "<desc id=\"d\">") {
 		t.Error("architecture.svg missing durability text or description")
 	}
-	if !strings.Contains(first["reopen.svg"], "JetStream wins at 1 and 8 producers.") || !strings.Contains(first["reopen.svg"], "Dostoevsky scans its journal on open.") {
+	if !strings.Contains(first["reopen.svg"], "JetStream wins at 1 and 8 producers.") || !strings.Contains(first["reopen.svg"], "Dostoevsky replays its journal on open; where that time goes was not profiled.") {
 		t.Error("reopen.svg must derive and state where JetStream wins")
 	}
 	if strings.Contains(first["reopen.svg"], "Reopen and verify") || !strings.Contains(first["reopen.svg"], "Reopen time") {

@@ -74,7 +74,7 @@ func serve(ctx context.Context, engine, bin string, stdin io.Reader, out io.Writ
 			err = rerr
 		}
 	}()
-	s, err := servers.Start(engine, servers.Options{Ctx: ctx, Bin: bin, Home: os.Getenv("BENCH_KAFKA_HOME"), Java: os.Getenv("BENCH_JAVA_HOME"), Dir: dir})
+	s, err := servers.Start(engine, servers.Options{Ctx: ctx, Bin: bin, Dir: dir})
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,14 @@
+{
+  "name": "dostoevsky-bench-javascript",
+  "private": true,
+  "type": "module",
+  "description": "JavaScript worker for the language client benchmarks. Its dependencies are for benchmarking only; the Dostoevsky client itself has none.",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test" },
+  "dependencies": {
+    "@nats-io/jetstream": "3.4.0",
+    "@nats-io/transport-node": "3.4.0",
+    "ioredis": "6.0.0",
+    "kafkajs": "2.2.4"
+  }
+}

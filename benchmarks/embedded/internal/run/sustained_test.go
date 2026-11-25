@@ -21,9 +21,14 @@ func fastTick(t *testing.T) {
 
 func sustainedRun(t *testing.T, store func() Store, o Sustained) (lines []string, final map[string]string) {
 	t.Helper()
+	return sustainedRunMem(t, store, o, func() (uint64, error) { return 1 << 30, nil })
+}
+
+func sustainedRunMem(t *testing.T, store func() Store, o Sustained, mem func() (uint64, error)) (lines []string, final map[string]string) {
+	t.Helper()
 	withTemp(t)
 	fastTick(t)
-	setMemory(t, func() (uint64, error) { return 1 << 30, nil })
+	setMemory(t, mem)
 	var out bytes.Buffer
 	if err := executeSustained("fake", func(string, bool) (Store, error) { return store(), nil }, o, &out); err != nil {
 		t.Fatalf("executeSustained: %v", err)
@@ -250,7 +255,10 @@ func TestSustainedBucketsReportRateAndP99(t *testing.T) {
 	}
 	first := fields(lines[0])
 	rate, _ := strconv.ParseFloat(first["msgs_per_s"], 64)
-	p99, _ := strconv.Atoi(first["p99_us"])
+	p99, _ := strconv.ParseFloat(first["p99_us"], 64)
+	if dot := strings.IndexByte(first["p99_us"], '.'); dot < 0 || len(first["p99_us"])-dot-1 != 3 {
+		t.Fatalf("p99_us must carry three decimals: %q", first["p99_us"])
+	}
 	if first["n"] != "1" || rate <= 0 || p99 < 900 {
 		t.Fatalf("bucket line: %q (a 1 ms publish cannot have p99 under 0.9 ms)", lines[0])
 	}
@@ -274,7 +282,7 @@ func TestSustainedAbandonsProducersStuckInAHungPublish(t *testing.T) {
 	h := hangs{newFake(), make(chan struct{})}
 	t.Cleanup(func() { close(h.release) })
 	_, r := sustainedRun(t, func() Store { return h }, Sustained{Window: 200 * time.Millisecond, Target: 1_000_000_000, Workers: 2, Bucket: time.Hour})
-	if r["stop"] != StopWindow || !strings.Contains(r["reason"], "abandoned") || r["final_reopen_ms"] != "none" {
+	if r["stop"] != StopFailed || !strings.Contains(r["reason"], "abandoned") || !strings.Contains(r["reason"], "ambiguous") || r["final_reopen_ms"] != "none" {
 		t.Fatalf("%v", r)
 	}
 }
@@ -443,7 +451,7 @@ func TestSustainedARetentionThatNeverReturnsIsReportedAndTheStoreIsNotClosed(t *
 	b.fake.slow = time.Millisecond
 	t.Cleanup(func() { close(b.release) })
 	_, r := sustainedRun(t, func() Store { return b }, Sustained{Window: 30 * time.Second, Target: 1_000_000, Workers: 2, Bucket: time.Hour, KeepLast: 10, RetainEvery: 20 * time.Millisecond})
-	if !b.started.Load() || b.overlap.Load() || !strings.Contains(r["reason"], "retention still running") {
+	if !b.started.Load() || b.overlap.Load() || !strings.Contains(r["reason"], "still running") {
 		t.Fatalf("overlap=%v %v", b.overlap.Load(), r)
 	}
 }
@@ -492,5 +500,123 @@ func TestSustainedWindowReasonAndAckedAgree(t *testing.T) {
 	_, r := sustainedRun(t, func() Store { return f }, Sustained{Window: 100 * time.Millisecond, Target: 1_000_000_000, Workers: 8, Bucket: time.Hour})
 	if r["stop"] != StopWindow || !strings.Contains(r["reason"], "ended at "+r["acked"]+" acknowledged") {
 		t.Fatalf("acked=%s but reason=%q", r["acked"], r["reason"])
+	}
+}
+
+// ----- paired review round 2 of PR 31 (54e3a9d) -----
+
+// M1: a publish queued behind a slow interval reopen must not start after the window.
+func TestSustainedAPublishQueuedBehindASlowReopenDoesNotStartAfterTheWindow(t *testing.T) {
+	f := newFake()
+	f.slow = time.Millisecond
+	window := 60 * time.Millisecond
+	lc := &lateCounter{fake: f, window: window + 30*time.Millisecond}
+	var opens atomic.Int32
+	store := func() Store {
+		if opens.Add(1) > 1 {
+			time.Sleep(150 * time.Millisecond) // a slow reopen holding the write lock past the window
+		}
+		return lc
+	}
+	_, r := sustainedRun(t, store, Sustained{Window: window, Target: 1_000_000_000, Workers: 4, Bucket: time.Hour, ReopenEvery: 5})
+	if lc.late.Load() != 0 {
+		t.Fatalf("%d publishes started after the window while queued behind a reopen; %v", lc.late.Load(), r)
+	}
+}
+
+// M2: a reopen waiting for a hung publish does not stop the coordinator from serving the window and the abandon limit.
+type hangsAfter struct {
+	*fake
+	n       atomic.Int64
+	after   int64
+	release chan struct{}
+}
+
+func (h *hangsAfter) Publish(b []byte) (uint64, error) {
+	if h.n.Add(1) > h.after {
+		<-h.release
+		return 0, errors.New("released")
+	}
+	return h.fake.Publish(b)
+}
+
+func TestSustainedACoordinatorWaitingOnAReopenStillAbandonsAHungPublish(t *testing.T) {
+	old := abandonAfter
+	abandonAfter = 300 * time.Millisecond
+	t.Cleanup(func() { abandonAfter = old })
+	h := &hangsAfter{fake: newFake(), after: 3, release: make(chan struct{})}
+	t.Cleanup(func() { close(h.release) })
+	type res struct {
+		lines []string
+		r     map[string]string
+	}
+	got := make(chan res, 1)
+	go func() {
+		l, r := sustainedRun(t, func() Store { return h }, Sustained{Window: 100 * time.Millisecond, Target: 1_000_000_000, Workers: 2, Bucket: time.Hour, ReopenEvery: 2})
+		got <- res{l, r}
+	}()
+	select {
+	case g := <-got:
+		if g.r["stop"] != StopFailed || !strings.Contains(g.r["reason"], "abandoned") {
+			t.Fatalf("%v", g.r)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the coordinator was blocked behind the reopen: the window and the abandon limit were never served")
+	}
+}
+
+// M4: two different records acknowledged at one offset fail verification.
+type oneOffset struct{ *fake }
+
+func (o oneOffset) Publish(b []byte) (uint64, error) {
+	if _, err := o.fake.Publish(b); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+func TestSustainedTwoRecordsAtOneOffsetFailVerification(t *testing.T) {
+	_, r := sustainedRun(t, func() Store { return oneOffset{newFake()} }, Sustained{Window: 30 * time.Second, Target: 5, Workers: 1, Bucket: time.Hour})
+	if r["stop"] != StopVerify || !strings.Contains(r["reason"], "one offset for two different records") {
+		t.Fatalf("%v", r)
+	}
+}
+
+// M5: the host memory guard also covers the final verification.
+func TestSustainedTheMemoryGuardCoversTheFinalVerification(t *testing.T) {
+	var low atomic.Bool
+	f := newFake()
+	f.onRead = func() { low.Store(true) } // memory falls as the verification starts reading
+	_, r := sustainedRunMem(t, func() Store { return f }, Sustained{Window: 30 * time.Second, Target: 300, Workers: 1, Bucket: time.Hour},
+		func() (uint64, error) {
+			if low.Load() {
+				return 100, nil
+			}
+			return 1 << 30, nil
+		})
+	if r["stop"] != StopMemory || !strings.Contains(r["reason"], "memory guard") {
+		t.Fatalf("%v", r)
+	}
+}
+
+// Low: nothing is printed after the final result line, also when an abandoned retention wakes up later.
+func TestSustainedNothingIsPrintedAfterTheFinalLine(t *testing.T) {
+	old := abandonAfter
+	abandonAfter = 200 * time.Millisecond
+	t.Cleanup(func() { abandonAfter = old })
+	withTemp(t)
+	fastTick(t)
+	setMemory(t, func() (uint64, error) { return 1 << 30, nil })
+	b := &blockedRetain{fake: newFake(), release: make(chan struct{}), failAfter: 400}
+	b.fake.slow = time.Millisecond
+	var out bytes.Buffer
+	if err := executeSustained("fake", func(string, bool) (Store, error) { return b, nil }, Sustained{Window: 30 * time.Second, Target: 1_000_000, Workers: 2, Bucket: time.Hour, KeepLast: 10, RetainEvery: 20 * time.Millisecond}, &out); err != nil {
+		t.Fatal(err)
+	}
+	before := out.String()
+	close(b.release) // the abandoned retention returns now and would print a retain line
+	time.Sleep(150 * time.Millisecond)
+	if out.String() != before || !strings.HasPrefix(before[strings.LastIndex(strings.TrimSpace(before), "\n")+1:], "sustained ") {
+		t.Fatalf("output after the final line: %q", out.String())
 	}
 }

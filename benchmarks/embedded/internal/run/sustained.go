@@ -137,7 +137,13 @@ func (h *latHist) quantile(q float64) time.Duration {
 	return 0
 }
 
+// us3 prints a duration as microseconds with three decimals (the upper bin edge, nothing rounded away).
+func us3(d time.Duration) string { return strconv.FormatFloat(float64(d)/1000, 'f', 3, 64) }
+
 // ----- the run -----
+
+// memoryCut is a verification cut short by the host memory guard.
+type memoryCut struct{ error }
 
 type stopInfo struct {
 	kind, text string
@@ -170,18 +176,26 @@ func availMemText() string {
 
 // lockedWriter serializes the lines of the coordinator, retention and reopen, which can print at the same time.
 type lockedWriter struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu   sync.Mutex
+	w    io.Writer
+	shut bool
 }
 
 func (l *lockedWriter) Write(b []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.shut { // after the final result line nothing else may appear (an abandoned retention that wakes up later)
+		return len(b), nil
+	}
 	return l.w.Write(b)
 }
 
+func (l *lockedWriter) shutOff() { l.mu.Lock(); l.shut = true; l.mu.Unlock() }
+
 func executeSustained(engine string, open func(string, bool) (Store, error), o Sustained, out io.Writer) (err error) {
-	out = &lockedWriter{w: out}
+	lw := &lockedWriter{w: out}
+	out = lw
+	defer lw.shutOff()
 	if o.Workers < 1 || o.Target < 1 || o.Window <= 0 || o.Bucket <= 0 || o.KeepLast < 0 || (o.KeepLast > 0 && o.RetainEvery <= 0) {
 		return errors.New("invalid sustained workload")
 	}
@@ -215,6 +229,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			b.BindContext(ctx)
 		}
 	}
+	var over atomic.Bool // the loop has ended: a reopen still waiting for the lock does nothing
 	noClose := false // set when a retention is still running at the end: closing under it would be a bug
 	closeStore := func() (cerr error) {
 		if s == nil || closed || noClose {
@@ -242,7 +257,8 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		floor         atomic.Uint64 // the offset below which retention may have dropped records
 		stop          atomic.Pointer[stopInfo]
 		failure       atomic.Pointer[stopInfo] // the first engine failure, kept apart from whichever stop was admitted first
-		cur           atomic.Pointer[latHist]
+		cur           = new(latHist) // the bucket's histogram; histMu makes a rotation wait for writers of the old one
+		histMu        sync.RWMutex
 		total         = new(latHist)
 		reopens       int
 		finalReopenMS = "none"
@@ -251,7 +267,6 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		ring          [1000]pair
 		ringN         int
 	)
-	cur.Store(new(latHist))
 	setStop := func(kind, text string) { stop.CompareAndSwap(nil, &stopInfo{kind, text, time.Now()}) }
 	// An engine failure always counts as the result, even when the window (or the target) was admitted first: an
 	// in-flight publish that fails after the stop is still a failed engine, never a normal window.
@@ -270,19 +285,24 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			defer wg.Done()
 			data := make([]byte, 512)
 			for {
+				// The stop, the deadline and the target are checked UNDER the read lock: a publish that queued behind a reopen
+				// must not start once the window has ended (or the run was stopped) while it waited.
+				gate.RLock()
 				if stop.Load() != nil {
+					gate.RUnlock()
 					return
 				}
 				if !time.Now().Before(deadline) {
 					setStop(StopWindow, fmt.Sprintf("window of %v ended at %d acknowledged", o.Window, acked.Load()))
+					gate.RUnlock()
 					return
 				}
 				i := next.Add(1) - 1
 				if i >= o.Target {
+					gate.RUnlock()
 					return
 				}
 				binary.BigEndian.PutUint64(data, uint64(i))
-				gate.RLock()
 				begin := time.Now()
 				off, e := s.Publish(data)
 				d := time.Since(begin)
@@ -299,7 +319,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 						break
 					}
 				}
-				cur.Load().add(d)
+				histMu.RLock()
+				cur.add(d)
+				histMu.RUnlock()
 				total.add(d)
 				if i%stride == 0 || i%16 == 0 {
 					sampMu.Lock()
@@ -345,14 +367,23 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		pairs = append(pairs, ring[:n]...)
 		sampMu.Unlock()
 		// The strided and the recent samples can hold the same record: each is read and counted once.
-		seen := make(map[uint64]bool, len(pairs))
+		// Two DIFFERENT records acknowledged at one offset is the engine's failure, not a duplicate.
+		seen := make(map[uint64]int64, len(pairs))
+		var conflict *pair
 		pairs = slices.DeleteFunc(pairs, func(p pair) bool {
-			if seen[p.off] {
+			if i, ok := seen[p.off]; ok {
+				if i != p.i && conflict == nil {
+					c := p
+					conflict = &c
+				}
 				return true
 			}
-			seen[p.off] = true
+			seen[p.off] = p.i
 			return false
 		})
+		if conflict != nil {
+			return 0, fmt.Errorf("records %d and %d were both acknowledged at offset %d (one offset for two different records)", seen[conflict.off], conflict.i, conflict.off)
+		}
 		fl := floor.Load()
 		pairs = slices.DeleteFunc(pairs, func(p pair) bool { return p.off < fl })
 		if len(pairs) > o.Sample {
@@ -363,8 +394,14 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			}
 			pairs = picked
 		}
+		guardEvery := 0
 		want := make([]byte, 512) // the whole record: the index in the first 8 bytes, zeros after, as published
 		for _, p := range pairs {
+			if guardEvery++; guardEvery%64 == 1 { // the host memory guard also covers a long verification
+				if me := checkMemory(); me != nil {
+					return 0, memoryCut{me}
+				}
+			}
 			got, e := s.Read(p.off)
 			binary.BigEndian.PutUint64(want, uint64(p.i))
 			if e != nil || !bytes.Equal(got, want) {
@@ -382,6 +419,12 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		fail := func(kind, format string, a ...any) *stopInfo {
 			return &stopInfo{kind, fmt.Sprintf(format, a...), time.Now()}
 		}
+		if over.Load() { // the run ended while this reopen waited for the lock: it must not touch the store now
+			return nil
+		}
+		if me := checkMemory(); me != nil {
+			return fail(StopMemory, "stopped by the host memory guard before the reopen at %d acknowledged (%v)", acked.Load(), me)
+		}
 		if e := closeStore(); e != nil {
 			return fail(StopFailed, "engine failed at %d acknowledged: close: %v", acked.Load(), e)
 		}
@@ -394,6 +437,10 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		s, closed = ns, false
 		bind()
 		n, e := verify()
+		var cut memoryCut
+		if errors.As(e, &cut) {
+			return fail(StopMemory, "stopped by the host memory guard during the verification after the reopen at %d acknowledged (%v)", acked.Load(), cut.error)
+		}
 		if e != nil {
 			return fail(StopVerify, "after reopen at %d acknowledged: %v", acked.Load(), e)
 		}
@@ -408,7 +455,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	}
 
 	var retaining atomic.Bool
-	var retentionWG sync.WaitGroup
+	var retentionWG sync.WaitGroup // background work: retention and interval reopens
 	var fenced atomic.Bool // set once the run is over: no retention starts after it
 	retain := func() {
 		defer retentionWG.Done()
@@ -443,12 +490,23 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	nextReopen := o.ReopenEvery
 	bucketN, lastAcked, lastBucket := 0, int64(0), start
 	abandoned := false
+	// Telemetry and interval reopens run off the coordinator's critical path: a slow disk walk, or a reopen waiting for a
+	// hung publish, must never keep the window, the guards or the abandon limit from being served.
+	reopenDone := make(chan *stopInfo, 1)
+	reopening, telemetryBusy := false, atomic.Bool{}
 	for running := true; running; {
 		select {
 		case <-done:
 			running = false
 		case <-window.C:
 			setStop(StopWindow, fmt.Sprintf("window of %v ended at %d acknowledged", o.Window, acked.Load()))
+		case bad := <-reopenDone:
+			reopening = false
+			if bad != nil {
+				setStop(bad.kind, bad.text)
+			} else {
+				nextReopen += o.ReopenEvery
+			}
 		case now := <-tick.C:
 			if e := checkMemory(); e != nil {
 				setStop(StopMemory, fmt.Sprintf("stopped by the host memory guard at %d acknowledged (%v); the engine had not finished", acked.Load(), e))
@@ -463,30 +521,37 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			if stop.Load() != nil {
 				continue
 			}
-			if !now.Before(bucketEnd) {
-				h := cur.Swap(new(latHist))
-				time.Sleep(time.Millisecond) // writers that loaded the old histogram finish adding
-				a := acked.Load()
-				used, free := diskText()
-				bucketN++
-				fmt.Fprintf(out, "bucket engine=%s n=%d t_s=%.0f acked=%d msgs_per_s=%.0f p99_us=%d harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s\n",
-					engine, bucketN, now.Sub(start).Seconds(), a, float64(a-lastAcked)/now.Sub(lastBucket).Seconds(), h.quantile(0.99).Microseconds(), maxRSSKiB(), serverPeak(), used, availMemText(), free)
-				lastAcked, lastBucket = a, now
+			if !now.Before(bucketEnd) && telemetryBusy.CompareAndSwap(false, true) {
+				histMu.Lock()
+				h := cur
+				cur = new(latHist) // no writer is inside the old one once the lock is held
+				histMu.Unlock()
+				a, n, prevAcked, prevAt := acked.Load(), bucketN+1, lastAcked, lastBucket
+				bucketN, lastAcked, lastBucket = n, a, now
 				for !bucketEnd.After(now) {
 					bucketEnd = bucketEnd.Add(o.Bucket)
 				}
+				retentionWG.Add(1)
+				go func() {
+					defer retentionWG.Done()
+					defer telemetryBusy.Store(false)
+					used, free := diskText()
+					gate.RLock() // the store is replaced only under the write lock
+					sp := serverPeak()
+					gate.RUnlock()
+					fmt.Fprintf(out, "bucket engine=%s n=%d t_s=%.0f acked=%d msgs_per_s=%.0f p99_us=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s\n",
+						engine, n, now.Sub(start).Seconds(), a, float64(a-prevAcked)/now.Sub(prevAt).Seconds(), us3(h.quantile(0.99)), maxRSSKiB(), sp, used, availMemText(), free)
+				}()
 			}
 			if o.KeepLast > 0 && !now.Before(retainAt) && !fenced.Load() && retaining.CompareAndSwap(false, true) {
 				retainAt = now.Add(o.RetainEvery)
 				retentionWG.Add(1)
 				go retain()
 			}
-			if o.ReopenEvery > 0 && acked.Load() >= nextReopen {
-				if bad := reopen(false); bad != nil {
-					setStop(bad.kind, bad.text)
-				} else {
-					nextReopen += o.ReopenEvery
-				}
+			if o.ReopenEvery > 0 && !reopening && !fenced.Load() && acked.Load() >= nextReopen {
+				reopening = true
+				retentionWG.Add(1)
+				go func() { defer retentionWG.Done(); reopenDone <- reopen(false) }()
 			}
 		}
 	}
@@ -494,6 +559,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	// Retention is fenced and joined BEFORE anything closes the store: a Close that overlaps an active Retain is a bug of
 	// the harness. A retention still blocked after abandonAfter is reported and the store is then left unclosed.
 	fenced.Store(true)
+	over.Store(true)
 	retentionDone := make(chan struct{})
 	go func() { retentionWG.Wait(); close(retentionDone) }()
 	retentionStuck := false
@@ -502,7 +568,15 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	case <-time.After(abandonAfter):
 		retentionStuck = true
 	}
+	var late *stopInfo // the result of an interval reopen that finished after the loop ended
+	select {
+	case late = <-reopenDone:
+	default:
+	}
 	st := stop.Load()
+	if late != nil && (st == nil || st.kind == StopWindow || st.kind == StopReached) {
+		st = late
+	}
 	if f := failure.Load(); f != nil && (st == nil || st.kind == StopWindow || st.kind == StopReached) {
 		st = f // a failed publish after the window or the target was admitted still makes this a failed run
 	}
@@ -517,11 +591,12 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		st = &stopInfo{st.kind, fmt.Sprintf("window of %v ended at %d acknowledged", o.Window, acked.Load()), st.at}
 	}
 	if abandoned {
-		st = &stopInfo{st.kind, st.text + "; producers still inside a publish after " + abandonAfter.String() + " were abandoned", st.at}
+		// A publish that never settled may or may not have been stored: not a normal stop, and nothing is closed over it.
+		st = &stopInfo{StopFailed, st.text + "; ambiguous: producers still inside a publish after " + abandonAfter.String() + " were abandoned", st.at}
 	}
 	if retentionStuck {
 		noClose = true
-		st = &stopInfo{StopFailed, st.text + "; retention still running after " + abandonAfter.String() + ", the store was not closed", st.at}
+		st = &stopInfo{StopFailed, st.text + "; retention or a reopen still running after " + abandonAfter.String() + ", the store was not closed", st.at}
 	}
 	if (st.kind == StopReached || st.kind == StopWindow) && !abandoned && !retentionStuck {
 		// A finished run closes, reopens and verifies once more; a problem there is the result.
@@ -534,7 +609,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	if e := closeStore(); e != nil && st.kind != StopFailed {
 		st = &stopInfo{StopFailed, st.text + "; close: " + e.Error(), st.at}
 	}
-	fmt.Fprintf(out, "sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%d reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s reason=%q\n",
-		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), total.quantile(0.99).Microseconds(), reopens, finalReopenMS, harness, server, used, availMemText(), free, st.text)
+	fmt.Fprintf(out, "sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%s reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s reason=%q\n",
+		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens, finalReopenMS, harness, server, used, availMemText(), free, st.text)
 	return nil
 }

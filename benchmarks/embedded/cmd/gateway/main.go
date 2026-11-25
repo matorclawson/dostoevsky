@@ -5,6 +5,8 @@
 // this command is the whole cost of going through the gateway: HTTP, a process boundary, and a
 // longer reopen path. What is equalized and what still differs:
 //
+//   - HEADLINE control (BENCH_GATEWAY_GOMAXPROCS=unpinned): the gateway exactly as the language cells get it (the serve
+//     driver, no GOMAXPROCS), label "gateway". The variant below is a separate row labelled "gateway-pinned1".
 //   - CPU: the embedded row runs with GOMAXPROCS=2. Here the harness and the gateway each get
 //     GOMAXPROCS=1 (BENCH_GATEWAY_GOMAXPROCS for the gateway, GOMAXPROCS for the harness), so
 //     their combined budget equals the embedded row's. run.sh sets both.
@@ -123,6 +125,25 @@ func gatewayProcs() string {
 	return "1"
 }
 
+// unpinned reports whether the gateway runs exactly as it does for the language cells (the serve driver starts it with no
+// GOMAXPROCS): BENCH_GATEWAY_GOMAXPROCS=unpinned. That is the HEADLINE control; the pinned equal-budget variant is a
+// separate, labelled row ("gateway-pinned1").
+func unpinned() bool { return os.Getenv("BENCH_GATEWAY_GOMAXPROCS") == "unpinned" }
+
+func gatewayEnv() []string {
+	if unpinned() {
+		return nil
+	}
+	return []string{"GOMAXPROCS=" + gatewayProcs()}
+}
+
+func engineLabel() string {
+	if unpinned() {
+		return "gateway"
+	}
+	return "gateway-pinned1"
+}
+
 func main() {
 	bin := os.Getenv("BENCH_SERVER_BIN")
 	workers := 1
@@ -133,11 +154,11 @@ func main() {
 			}
 		}
 	}
-	run.Main("gateway", func(dir string, _ bool) (run.Store, error) {
+	run.Main(engineLabel(), func(dir string, _ bool) (run.Store, error) {
 		// The same code that starts the gateway for the language benchmarks (internal/servers).
 		// Start returns after an authorized read succeeded, which ends the timed restart:
 		// reopen is the process start until the gateway answers a read.
-		srv, err := servers.Start("gateway", servers.Options{Bin: bin, Dir: dir, Env: []string{"GOMAXPROCS=" + gatewayProcs()}})
+		srv, err := servers.Start("gateway", servers.Options{Bin: bin, Dir: dir, Env: gatewayEnv()})
 		if err != nil {
 			return nil, err
 		}

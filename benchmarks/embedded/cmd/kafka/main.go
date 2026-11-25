@@ -147,6 +147,10 @@ func (s *store) Read(offset uint64) ([]byte, error) {
 
 func (s *store) ServerPeakKiB() (uint64, error) { return s.proc.PeakKiB() }
 
+// closeClient relies on franz-go's Client.Close, which stops the client and fails
+// every record still buffered (it does not flush them), instead of calling
+// AbortBufferedRecords first: a trial that reaches cleanup has either finished or
+// failed, and nothing buffered may be waited for. The broker is killed right after.
 func closeClient(c *kgo.Client) {
 	if c != nil {
 		// A close that hangs must not hold cleanup open; the broker is killed next.

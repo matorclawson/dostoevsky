@@ -162,3 +162,55 @@ func TestFailedDialLeavesNothingTracked(t *testing.T) {
 		t.Fatalf("cancelled dial: %v, %d tracked", err, tr.count())
 	}
 }
+
+// A connection registered after closeAll (a socket that connected just before the
+// guard tripped) is closed at once and never tracked.
+func TestLateRegistrationIsClosedAtOnce(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	tr := &connTracker{}
+	tr.closeAll()
+	if tr.add(a) {
+		t.Fatal("a connection was tracked after closeAll")
+	}
+	if tr.count() != 0 {
+		t.Fatalf("%d tracked", tr.count())
+	}
+	done := make(chan error, 1)
+	go func() { _, err := a.Write([]byte("x")); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("the late connection is still open")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the late connection was not closed")
+	}
+}
+
+func TestDialAfterTheTrialWasCancelledReturnsAtOnce(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err == nil {
+			defer c.Close()
+			time.Sleep(5 * time.Second)
+		}
+	}()
+	tr := &connTracker{}
+	tr.closeAll() // the guard has already tripped
+	start := time.Now()
+	if _, err := dialBroker(context.Background(), l.Addr().String(), 10*time.Second, tr); err == nil {
+		t.Fatal("dialed through a closed tracker")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("a socket that connected after the trip waited out its handshake deadline")
+	}
+	if tr.count() != 0 {
+		t.Fatalf("%d tracked", tr.count())
+	}
+}

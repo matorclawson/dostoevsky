@@ -16,6 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/run"
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/serverproc"
+	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/servers"
 )
 
 const stream = "events"
@@ -82,7 +83,7 @@ func (s store) Close() {
 // trial's own directory, so no other process can be the one that answers.
 func serverConfig(dir string) (conf, sock string) {
 	sock = filepath.Join(dir, "server.sock")
-	conf = fmt.Sprintf("port 0\nunixsocket %s\nunixsocketperm 700\ndir %s\nappendonly yes\nappendfsync always\nsave \"\"\n", sock, dir)
+	conf = fmt.Sprintf("port 0\nunixsocket %s\nunixsocketperm 700\ndir %s\n", sock, dir) + servers.RedisDurability
 	return conf, sock
 }
 

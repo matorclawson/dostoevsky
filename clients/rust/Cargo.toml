@@ -5,5 +5,9 @@ edition = "2021"
 license = "MIT"
 description = "Synchronous, dependency-free client for the Dostoevsky binary HTTP API (plain http only)"
 readme = "README.md"
+repository = "https://github.com/rodriveracom/dostoevsky"
+homepage = "https://github.com/rodriveracom/dostoevsky/blob/main/docs/clients.md"
+keywords = ["dostoevsky", "streaming", "durable", "queue", "messaging"]
+categories = ["network-programming"]
 
 [dependencies]

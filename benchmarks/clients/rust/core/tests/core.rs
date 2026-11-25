@@ -166,9 +166,11 @@ fn verification_finds_a_changed_byte_and_error_text_never_reaches_the_receipt() 
     assert!(verify(bad.as_ref(), &r.records).contains("differ"));
     let e = EngineError::new("Auth failed for redis://user:hunter2@10.0.0.9", Kind::Other);
     let why = reason(&e);
-    assert!(!why.contains("hunter2") && !why.contains("10.0.0.9") && why.ends_with(":engine-error"), "{why}");
+    assert_eq!(why, "Error:engine-error", "a class that is not a plain identifier is reported as Error, never kept in part");
     assert_eq!(reason(&EngineError::new("Timeout", Kind::AmbiguousTimeout)), "Timeout:ambiguous-timeout");
     assert_eq!(reason(&EngineError::new("1bad", Kind::Timeout)), "Error:timeout");
+    assert_eq!(reason(&EngineError::new("KafkaError", Kind::Connection)), "KafkaError:connection");
+    assert_eq!(reason(&EngineError::new("", Kind::Other)), "Error:engine-error");
 }
 
 fn fixed(stop: &str, detail: &str, acked: u64, ambiguous: bool) -> Outcome {

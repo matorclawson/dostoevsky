@@ -96,20 +96,24 @@ pub enum Kind {
 
 #[derive(Debug, Clone)]
 pub struct EngineError {
-    pub class: String,
+    /// A name the ADAPTER wrote into its source (a `'static` string): a message built at run time cannot be put here,
+    /// so nothing an engine said can reach a receipt through this field.
+    pub class: &'static str,
     pub kind: Kind,
 }
 
 impl EngineError {
-    pub fn new(class: &str, kind: Kind) -> Self {
-        EngineError { class: class.to_string(), kind }
+    pub fn new(class: &'static str, kind: Kind) -> Self {
+        EngineError { class, kind }
     }
 }
 
-/// `Class:word`: the error class (identifier characters only) and one fixed word.
+/// `Class:word`: the error class and one fixed word. A class that is not a plain identifier (letters, digits and
+/// underscores, not starting with a digit, at most 64 characters) is reported as `Error`, never filtered or kept.
 pub fn reason(e: &EngineError) -> String {
-    let class: String = e.class.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(64).collect();
-    let class = if class.is_empty() || class.chars().next().is_some_and(|c| c.is_ascii_digit()) { "Error".to_string() } else { class };
+    let c = e.class;
+    let ident = !c.is_empty() && c.len() <= 64 && !c.chars().next().is_some_and(|x| x.is_ascii_digit()) && c.chars().all(|x| x.is_ascii_alphanumeric() || x == '_');
+    let class = if ident { c } else { "Error" };
     let word = match e.kind {
         Kind::AmbiguousTimeout => "ambiguous-timeout",
         Kind::Timeout => "timeout",

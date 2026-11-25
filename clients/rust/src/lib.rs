@@ -210,8 +210,8 @@ fn receipt(r: &Response) -> Result<Receipt, Error> {
 }
 
 impl Client {
-    /// `base` is `http://host:port` with an optional path prefix. Any other scheme panics
-    /// at the first call as an `Error::Transport`; construction never fails.
+    /// `base` is `http://host:port` with an optional path prefix. Construction never
+    /// fails: any other scheme is reported as an `Error::Transport` by every call.
     pub fn new(base: &str, token: &str) -> Self {
         let trimmed = base.trim_end_matches('/');
         let (scheme_ok, rest) = match trimmed.strip_prefix("http://") {

@@ -879,12 +879,12 @@ func (l *segLog) readRecord(pid uint32, off uint64) (record3, error) {
 	for at := pos; at < size; {
 		typ, body, n, err := fr.next(at)
 		if err != nil {
-			return record3{}, fmt.Errorf("%w: segment %d at offset %d: %v", ErrCorruptLog, id, at, err)
+			return record3{}, corrupt(id, at, "%v", err)
 		}
 		if typ == f3Record {
 			rec, err := parseRecord3(body)
 			if err != nil {
-				return record3{}, fmt.Errorf("%w: segment %d at offset %d: %v", ErrCorruptLog, id, at, err)
+				return record3{}, corrupt(id, at, "%v", err)
 			}
 			if rec.Partition == pid {
 				if rec.Offset == off {

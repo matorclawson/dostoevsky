@@ -105,13 +105,13 @@ const exitSIGTERM = 128 + int(syscall.SIGTERM)
 //
 // Judging the leader's exit: a SIGTERM death or exit 143 counts as success only when
 // the process was still running when we signaled it, our SIGTERM was delivered to it
-// (the kill call succeeded, not ESRCH), it was not killed after the grace period (a
+// (Process.Signal returned nil, not os.ErrProcessDone), it was not killed after the grace period (a
 // recorded kill is never cleared by a late SIGTERM status), and, for 143,
 // cleanShutdown confirms from the server's own state that the shutdown was clean.
 // Any other status, an exit nobody asked for or a failed confirmation is an error.
 //
-// Known limit: a leader that died by itself but has not yet been reaped by cmd.Wait still
-// accepts kill(), so such a death can look like delivery. Closing that needs a pidfd.
+// Known limit: a leader that died by itself but whose cmd.Wait has not yet returned can still
+// accept the signal, so such a death can look like delivery.
 func (p *Proc) StopWith(grace time.Duration, cleanShutdown func() error) error {
 	pid := p.cmd.Process.Pid
 	var err error
@@ -123,7 +123,10 @@ func (p *Proc) StopWith(grace time.Duration, cleanShutdown func() error) error {
 	}
 	delivered := false
 	if !exitedFirst {
-		delivered = syscall.Kill(pid, syscall.SIGTERM) == nil
+		// Process.Signal is pidfd-backed on Linux (Go 1.23 and later) and reports
+		// os.ErrProcessDone once the process has been waited for, so it cannot signal a
+		// recycled pid the way a raw kill(pid) could.
+		delivered = p.cmd.Process.Signal(syscall.SIGTERM) == nil
 	}
 	_ = syscall.Kill(-pid, syscall.SIGTERM) // cleanup: the group, always
 	killed := false

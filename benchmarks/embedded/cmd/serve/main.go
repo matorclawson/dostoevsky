@@ -31,15 +31,30 @@ import (
 )
 
 func main() {
-	engine := flag.String("engine", "", "gateway, redis, nats or kafka")
-	bin := flag.String("bin", os.Getenv("BENCH_SERVER_BIN"), "server executable (default $BENCH_SERVER_BIN)")
-	flag.Parse()
+	engine, bin, err := parseArgs(os.Args[1:], os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "FAILED:", err)
+		os.Exit(2)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT) // before any start
 	defer stop()
-	if err := serve(ctx, *engine, serverBin(*engine, *bin, os.Getenv), os.Stdin, os.Stdout); err != nil {
+	if err := serve(ctx, engine, bin, os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)
 	}
+}
+
+// parseArgs reads the command line and resolves the server executable in the documented order:
+// -bin, else BENCH_<ENGINE>_SERVER, else BENCH_SERVER_BIN. The flag's own default is EMPTY: a
+// default taken from BENCH_SERVER_BIN would beat the engine-specific variable.
+func parseArgs(args []string, getenv func(string) string) (engine, bin string, err error) {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	e := fs.String("engine", "", "gateway, redis, nats or kafka")
+	b := fs.String("bin", "", "server executable; default $BENCH_<ENGINE>_SERVER (BENCH_REDIS_SERVER, BENCH_NATS_SERVER, BENCH_GATEWAY_SERVER), else $BENCH_SERVER_BIN; not used by kafka")
+	if err = fs.Parse(args); err != nil {
+		return "", "", err
+	}
+	return *e, serverBin(*e, *b, getenv), nil
 }
 
 // serverBin picks the server executable: the flag, else BENCH_<ENGINE>_SERVER, else BENCH_SERVER_BIN.

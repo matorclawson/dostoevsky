@@ -29,7 +29,7 @@ fn build_id(dir: &std::path::Path) -> String {
         let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).stderr(std::process::Stdio::null()).output().ok()?;
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
-    match (git(&["rev-parse", "--short=12", "HEAD"]), git(&["status", "--porcelain", "--", "."])) {
+    match (git(&["rev-parse", "--short=12", "HEAD"]), git(&["status", "--porcelain", "--untracked-files=no", "--", "."])) {
         (Some(sha), Some(dirty)) => format!("{sha}{}", if dirty.is_empty() { "" } else { "-dirty" }),
         _ => "unknown".to_string(),
     }

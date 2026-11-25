@@ -658,6 +658,26 @@ func TestSegLogCorruptionIsAnErrorAndChangesNothing(t *testing.T) {
 			}
 		}
 	}
+	// the errors are typed: where the damage is can be read with errors.As
+	typed := func(damage func(fs *memFS)) *CorruptLogError {
+		fs := build()
+		damage(fs)
+		_, err := openSegLog(fs, testDir)
+		var ce *CorruptLogError
+		if !errors.As(err, &ce) {
+			t.Fatalf("not a CorruptLogError: %v", err)
+		}
+		return ce
+	}
+	if ce := typed(cases["missing middle segment"]); ce.Segment != 2 || ce.Offset != -1 || !strings.Contains(ce.Error(), "missing") {
+		t.Fatalf("missing segment: %+v", ce)
+	}
+	if ce := typed(cases["start checkpoint byte"]); ce.Segment != 3 || ce.Offset != segHeaderSize || ce.Reason == "" {
+		t.Fatalf("damaged start checkpoint: %+v", ce)
+	}
+	if ce := typed(cases["header signature"]); ce.Segment != 3 || ce.Offset != 0 {
+		t.Fatalf("damaged header: %+v", ce)
+	}
 	// a leftover staging file is removed and is not corruption
 	fs := build()
 	fs.ns[filepath.Join(testDir, segTmpName(4))] = &memNode{vol: []byte("half a segment")}

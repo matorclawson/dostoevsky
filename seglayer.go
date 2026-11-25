@@ -302,8 +302,26 @@ func (r *frameReader) next(off int64) (typ byte, body []byte, n int, err error) 
 	return
 }
 
+// CorruptLogError says where a committed segment failed validation. It matches ErrCorruptLog with
+// errors.Is and carries the segment, the byte offset (-1 when the whole segment is meant, as for a
+// missing one) and the reason, for errors.As.
+type CorruptLogError struct {
+	Segment uint64
+	Offset  int64
+	Reason  string
+}
+
+func (e *CorruptLogError) Error() string {
+	if e.Offset < 0 {
+		return fmt.Sprintf("%v: segment %d: %s", ErrCorruptLog, e.Segment, e.Reason)
+	}
+	return fmt.Sprintf("%v: segment %d at offset %d: %s", ErrCorruptLog, e.Segment, e.Offset, e.Reason)
+}
+
+func (e *CorruptLogError) Unwrap() error { return ErrCorruptLog }
+
 func corrupt(id uint64, at int64, format string, a ...any) error {
-	return fmt.Errorf("%w: segment %d at offset %d: %s", ErrCorruptLog, id, at, fmt.Sprintf(format, a...))
+	return &CorruptLogError{Segment: id, Offset: at, Reason: fmt.Sprintf(format, a...)}
 }
 
 // scanSegment is scanSegmentCore for the active segment: it may truncate a torn tail.
@@ -518,7 +536,7 @@ func openSegLog(fs fsys, dir string) (*segLog, error) {
 	slices.Sort(ids)
 	for i := 1; i < len(ids); i++ {
 		if ids[i] != ids[i-1]+1 {
-			return nil, fmt.Errorf("%w: segment %d is missing (segments %d and %d are present)", ErrCorruptLog, ids[i-1]+1, ids[i-1], ids[i])
+			return nil, &CorruptLogError{Segment: ids[i-1] + 1, Offset: -1, Reason: fmt.Sprintf("the segment is missing (segments %d and %d are present)", ids[i-1], ids[i])}
 		}
 	}
 	l := &segLog{fs: fs, dir: dir, cache: map[uint64]*segIndex{}}

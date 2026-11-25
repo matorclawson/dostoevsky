@@ -25,11 +25,20 @@ export function reason(e) {
   else if (/timeout/i.test(name) || code === "ETIMEDOUT" || code === "ABORT_ERR") word = "timeout";
   else if (/^(ECONN|EPIPE|ENOTFOUND|EAI_)/.test(code) || /connection/i.test(name)) word = "connection";
   else if (e instanceof TypeError || e instanceof RangeError || e instanceof SyntaxError) word = "protocol";
-  // A kafkajs protocol error names its cause with a fixed upper-case type (UNKNOWN_TOPIC_OR_PARTITION) and a number:
-  // both are safe, unlike the message, and tell a missing topic from a leader election.
-  const type = typeof e?.type === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(e.type) ? `:${e.type}` : "";
-  const num = Number.isSafeInteger(e?.code) && e.code >= 0 ? `,${e.code}` : "";
-  return `${name}:${word}${type}${type ? num : ""}`;
+  const label = e?.[LABEL] ?? protocolLabel(e);
+  return `${name}:${word}${label ? ":" + label : ""}`;
+}
+
+// A kafkajs protocol error's numeric code, looked up in a FIXED list here: only these labels can ever be printed, anything
+// else is UNKNOWN (an error's own `type` text is never trusted). Tells a missing topic from a leader election.
+const PROTOCOL_LABELS = { 1: "OFFSET_OUT_OF_RANGE", 3: "UNKNOWN_TOPIC_OR_PARTITION", 5: "LEADER_NOT_AVAILABLE", 6: "NOT_LEADER_FOR_PARTITION",
+  7: "REQUEST_TIMED_OUT", 15: "COORDINATOR_NOT_AVAILABLE", 16: "NOT_COORDINATOR", 25: "UNKNOWN_MEMBER_ID", 27: "REBALANCE_IN_PROGRESS",
+  35: "UNSUPPORTED_VERSION", 36: "TOPIC_ALREADY_EXISTS", 79: "MEMBER_ID_REQUIRED" };
+export const LABEL = Symbol("protocolLabel"); // set only by our own code, so no engine error can spoof it
+export function protocolLabel(e) {
+  if (e?.name !== "KafkaJSProtocolError") return "";
+  const code = Number.isSafeInteger(e.code) ? e.code : -1;
+  return `${PROTOCOL_LABELS[code] ?? "UNKNOWN"},${code}`;
 }
 
 export class Hist {

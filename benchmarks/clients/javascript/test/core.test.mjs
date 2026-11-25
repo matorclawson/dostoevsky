@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import * as core from "../core.mjs";
 import { main } from "../worker.mjs";
-import { buildId, identity, joinWatcher, kafkaClientConfigs, ownClientName, packId, unpackId, version } from "../adapters.mjs";
+import { buildId, identity, joinWatcher, startAndJoin, kafkaClientConfigs, ownClientName, packId, unpackId, version } from "../adapters.mjs";
 
 const here = (rel) => new URL(rel, import.meta.url);
 const EXAMPLES = readFileSync(here("../../receipt_examples.txt"), "utf8").split("\n").filter((l) => l.trim() && !l.startsWith("#"));
@@ -360,14 +360,24 @@ test("a crash kafkajs will restart waits for the next join; a terminal crash rej
 test("a restartable crash that never joins ends at the budget with the crash's type for the receipt", async () => {
   const c = fakeConsumer();
   const p = joinWatcher(c, 30);
-  c.fire("crash", { error: Object.assign(new Error("x"), { type: "UNKNOWN_TOPIC_OR_PARTITION", code: 3 }), restart: true });
+  c.fire("crash", { error: Object.assign(new Error("x"), { name: "KafkaJSProtocolError", code: 3 }), restart: true });
   await assert.rejects(p, (e) => core.reason(e) === "Error:engine-error:UNKNOWN_TOPIC_OR_PARTITION,3");
 });
 
-test("reason carries a protocol error's fixed type and code but never its message or a free-text type", () => {
-  const e = Object.assign(new Error("secret message token=abc"), { name: "KafkaJSProtocolError", type: "UNKNOWN_TOPIC_OR_PARTITION", code: 3 });
+test("reason labels a kafkajs protocol error from a fixed table by its code; its type, message and any other error are never printed", () => {
+  const e = Object.assign(new Error("secret message token=abc"), { name: "KafkaJSProtocolError", type: "SECRET_TYPE", code: 3 });
   assert.equal(core.reason(e), "KafkaJSProtocolError:engine-error:UNKNOWN_TOPIC_OR_PARTITION,3");
-  assert.equal(core.reason(Object.assign(new Error("m"), { type: "has spaces and secret" })), "Error:engine-error");
+  assert.equal(core.reason(Object.assign(new Error("m"), { name: "KafkaJSProtocolError", code: 9999 })), "KafkaJSProtocolError:engine-error:UNKNOWN,9999");
+  assert.equal(core.reason(Object.assign(new Error("m"), { type: "SECRET_TYPE", code: 3 })), "Error:engine-error", "a generic error's type is not trusted");
+  assert.equal(core.reason(Object.assign(new Error("m"), { kafkaLabel: "SPOOF" })), "Error:engine-error");
+});
+
+test("a join that fails while startup is still pending is handled within the budget, not left unhandled", async () => {
+  const c = fakeConsumer();
+  const begin = Date.now();
+  await assert.rejects(startAndJoin(() => new Promise((r) => setTimeout(r, 300)), joinWatcher(c, 30)), /not joined/);
+  assert.ok(Date.now() - begin < 250, "it ended at the budget, not when startup finished");
+  await new Promise((r) => setTimeout(r, 400)); // an unhandled rejection would crash the test process here
 });
 
 test("--debug-errors is refused under the benchmark driver", async () => {

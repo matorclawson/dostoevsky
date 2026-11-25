@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AmbiguousOutcome, takeWhenItArrives } from "./core.mjs";
+import { AmbiguousOutcome, LABEL, protocolLabel, takeWhenItArrives } from "./core.mjs";
 
 const TOPIC = "events";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -111,11 +111,11 @@ export async function kafka(addr, token) {
         consumer = readerClient.consumer({ groupId: "verify" });
         // Do not read until the group has actually been joined and a partition assigned; a crash is an error with its
         // cause, not a silent wait. (A "negative timeout" warning from kafkajs's own heartbeat timer is harmless noise.)
-        const joined = joinWatcher(consumer, 60000);
-        await consumer.connect();
-        await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
-        await consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } });
-        await joined;
+        await startAndJoin(async () => {
+          await consumer.connect();
+          await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
+          await consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } });
+        }, joinWatcher(consumer, 60000));
         consumer.seek({ topic: TOPIC, partition: 0, offset: "0" }); // from the beginning, whatever the group's own position
       }
       try {
@@ -147,11 +147,17 @@ export function joinWatcher(consumer, budgetMs) {
     consumer.on(FETCH_START, () => debug.log("fetch start"));
     timer = setTimeout(() => {
       const err = new Error("consumer group not joined within the budget");
-      if (last) { err.type = last.type ?? last.name; err.code = last.code; }
+      if (last) err[LABEL] = protocolLabel(last);
       reject(err);
     }, budgetMs);
   });
   return joined.finally(() => clearTimeout(timer));
+}
+
+// Runs the startup steps and waits for the join together, so a join failure (a terminal crash or the budget) is handled
+// at once, even while connect/subscribe/run is still pending, and is never an unhandled rejection.
+export function startAndJoin(startup, joined) {
+  return Promise.all([startup(), joined]).then(() => undefined);
 }
 
 // @nats-io/transport-node + @nats-io/jetstream (the v3 client).

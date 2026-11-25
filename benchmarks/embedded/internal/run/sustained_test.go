@@ -99,9 +99,15 @@ func TestSustainedAnEngineFailureIsAResultAndIsNeverRetried(t *testing.T) {
 	if r["final_reopen_ms"] != "none" || countPrefix(lines, "reopen ") != 0 {
 		t.Fatalf("a failed engine is not reopened: %v", lines)
 	}
-	// 49 publishes succeeded before the failing one; at most two more were already in flight.
-	if acked, _ := strconv.Atoi(r["acked"]); acked < 45 || acked > 51 {
-		t.Fatalf("acked %d: the failing publish must not be counted and nothing runs on after it", acked)
+	// Exactly one publish failed and it is not counted: every other attempt was acknowledged and
+	// counted. (How many more publishes other producers squeezed in before they saw the stop is a
+	// scheduling matter, so it is not asserted.)
+	acked, _ := strconv.Atoi(r["acked"])
+	f.s.mu.Lock()
+	attempts := int(f.s.n)
+	f.s.mu.Unlock()
+	if acked < 49 || acked >= 100_000 || attempts != acked+1 {
+		t.Fatalf("acked %d of %d attempts: the failing publish must be the only one not counted, and nothing may run to the target", acked, attempts)
 	}
 }
 

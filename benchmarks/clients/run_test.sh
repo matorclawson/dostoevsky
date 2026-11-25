@@ -128,6 +128,11 @@ check "the wrappers saw the children run" "[ \$(wc -l < $t/children.log) -gt 20 
 check "the token is in no child's argv (sed, head, grep, ... all logged)" "! grep -q $SECRET $t/children.log"
 check "the diagnostic is still masked after moving the masking into the shell" "grep -q 'FAILED worker_exit_3:boom_with_the_token__token_' $t/out"
 
+for bad in WORKER_MAX=ten WORKER_MAX=0 STOP_WAIT=-5 READY_WAIT=1.5 BENCH_WINDOW=abc; do
+  run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 "$bad" CLIENT_ENGINES=dostoevsky
+  check "an invalid $bad is refused before anything starts (exit 2, no trial line)" "[ $code -eq 2 ] && [ \$(grep -c '^trial=' $t/out) -eq 0 ] && grep -q 'must be' $t/err"
+done
+
 # TERM during readiness: the server is stopped and the directory with the token is removed.
 : > "$t/argv.log"; rm -f "$t/serve.pid"
 env TMPDIR="$t/tmp" SERVE_BIN="$t/serve" WORKER_CMD_python="sh $t/worker" CLIENT_LANGS=python CLIENT_ENGINES=dostoevsky BENCH_SKIP_SMOKE=1 BENCH_ROUNDS=1 STUB_SERVE_HANG=1 STOP_WAIT=3 \

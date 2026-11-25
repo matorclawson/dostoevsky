@@ -23,7 +23,12 @@ rounds=${BENCH_ROUNDS:-5}
 serve=${SERVE_BIN:-.dev/clients/serve}
 failed=0
 umask 077
-case "$window" in ""|*[!0-9]*) echo "BENCH_WINDOW must be a whole number of seconds (0 for none), not '$window'" >&2; exit 2 ;; esac
+# Every number that bounds a wait must be a whole number, or the script refuses to start: a value like "ten" would
+# otherwise turn a deadline into no deadline.
+for v in BENCH_WINDOW:"$window" WORKER_MAX:"${WORKER_MAX:-1}" STOP_WAIT:"${STOP_WAIT:-1}" READY_WAIT:"${READY_WAIT:-1}"; do
+  case "${v#*:}" in ""|*[!0-9]*) echo "${v%%:*} must be a whole number of seconds (READY_WAIT: tenths of a second), not '${v#*:}'" >&2; exit 2 ;; esac
+done
+case "${WORKER_MAX:-1}" in 0) echo "WORKER_MAX must be at least 1" >&2; exit 2 ;; esac
 
 serve_engine() { # receipt engine -> the name serve knows it by
   case "$1" in dostoevsky) echo gateway ;; *) echo "$1" ;; esac

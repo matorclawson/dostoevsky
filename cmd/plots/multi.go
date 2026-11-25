@@ -182,7 +182,14 @@ func renderMulti(c chart, data []series, footer []string) string {
 	sort.Ints(ws)
 	step, steps := ticks(maxV)
 	top1 := step * float64(steps)
-	plotW, plotH := float64(width-left-right), float64(base-top)
+	plotW := float64(width - left - right)
+	// The vertical value labels are written upward from above the tallest dot, so the plot area
+	// keeps headroom for the longest of them below the subtitle (whose last line is at y=76).
+	plotTop := float64(top)
+	if need := 92 + textWidth(format(maxV, c.decimals), 10); need > plotTop {
+		plotTop = need
+	}
+	plotH := float64(base) - plotTop
 	y := func(v float64) float64 { return float64(base) - v/top1*plotH }
 
 	declared := declaredEngines(data)

@@ -224,8 +224,19 @@ func TestCLIChecksTheEnginesActuallyInTheReceipt(t *testing.T) {
 		t.Fatalf("an explicit exclusion was refused: %s", stderr)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "o2", "throughput.svg"))
-	if strings.Contains(string(b), "redis") || strings.Contains(string(b), "Redis") {
-		t.Error("an ignored engine was drawn")
+	svg := string(b)
+	// The "Not shown" line names the excluded engines on purpose, so assert on what is DRAWN:
+	// two legend swatches, no third color slot, and no bar or tooltip for an excluded engine.
+	if got := strings.Count(svg, `width="12" height="12"`); got != 2 {
+		t.Errorf("%d legend swatches, want 2 (dostoevsky and jetstream)", got)
+	}
+	for _, drawn := range []string{`class="s2"`, `class="s3"`, "<title>redis", "<title>sqlite", "<title>kafka", "<title>rabbitmq", "<title>valkey"} {
+		if strings.Contains(svg, drawn) {
+			t.Errorf("an ignored engine was drawn: %s", drawn)
+		}
+	}
+	if !strings.Contains(svg, "Not shown: sqlite, redis, valkey, kafka, rabbitmq (excluded with -ignore-engines)") {
+		t.Error("the excluded engines are not named")
 	}
 	// An expected engine with no line at all, even with the count checks off.
 	_, stderr, code = plots(t, bin, dir, "-receipt", r, "-section", "*", "-meta", footerOnly, "-sketch", dir+"/none", "-out", dir+"/o3",
@@ -538,6 +549,50 @@ func TestComparisonModeIsAnythingBeyondTheLegacyPair(t *testing.T) {
 		}
 		if got := comparisonMode(list); got != want {
 			t.Errorf("comparisonMode(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// Low (cx on 282300fb): when a bar reaches the top of the axis its vertical value label must not
+// run into the subtitle. The plot area keeps headroom for the longest label, measured with the
+// renderer's own estimate.
+func TestCLIVerticalValueLabelsClearTheSubtitle(t *testing.T) {
+	bin := buildPlots(t)
+	dir := t.TempDir()
+	rps := map[string]int{}
+	for k, v := range multiRPS {
+		rps[k] = v
+	}
+	rps["dostoevsky"] = 19990 // with the +1..+5 of the trials the tallest bar nearly reaches the 20,000 axis top
+	r := write(t, dir, "c.log", multiLog(rps, nil))
+	m := write(t, dir, "m.txt", multiMeta)
+	if _, stderr, code := plots(t, bin, dir, sevenArgs(r, m, dir+"/o")...); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	rotated := regexp.MustCompile(`<text x="[0-9.]+" y="([0-9.]+)" transform="rotate\(-90 [0-9.]+ [0-9.]+\)" font-size="10" font-weight="600">([^<]*)</text>`)
+	subtitle := regexp.MustCompile(`<text x="72" y="([0-9]+)" font-size="12" class="m">`)
+	for _, name := range []string{"throughput.svg", "memory.svg", "p99-latency.svg", "reopen.svg"} {
+		b, err := os.ReadFile(filepath.Join(dir, "o", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lastSubtitle := 0.0
+		for _, s := range subtitle.FindAllStringSubmatch(string(b), -1) {
+			y, _ := strconv.ParseFloat(s[1], 64)
+			if y > lastSubtitle {
+				lastSubtitle = y
+			}
+		}
+		labels := rotated.FindAllStringSubmatch(string(b), -1)
+		if lastSubtitle == 0 || len(labels) == 0 {
+			t.Fatalf("%s: found %d subtitle lines and %d vertical labels", name, len(subtitle.FindAllString(string(b), -1)), len(labels))
+		}
+		for _, l := range labels {
+			y, _ := strconv.ParseFloat(l[1], 64)
+			top := y - textWidth(l[2], 10) // the label is written upward from its baseline point
+			if top < lastSubtitle+6 {
+				t.Errorf("%s: the label %q reaches up to y=%.0f, into the subtitle whose last line is at y=%.0f", name, l[2], top, lastSubtitle)
+			}
 		}
 	}
 }

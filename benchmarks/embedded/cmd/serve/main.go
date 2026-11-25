@@ -70,7 +70,8 @@ func serve(engine, bin string, stdin io.Reader, out io.Writer) (err error) {
 	case <-sig:
 	}
 
-	kib, merr := s.Proc.PeakKiB() // read before the server goes away
+	s.Proc.Sample() // a last reading before the server is signaled
+	kib, merr := s.Proc.PeakKiB()
 	stopped = true
 	if err = s.Stop(); err != nil {
 		return fmt.Errorf("the server did not stop cleanly: %w", err)

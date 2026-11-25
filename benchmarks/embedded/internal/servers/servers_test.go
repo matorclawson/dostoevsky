@@ -26,14 +26,9 @@ func TestEachEngineStartsAnswersAsItselfAndStops(t *testing.T) {
 			if !strings.HasPrefix(s.Addr, "127.0.0.1:") || len(s.Token) != 64 {
 				t.Fatalf("addr %q token length %d", s.Addr, len(s.Token))
 			}
-			var perr error
-			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-				if _, perr = s.Proc.PeakKiB(); perr == nil {
-					break // the first sample (a ps run on macOS) can take a moment
-				}
-			}
-			if perr != nil {
-				t.Fatal(perr)
+			// No waiting: Start itself guarantees a reading.
+			if _, err := s.Proc.PeakKiB(); err != nil {
+				t.Fatal(err)
 			}
 			if err := s.Stop(); err != nil {
 				t.Fatal(err)
@@ -97,5 +92,24 @@ func TestUnknownEngineAndMissingBinary(t *testing.T) {
 	}
 	if _, err := Start("redis", Options{Dir: t.TempDir()}); err == nil {
 		t.Fatal("started without a binary")
+	}
+}
+
+// A server that answers the readiness check and is gone a moment later must still have been
+// measured: the reading is taken by Start, not by a ticker that may lose the race.
+func TestAServerThatStopsAtOnceStillHasAReading(t *testing.T) {
+	exe, _ := os.Executable()
+	for _, engine := range []string{"redis", "nats"} {
+		t.Setenv("SERVERS_STUB", engine)
+		t.Setenv("SERVERS_STUB_EXIT", "1")
+		s, err := Start(engine, Options{Bin: exe, Dir: t.TempDir(), Sample: time.Hour}) // the ticker never fires
+		if err != nil {
+			t.Fatalf("%s: %v", engine, err)
+		}
+		kib, err := s.Proc.PeakKiB()
+		s.Stop() // the exit is expected to be reported as an error or not; only the reading matters here
+		if err != nil || kib == 0 {
+			t.Fatalf("%s: no reading for a server that stopped at once: %d KiB, %v", engine, kib, err)
+		}
 	}
 }

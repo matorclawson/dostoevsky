@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // Main runs the stub when SERVERS_STUB is set and never returns; otherwise it returns.
@@ -34,6 +35,9 @@ func Main() {
 				return
 			}
 			w.WriteHeader(204)
+			if os.Getenv("SERVERS_STUB_EXIT") != "" {
+				go func() { time.Sleep(50 * time.Millisecond); os.Exit(0) }()
+			}
 		})))
 	case "redis":
 		conf := read(args[0])
@@ -77,10 +81,17 @@ func field(conf, key string) string {
 func serve(port string, handle func(net.Conn)) {
 	l, err := net.Listen("tcp", "127.0.0.1:"+port)
 	fail(err)
-	for {
+	for n := 1; ; n++ {
 		c, err := l.Accept()
 		if err != nil {
 			os.Exit(1)
+		}
+		// SERVERS_STUB_EXIT: a server that stops at once. Connection 1 is the driver's readiness
+		// probe, connection 2 its identity check; the stub answers that one and is gone.
+		if os.Getenv("SERVERS_STUB_EXIT") != "" && n == 2 {
+			handle(c)
+			c.Close()
+			os.Exit(0)
 		}
 		go func() { defer c.Close(); handle(c) }()
 	}

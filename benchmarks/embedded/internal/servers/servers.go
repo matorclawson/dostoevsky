@@ -94,6 +94,7 @@ func Start(engine string, o Options) (*Server, error) {
 		proc.Stop(5 * time.Second)
 		return nil, fmt.Errorf("%s: %w", engine, err)
 	}
+	proc.Sample() // a reading right after readiness, whatever the ticker does next
 	return s, nil
 }
 

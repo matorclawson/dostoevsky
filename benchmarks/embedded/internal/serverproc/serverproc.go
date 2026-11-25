@@ -49,6 +49,10 @@ func Start(bin string, args []string, env []string, logPath string, interval tim
 	}
 	p := &Proc{cmd: cmd, rootPid: cmd.Process.Pid, stop: make(chan struct{}), done: make(chan struct{}), exit: make(chan error, 1), peak: map[int]uint64{}}
 	go func() { p.exit <- cmd.Wait() }()
+	// One reading before Start returns, on this goroutine: a server that stops almost at once
+	// still has a measurement, and nothing depends on the ticker winning a race. The process has
+	// already been exec'd, so it is there to be read.
+	p.sampleOnce()
 	go p.sample(interval)
 	return p, nil
 }
@@ -113,6 +117,7 @@ const exitSIGTERM = 128 + int(syscall.SIGTERM)
 // Known limit: a leader that died by itself but whose cmd.Wait has not yet returned can still
 // accept the signal, so such a death can look like delivery.
 func (p *Proc) StopWith(grace time.Duration, cleanShutdown func() error) error {
+	p.sampleOnce() // a last reading before anything is signaled
 	pid := p.cmd.Process.Pid
 	var err error
 	exitedFirst := false
@@ -200,7 +205,7 @@ func (p *Proc) PeakKiB() (uint64, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.peak[p.rootPid] == 0 {
-		return 0, fmt.Errorf("server memory unavailable: no VmHWM was ever read for pid %d", p.rootPid)
+		return 0, fmt.Errorf("server memory unavailable: no %s reading was ever taken for pid %d", Source(), p.rootPid)
 	}
 	var sum uint64
 	for _, v := range p.peak {
@@ -236,6 +241,10 @@ func (p *Proc) sampleOnce() {
 	}
 	p.mu.Unlock()
 }
+
+// Sample takes one reading now, on the caller's goroutine. Call it right after readiness and
+// right before stopping the server, so a short-lived server is never left unmeasured.
+func (p *Proc) Sample() { p.sampleOnce() }
 
 // Source names how this process's memory was measured: SourceVmHWM or SourcePSSampled.
 func (p *Proc) Source() string { return Source() }

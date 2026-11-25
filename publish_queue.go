@@ -20,12 +20,6 @@ const (
 	gatherLimit = 100 * time.Microsecond
 )
 
-// Hooks so tests can drive gather without wall-clock timing.
-var (
-	gatherYield = runtime.Gosched
-	gatherNow   = time.Now
-)
-
 type queuedPublish struct {
 	ctx       context.Context
 	partition Partition
@@ -44,6 +38,27 @@ type publishQueue struct {
 	// write is attempted, before it succeeds or fails, so they are not a measure of
 	// durable records. Tests read them to check how calls are batched.
 	groupAttempts, callAttempts atomic.Int64
+	// now and yield are the clock and the scheduler yield gather uses. They are nil in
+	// production (time.Now and runtime.Gosched); a test sets them on its own queue to
+	// drive gather without wall-clock timing. They are per queue, not package globals,
+	// so a drainer left over from another test can never race with the swap.
+	now   func() time.Time
+	yield func()
+}
+
+func (q *publishQueue) clock() time.Time {
+	if q.now != nil {
+		return q.now()
+	}
+	return time.Now()
+}
+
+func (q *publishQueue) relax() {
+	if q.yield != nil {
+		q.yield()
+		return
+	}
+	runtime.Gosched()
 }
 
 func (q *publishQueue) note(size int) {
@@ -131,15 +146,15 @@ func (q *publishQueue) gather(released int) {
 	if released < 2 {
 		return
 	}
-	deadline := gatherNow().Add(gatherLimit)
+	deadline := q.clock().Add(gatherLimit)
 	for {
 		q.mu.Lock()
 		pending := len(q.pending)
 		q.mu.Unlock()
-		if pending >= released || !gatherNow().Before(deadline) {
+		if pending >= released || !q.clock().Before(deadline) {
 			return
 		}
-		gatherYield()
+		q.relax()
 	}
 }
 func (n *Node) writeQueued(batch []*queuedPublish) {

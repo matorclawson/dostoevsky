@@ -277,15 +277,13 @@ func TestConcurrentPublishAcrossRetainAndReopen(t *testing.T) {
 	}
 }
 
-// fakeGather replaces the gather clock and yield for one test and counts yields.
-func fakeGather(t *testing.T, yield func(now *time.Time)) *int {
-	t.Helper()
-	oldYield, oldNow := gatherYield, gatherNow
+// fakeGather gives one queue a fake clock and yield and counts the yields. The hooks are
+// fields of that queue, so nothing global is swapped.
+func fakeGather(q *publishQueue, yield func(now *time.Time)) *int {
 	now := time.Unix(0, 0)
 	yields := 0
-	gatherNow = func() time.Time { return now }
-	gatherYield = func() { yields++; yield(&now) }
-	t.Cleanup(func() { gatherYield, gatherNow = oldYield, oldNow })
+	q.now = func() time.Time { return now }
+	q.yield = func() { yields++; yield(&now) }
 	return &yields
 }
 
@@ -299,8 +297,8 @@ func queueArrivals(q *publishQueue, count int, tag string) {
 
 // A lone caller never waits: gather returns before looking at the queue.
 func TestGatherDoesNotDelayALoneCaller(t *testing.T) {
-	yields := fakeGather(t, func(*time.Time) { t.Error("a lone caller yielded") })
 	var q publishQueue
+	yields := fakeGather(&q, func(*time.Time) { t.Error("a lone caller yielded") })
 	q.gather(1)
 	q.gather(0)
 	if *yields != 0 {
@@ -311,7 +309,7 @@ func TestGatherDoesNotDelayALoneCaller(t *testing.T) {
 // gather returns as soon as about as many calls are pending as were released.
 func TestGatherStopsWhenTheReleasedCallersHaveReturned(t *testing.T) {
 	var q publishQueue
-	yields := fakeGather(t, func(*time.Time) { queueArrivals(&q, 1, "a") }) // one caller returns per look
+	yields := fakeGather(&q, func(*time.Time) { queueArrivals(&q, 1, "a") }) // one caller returns per look
 	q.gather(4)
 	if *yields != 4 || len(q.pending) != 4 {
 		t.Fatalf("%d yields, %d pending; want it to stop at 4 and 4", *yields, len(q.pending))
@@ -321,7 +319,7 @@ func TestGatherStopsWhenTheReleasedCallersHaveReturned(t *testing.T) {
 // With no arrivals gather gives up at gatherLimit, so the wait is bounded.
 func TestGatherIsBounded(t *testing.T) {
 	var q publishQueue
-	yields := fakeGather(t, func(now *time.Time) { *now = now.Add(gatherLimit / 4) })
+	yields := fakeGather(&q, func(now *time.Time) { *now = now.Add(gatherLimit / 4) })
 	q.gather(8)
 	if *yields < 3 || *yields > 5 || len(q.pending) != 0 {
 		t.Fatalf("%d yields, %d pending; want about four looks of gatherLimit/4 each and no arrivals", *yields, len(q.pending))
@@ -342,7 +340,7 @@ func TestDrainerTakesGatheredCallersAsOneGroup(t *testing.T) {
 		first[i] = pending(fmt.Sprintf("first-%d", i), "v")
 	}
 	arrived := false
-	fakeGather(t, func(now *time.Time) {
+	fakeGather(&n.publishes, func(now *time.Time) {
 		if !arrived { // the four released callers come back while the drainer gathers
 			arrived = true
 			queueArrivals(&n.publishes, 4, "second")

@@ -167,6 +167,20 @@ func TestReopenBreakdown(t *testing.T) {
 	report("walk_plus_crc32c", timeIt(rounds, func() { walk(false, true) }))
 	report("walk_plus_crc_plus_json_decode", timeIt(rounds, func() { walk(true, true) }))
 	report("json_decode_alone", timeIt(rounds, func() { walk(true, false) }))
+	report("scanner_alone", timeIt(rounds, func() {
+		var sc recordScanner
+		declined := 0
+		for at := 0; at < len(data); {
+			size := int(binary.BigEndian.Uint32(data[at+8:]))
+			if _, _, _, ok := sc.scan(data[at+20 : at+20+size]); !ok {
+				declined++ // the manifest frame is not a Record frame
+			}
+			at += 20 + size
+		}
+		if declined > 1 {
+			t.Fatalf("the scanner declined %d frames the workload writes", declined)
+		}
+	}))
 
 	f, err := os.OpenFile(path, os.O_RDWR, 0600)
 	if err != nil {

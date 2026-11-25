@@ -56,3 +56,20 @@ func TestMemoryNeedsAServerProcess(t *testing.T) {
 		t.Fatal("server memory was reported without a server")
 	}
 }
+
+// The headline control is the DEFAULT: the gateway as the language cells get it, unpinned, label "gateway".
+// A pinned run is a separate row and only when asked for.
+func TestTheGatewayControlIsUnpinnedByDefaultAndPinnedOnlyOnRequest(t *testing.T) {
+	t.Setenv("BENCH_GATEWAY_GOMAXPROCS", "")
+	if engineLabel() != "gateway" || gatewayEnv() != nil {
+		t.Fatalf("default: label %q env %v", engineLabel(), gatewayEnv())
+	}
+	t.Setenv("BENCH_GATEWAY_GOMAXPROCS", "unpinned")
+	if engineLabel() != "gateway" || gatewayEnv() != nil {
+		t.Fatalf("unpinned: label %q env %v", engineLabel(), gatewayEnv())
+	}
+	t.Setenv("BENCH_GATEWAY_GOMAXPROCS", "1")
+	if engineLabel() != "gateway-pinned1" || len(gatewayEnv()) != 1 || gatewayEnv()[0] != "GOMAXPROCS=1" {
+		t.Fatalf("pinned: label %q env %v", engineLabel(), gatewayEnv())
+	}
+}

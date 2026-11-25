@@ -5,7 +5,7 @@
 // this command is the whole cost of going through the gateway: HTTP, a process boundary, and a
 // longer reopen path. What is equalized and what still differs:
 //
-//   - HEADLINE control (BENCH_GATEWAY_GOMAXPROCS=unpinned): the gateway exactly as the language cells get it (the serve
+//   - HEADLINE control (the default, BENCH_GATEWAY_GOMAXPROCS unset): the gateway exactly as the language cells get it (the serve
 //     driver, no GOMAXPROCS), label "gateway". The variant below is a separate row labelled "gateway-pinned1".
 //   - CPU: the embedded row runs with GOMAXPROCS=2. Here the harness and the gateway each get
 //     GOMAXPROCS=1 (BENCH_GATEWAY_GOMAXPROCS for the gateway, GOMAXPROCS for the harness), so
@@ -116,32 +116,29 @@ func (s store) Close() {
 	}
 }
 
-// gatewayProcs is the gateway's CPU budget: BENCH_GATEWAY_GOMAXPROCS, default 1 (half of the
-// embedded row's 2, the other half being the harness's).
-func gatewayProcs() string {
-	if v := os.Getenv("BENCH_GATEWAY_GOMAXPROCS"); v != "" {
-		return v
+// pinnedProcs is the explicit GOMAXPROCS of the equal-budget variant (BENCH_GATEWAY_GOMAXPROCS=1), or "" for the HEADLINE
+// control: the gateway exactly as the language cells get it (the serve driver starts it with no GOMAXPROCS), the default,
+// label "gateway". A pinned run is a separate, labelled row ("gateway-pinned1"), only when asked for.
+func pinnedProcs() string {
+	v := os.Getenv("BENCH_GATEWAY_GOMAXPROCS")
+	if v == "unpinned" {
+		return ""
 	}
-	return "1"
+	return v
 }
 
-// unpinned reports whether the gateway runs exactly as it does for the language cells (the serve driver starts it with no
-// GOMAXPROCS): BENCH_GATEWAY_GOMAXPROCS=unpinned. That is the HEADLINE control; the pinned equal-budget variant is a
-// separate, labelled row ("gateway-pinned1").
-func unpinned() bool { return os.Getenv("BENCH_GATEWAY_GOMAXPROCS") == "unpinned" }
-
 func gatewayEnv() []string {
-	if unpinned() {
-		return nil
+	if p := pinnedProcs(); p != "" {
+		return []string{"GOMAXPROCS=" + p}
 	}
-	return []string{"GOMAXPROCS=" + gatewayProcs()}
+	return nil
 }
 
 func engineLabel() string {
-	if unpinned() {
-		return "gateway"
+	if p := pinnedProcs(); p != "" {
+		return "gateway-pinned" + p
 	}
-	return "gateway-pinned1"
+	return "gateway"
 }
 
 func main() {

@@ -42,7 +42,7 @@ run_engine() { # engine workers
  case "$1" in
   dostoevsky) .dev/embedded/dost -workers "$2" -count "$count" ;;
   jetstream) .dev/embedded/jet -workers "$2" -count "$count" ;;
-  gateway) BENCH_GATEWAY_GOMAXPROCS=unpinned BENCH_SERVER_BIN="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}" .dev/embedded/gateway -workers "$2" -count "$count" ;;
+  gateway) BENCH_SERVER_BIN="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}" .dev/embedded/gateway -workers "$2" -count "$count" ;;
   gateway-pinned1) GOMAXPROCS=1 BENCH_GATEWAY_GOMAXPROCS=1 BENCH_SERVER_BIN="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}" .dev/embedded/gateway -workers "$2" -count "$count" ;;
   sqlite) .dev/embedded/sqlite -workers "$2" -count "$count" ;;
   redis) BENCH_ENGINE_LABEL=redis BENCH_SERVER_BIN="${REDIS_BIN:?set REDIS_BIN}" .dev/embedded/redis -workers "$2" -count "$count" ;;

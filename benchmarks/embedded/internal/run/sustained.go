@@ -229,8 +229,10 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			b.BindContext(ctx)
 		}
 	}
-	var over atomic.Bool // the loop has ended: a reopen still waiting for the lock does nothing
-	noClose := false // set when a retention is still running at the end: closing under it would be a bug
+	// over: the loop has ended, so a background reopen still waiting for the lock does nothing (the final reopen is exempt).
+	var over atomic.Bool
+	// noClose: a retention is still running at the end, and closing under it would be a bug.
+	noClose := false
 	closeStore := func() (cerr error) {
 		if s == nil || closed || noClose {
 			return nil
@@ -419,7 +421,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		fail := func(kind, format string, a ...any) *stopInfo {
 			return &stopInfo{kind, fmt.Sprintf(format, a...), time.Now()}
 		}
-		if over.Load() { // the run ended while this reopen waited for the lock: it must not touch the store now
+		if over.Load() && !final { // the run ended while a background reopen waited for the lock: it must not touch the store now
 			return nil
 		}
 		if me := checkMemory(); me != nil {
@@ -455,8 +457,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	}
 
 	var retaining atomic.Bool
-	var retentionWG sync.WaitGroup // background work: retention and interval reopens
-	var fenced atomic.Bool // set once the run is over: no retention starts after it
+	// retentionWG joins all background work (retention, interval reopens, bucket telemetry); fenced: no new one starts once the run is over.
+	var retentionWG sync.WaitGroup
+	var fenced atomic.Bool
 	retain := func() {
 		defer retentionWG.Done()
 		defer retaining.Store(false)

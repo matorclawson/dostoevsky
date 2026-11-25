@@ -451,3 +451,61 @@ func BenchmarkDecodeRecordJSON(b *testing.B) {
 		}
 	}
 }
+
+// scan3 stands in for the scanner the segment layer will have: it walks frames, treats a verified
+// short frame at the end as a torn append to truncate at, and anything else as corruption.
+func scan3(b []byte) (good int, torn bool, err error) {
+	for good < len(b) {
+		_, _, n, e := readFrame3(b[good:])
+		switch {
+		case e == nil:
+			good += n
+		case errors.Is(e, errFrame3Short):
+			return good, true, nil
+		default:
+			return good, false, e
+		}
+	}
+	return good, false, nil
+}
+
+// cc PR 30 M1: corrupted lengths at every offset near the end of a file must be reported, never
+// truncated as a torn tail (a torn tail is dropped; corruption is an error).
+func TestFrame3ScanNeverTruncatesAfterADamagedByte(t *testing.T) {
+	var file []byte
+	var starts []int
+	for i, v := range [][]byte{[]byte("a"), bytes.Repeat([]byte("b"), 300), nil, bytes.Repeat([]byte("c"), 40), []byte("last-record")} {
+		starts = append(starts, len(file))
+		var err error
+		if file, err = appendRecord3(file, record3{Partition: 1, Offset: uint64(i), Value: v}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if good, torn, err := scan3(file); good != len(file) || torn || err != nil {
+		t.Fatalf("the intact file: %d %v %v", good, torn, err)
+	}
+	// every bit of every byte of the last three frames
+	for i := starts[len(starts)-3]; i < len(file); i++ {
+		for bit := 0; bit < 8; bit++ {
+			bad := append([]byte(nil), file...)
+			bad[i] ^= 1 << bit
+			good, torn, err := scan3(bad)
+			if torn {
+				t.Fatalf("bit %d of byte %d (of %d): damage was classified as a torn tail and would be truncated at %d", bit, i, len(file), good)
+			}
+			if err == nil {
+				t.Fatalf("bit %d of byte %d: damage went unnoticed", bit, i)
+			}
+		}
+	}
+	// a real torn append, at every length of the last frame, is truncated at that frame's start
+	last := starts[len(starts)-1]
+	for cut := last + 1; cut < len(file); cut++ {
+		if good, torn, err := scan3(file[:cut]); good != last || !torn || err != nil {
+			t.Fatalf("cut at %d: good %d torn %v err %v, want %d true nil", cut, good, torn, err, last)
+		}
+	}
+	if good, torn, err := scan3(file[:last]); good != last || torn || err != nil {
+		t.Fatalf("a file ending on a frame boundary: %d %v %v", good, torn, err)
+	}
+}

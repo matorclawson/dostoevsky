@@ -347,6 +347,8 @@ func requireComparisonMeta(engines []string, meta map[string]string) error {
 	need("rabbitmq", "RabbitMQ's durability qualifier", "durability per vendor default, not verified")
 	need("rabbitmq", "the Erlang provenance", "Erlang")
 	need("kafka", "Kafka's flush qualifier", "fsync per message inferred")
+	need("redpanda", "Redpanda's durability qualifier", "fsync per acks=all batch, documented, not independently observed")
+	need("redpanda", "Redpanda's package provenance", "vendor-signed, key not independently rooted")
 	if len(missing) > 0 {
 		return fmt.Errorf("the meta file lacks what every multi-engine chart must carry: %s", strings.Join(missing, "; "))
 	}

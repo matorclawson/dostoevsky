@@ -6,6 +6,7 @@
 #   VALKEY_BIN=/opt/bench/valkey-9.2.0/bin/valkey-server \
 #   KAFKA_HOME=/opt/bench/kafka_2.13-4.4.0 JAVA_HOME=/opt/bench/jdk-21 \
 #   RABBIT_HOME=/opt/bench/rabbitmq_server-4.4.1 \
+#   REDPANDA_HOME=/opt/bench/redpanda-26.3.1/opt/redpanda [REDPANDA_LOADER=ld] [REDPANDA_MEMORY=1G] \
 #   sh benchmarks/comparison/run.sh
 # A smoke pass (one 200-record trial per engine and producer count) runs first and stops
 # the run with exit 3 if anything fails. Every trial prints one receipt line. A trial that fails is printed as a
@@ -28,6 +29,7 @@ run_engine() { # engine workers
   redis) BENCH_ENGINE_LABEL=redis BENCH_SERVER_BIN="${REDIS_BIN:?set REDIS_BIN}" .dev/embedded/redis -workers "$2" -count "$count" ;;
   valkey) BENCH_ENGINE_LABEL=valkey BENCH_SERVER_BIN="${VALKEY_BIN:?set VALKEY_BIN}" .dev/embedded/redis -workers "$2" -count "$count" ;;
   kafka) BENCH_ENGINE_LABEL=kafka BENCH_KAFKA_HOME="${KAFKA_HOME:?set KAFKA_HOME}" BENCH_JAVA_HOME="${JAVA_HOME:?set JAVA_HOME}" .dev/embedded/kafka -workers "$2" -count "$count" ;;
+  redpanda) BENCH_ENGINE_LABEL=redpanda BENCH_REDPANDA_HOME="${REDPANDA_HOME:?set REDPANDA_HOME}" BENCH_REDPANDA_LOADER="${REDPANDA_LOADER:-}" BENCH_REDPANDA_MEMORY="${REDPANDA_MEMORY:-1G}" BENCH_REDPANDA_OVERPROVISIONED="${REDPANDA_OVERPROVISIONED:-0}" .dev/embedded/redpanda -workers "$2" -count "$count" ;;
   rabbitmq) BENCH_ENGINE_LABEL=rabbitmq BENCH_RABBIT_HOME="${RABBIT_HOME:?set RABBIT_HOME}" .dev/embedded/rabbit -workers "$2" -count "$count" ;;
   *) echo "unknown engine $1" >&2; return 2 ;;
  esac

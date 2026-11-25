@@ -196,3 +196,20 @@ func TestAlternativeKeysAndEngineOrder(t *testing.T) {
 		t.Fatalf("series order %v", got)
 	}
 }
+
+// An eighth engine has a palette slot, and Redpanda's chart cannot lose its two qualifiers.
+func TestRedpandaQualifiersAreRequired(t *testing.T) {
+	if r := engineRank("redpanda"); r != len(engineOrder)-1 || r != 7 {
+		t.Fatalf("redpanda rank %d in %v", r, engineOrder)
+	}
+	meta := map[string]string{"label.redpanda": "Redpanda 26.3", "arch.redpanda": "server, loopback"}
+	err := requireComparisonMeta([]string{"redpanda"}, meta)
+	if err == nil || !strings.Contains(err.Error(), "fsync per acks=all batch, documented, not independently observed") || !strings.Contains(err.Error(), "vendor-signed, key not independently rooted") {
+		t.Fatalf("missing qualifiers were accepted: %v", err)
+	}
+	meta["note.1"] = "Redpanda: fsync per acks=all batch, documented, not independently observed"
+	meta["note.2"] = "Redpanda: vendor-signed, key not independently rooted"
+	if err := requireComparisonMeta([]string{"redpanda"}, meta); err != nil {
+		t.Fatal(err)
+	}
+}

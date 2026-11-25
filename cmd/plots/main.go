@@ -149,7 +149,7 @@ func collect(trials []trial, key string, scale float64) []series {
 }
 
 // engineOrder fixes the series order and with it each engine's color.
-var engineOrder = []string{"dostoevsky", "jetstream", "sqlite", "redis", "valkey", "kafka", "rabbitmq"}
+var engineOrder = []string{"dostoevsky", "jetstream", "sqlite", "redis", "valkey", "kafka", "rabbitmq", "redpanda"}
 
 func engineRank(e string) int {
 	for i, x := range engineOrder {

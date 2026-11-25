@@ -8,6 +8,9 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import * as core from "./core.mjs";
 
+// A longer window overflows the nanosecond arithmetic (seconds times 1e9 reaches Infinity, which BigInt refuses).
+export const MAX_WINDOW_SECONDS = 24 * 3600;
+
 export async function main(argv, env = process.env, out = (s) => console.log(s), engines = null) {
   let args;
   try {
@@ -19,8 +22,8 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
   const workers = Number(args.workers), target = Number(args.target), windowS = Number(args.window);
   // Whole numbers a double holds exactly, and a finite window: "--workers 1e9999" or "--target 2.5" is a usage error.
   if (!args.engine || !args.addr || !Number.isSafeInteger(workers) || workers < 1 || !Number.isSafeInteger(target) || target < 1
-      || !Number.isFinite(windowS) || windowS < 0) {
-    console.error("usage: --engine E --addr host:port [--workers N>=1, an integer] [--target N>=1, an integer] [--window S>=0, finite] [--require-known-build]");
+      || !(windowS >= 0 && windowS <= MAX_WINDOW_SECONDS)) { // NaN and Infinity fail the comparison
+    console.error("usage: --engine E --addr host:port [--workers N>=1, an integer] [--target N>=1, an integer] [--window S, 0 to 86400] [--require-known-build]");
     return 2;
   }
   engines ??= (await import("./adapters.mjs")).ENGINES;

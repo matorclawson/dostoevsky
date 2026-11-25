@@ -247,7 +247,7 @@ test("the build id is a commit (or unknown outside a checkout)", () => {
 });
 
 test("workers and target must be whole numbers and the window finite", async () => {
-  for (const bad of [["--workers", "1.5"], ["--workers", "1e9999"], ["--workers", "abc"], ["--target", "2.5"], ["--target", "0"], ["--window", "Infinity"], ["--window", "-1"]]) {
+  for (const bad of [["--workers", "1.5"], ["--workers", "1e9999"], ["--workers", "abc"], ["--target", "2.5"], ["--target", "0"], ["--window", "Infinity"], ["--window", "-1"], ["--window", "86401"], ["--window", "1e300"], ["--window", "NaN"]]) {
     assert.equal((await trial(["--engine", "memory", "--addr", "x:1", ...bad], memory()))[0], 2, bad.join(" "));
   }
 });
@@ -259,4 +259,10 @@ test("a gated run refuses an unknown client build", async () => {
   const [code, lines] = await trial(["--engine", "memory", "--addr", "x:1", "--target", "5"], unknown);
   assert.equal(code, 0);
   assert.match(lines[0], /client_build=unknown/);
+});
+
+test("a window of exactly 24 h is accepted, and the run still ends at its target", async () => {
+  const [code, lines] = await trial(["--engine", "memory", "--addr", "x:1", "--target", "3", "--window", "86400"], memory());
+  assert.equal(code, 0);
+  assert.match(lines[0], /stop=reached/);
 });

@@ -13,7 +13,7 @@ sequenceDiagram
     participant C as Publish C
     participant D as Publish D
     participant J as Journal
-    A->>J: node idle: write and sync inline
+    A->>J: lock free, no drainer: write and sync inline
     B->>B: arrives during A's write: claims the queue, waits for the node lock
     C->>C: arrives while the queue is active: queued
     D->>D: queued
@@ -23,21 +23,23 @@ sequenceDiagram
     C->>J: a drainer takes C and D: one write, one sync
     J-->>C: acknowledged
     J-->>D: acknowledged
+    Note over C,D: released callers get up to 100 microseconds to come back before the drainer takes the next group
 ```
 
-This is how the code behaves on main. The first contender (B) writes alone; callers that arrive once a queue is active share a group.
+This is how the code behaves on main. The first contender (B) writes alone; callers that join the queue share a group, and the drainer waits briefly for the callers it just released so that the next group is as full as the load allows.
 
-- A call that finds the node lock free writes inline, with no queue bookkeeping (on main this fast path is a bare `TryLock`).
+- A call that finds no drainer active and the node lock free writes inline, with no queue bookkeeping. While a drainer is active the call joins the queue instead: it must not write alone in the gap between two groups.
 - A call that finds the node busy and no queue active becomes the first contender: it marks the queue active, waits for the node lock and writes its own record by itself.
 - Calls that arrive while a queue is active wait in a bounded queue: at most 64 calls and 1 MiB of topic, key, ID and value bytes. When it is full, further callers wait on the node lock, which is the backpressure.
-- After the first contender's write, a drainer goroutine takes everything queued, encodes it into one buffer, writes it, syncs once and releases every caller in the group with its own receipt. That single write is the eligible-batch path: if validating the batch fails (wrong owner, a conflicting ID, invalid input, a limit), the calls are written one by one instead, so one bad call cannot reject its neighbors; a call that was cancelled before the group formed, or that repeats an ID already written, needs no write. The drainer keeps taking groups while calls keep arriving; when the queue is empty it hands the queue back and the next call finds a free lock.
+- After the first contender's write, a drainer goroutine takes everything queued, encodes it into one buffer, writes it, syncs once and releases every caller in the group with its own receipt. That single write is the eligible-batch path: if validating the batch fails (wrong owner, a conflicting ID, invalid input, a limit), the calls are written one by one instead, so one bad call cannot reject its neighbors; a call that was cancelled before the group formed, or that repeats an ID already written, needs no write.
+- **Gathering.** With many synchronous producers every caller of a group is waiting for that group, so the queue is empty the instant the group is released. A drainer that took the empty queue would exit, the next arrival would write alone and the rest would pile up behind it, so groups would alternate between one and many. After releasing a group of two or more, the drainer therefore waits for about as many calls to be pending as it released, or 100 microseconds, whichever comes first, before it takes the next group. A single caller never waits, and the wait happens after the group's callers were released, so it never delays an acknowledgment. When the queue is empty at the end of a wait, the drainer hands the queue back and the next call finds a free lock.
 - Nobody is acknowledged before the sync that covers their record. If the sync fails the whole group fails and the node refuses further writes until it is reopened.
 
-With one producer there is nothing to share, so throughput is bounded by one sync per record. With many producers, groups of queued callers share a sync, so each sync covers many records. The [publisher gate](publisher-gate.md) measures this: medians of 4,005, 13,252 and 36,422 messages/s at 1, 8 and 32 producers.
+With one producer there is nothing to share, so throughput is bounded by one sync per record. With many producers, groups of queued callers share a sync, so each sync covers many records. The [publisher gate](publisher-gate.md) measures this: medians of 4,005, 13,252 and 36,422 messages/s at 1, 8 and 32 producers. **Those figures were measured before the drainer gathered.** A same-host A/B on production-03 of the build without and with gathering showed higher throughput at 8 and 32 producers and no change at 1 producer; its receipts will be added to this repository with the final comparison run, and the numbers on this page will then be replaced.
 
 ![Median messages per second at 1, 8 and 32 producers for Dostoevsky and embedded JetStream.](img/throughput.svg)
 
-Code: `publish_queue.go`. Tests: `TestQueuedPublishIsolation`, `TestQueuedWriteFailure`, `TestQueuedSyncFailureAfterWrite`, `TestQueuedAdmissionAndCancel`, `TestConcurrentPublishKill`.
+Code: `publish_queue.go`. Tests: `TestQueuedPublishIsolation`, `TestQueuedWriteFailure`, `TestQueuedSyncFailureAfterWrite`, `TestQueuedAdmissionAndCancel`, `TestConcurrentPublishKill`, and for the gathering `TestGatherDoesNotDelayALoneCaller`, `TestGatherStopsWhenTheReleasedCallersHaveReturned`, `TestGatherIsBounded` and `TestDrainerTakesGatheredCallersAsOneGroup`.
 
 A group is not a transaction. A crash can persist a prefix of it, so retry each publication with its original ID.
 

@@ -106,6 +106,7 @@ node, err = dostoevsky.Open(dir, cfg)
 if err != nil {
 	panic(err)
 }
+defer node.Close() // the setup's defer closes the first node, which was closed above
 pos, _ := node.Position(ctx, p, "billing")
 fmt.Println(pos.Next, string(pos.State))
 ```

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"html"
 	"sort"
@@ -19,10 +20,17 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 .d0{fill:var(--fg);stroke:var(--c0);stroke-width:1.2}.d1{fill:var(--fg);stroke:var(--c1);stroke-width:1.2}.d2{fill:var(--fg);stroke:var(--c2);stroke-width:1.2}.d3{fill:var(--fg);stroke:var(--c3);stroke-width:1.2}.d4{fill:var(--fg);stroke:var(--c4);stroke-width:1.2}.d5{fill:var(--fg);stroke:var(--c5);stroke-width:1.2}.d6{fill:var(--fg);stroke:var(--c6);stroke-width:1.2}.d7{fill:var(--fg);stroke:var(--c7);stroke-width:1.2}
 </style>`
 
-// failureNote lists, for one producer count, every engine with failed trials. An engine
-// whose trials all failed has no bar and no series, so the names come from the failures
-// as well as from the data. Failed trials are shown, never dropped.
-func failureNote(data []series, w int) string {
+// textEm is the average glyph width in em that wrap and the tests use to estimate how wide
+// a line of text is: width = characters x font size x textEm.
+const textEm = 0.55
+
+func textWidth(s string, size float64) float64 { return float64(len([]rune(s))) * size * textEm }
+
+// failureLines lists, for one producer count, one line per engine with failed trials,
+// each wrapped to fit inside one group's width. An engine whose trials all failed has no
+// bar and no series, so the names come from the failures as well as from the data. Failed
+// trials are shown, never dropped.
+func failureLines(data []series, w int, groupW float64) []string {
 	seen := map[string]bool{}
 	var names []string
 	for _, s := range data {
@@ -35,13 +43,26 @@ func failureNote(data []series, w int) string {
 		}
 	}
 	sort.SliceStable(names, func(i, j int) bool { return engineRank(names[i]) < engineRank(names[j]) })
-	var parts []string
+	maxChars := int((groupW - 12) / (10 * textEm)) // font size 10, with a margin at each side
+	var lines []string
 	for _, e := range names {
 		if n := failedTrials[e][w]; n > 0 {
-			parts = append(parts, fmt.Sprintf("%s: %d failed", label(e), n))
+			lines = append(lines, wrap([]string{fmt.Sprintf("%s: %d failed", label(e), n)}, maxChars)...)
 		}
 	}
-	return strings.Join(parts, "; ")
+	return lines
+}
+
+// failureRows is the most failure lines any one producer count needs, which decides how far
+// the legend and footer move down.
+func failureRows(data []series, ws []int, groupW float64) int {
+	most := 0
+	for _, w := range ws {
+		if k := len(failureLines(data, w, groupW)); k > most {
+			most = k
+		}
+	}
+	return most
 }
 
 // seriesLabel is the legend text: the engine's label and, when the meta file says it,
@@ -93,7 +114,12 @@ func renderMulti(c chart, data []series, footer []string) string {
 	}
 	alt := strings.Replace(c.alt, "for Dostoevsky and embedded JetStream", "for "+strings.Join(names, ", "), 1)
 	footer = wrap(footer, 112)
+	groupW := plotW / float64(len(ws))
+	failRows := failureRows(data, ws, groupW)
 	legendY := base + 50
+	if failRows > 1 {
+		legendY += 12 * (failRows - 1)
+	}
 	footerY := legendY + 18*rows + 14
 	h := footerY + 15*len(footer) + 10
 	var b strings.Builder
@@ -116,13 +142,12 @@ func renderMulti(c chart, data []series, footer []string) string {
 		fmt.Fprintf(&b, `<line class="g" x1="%d" x2="%d" y1="%.1f" y2="%.1f"/><text class="m" x="%d" y="%.1f" font-size="11" text-anchor="end">%s</text>`+"\n",
 			left, width-right, y(v), y(v), left-8, y(v)+4, format(v, stepDecimals(step)))
 	}
-	groupW := plotW / float64(len(ws))
 	barW := groupW*0.84/float64(n) - 3
 	for gi, w := range ws {
 		gx := float64(left) + groupW*float64(gi)
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="13" text-anchor="middle">%d producer%s</text>`+"\n", gx+groupW/2, base+22, w, plural(w))
-		if note := failureNote(data, w); note != "" {
-			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" text-anchor="middle" class="f">%s</text>`+"\n", gx+groupW/2, base+36, html.EscapeString(note))
+		for i, line := range failureLines(data, w, groupW) {
+			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" class="f">%s</text>`+"\n", gx+6, base+36+i*12, html.EscapeString(line))
 		}
 		for si, s := range data {
 			vs := s.values[w]
@@ -208,6 +233,50 @@ func requireComparisonMeta(engines []string, meta map[string]string) error {
 	need("kafka", "Kafka's flush qualifier", "fsync per message inferred")
 	if len(missing) > 0 {
 		return fmt.Errorf("the meta file lacks what every multi-engine chart must carry: %s", strings.Join(missing, "; "))
+	}
+	return nil
+}
+
+// checkEngineSet compares the engines that actually appear in the receipt (in any line,
+// valid or failed) with the expected list. An engine that appears but is neither expected
+// nor deliberately ignored is refused, so a chart cannot silently leave one out; an expected
+// engine with no line at all is refused, so a chart cannot silently lack one.
+func checkEngineSet(trials []trial, expected, ignored []string) error {
+	present := map[string]bool{}
+	for _, t := range trials {
+		if e := t["engine"]; e != "" {
+			present[e] = true
+		}
+	}
+	known := map[string]bool{}
+	for _, e := range expected {
+		known[e] = true
+	}
+	for _, e := range ignored {
+		known[e] = true
+	}
+	var extra, absent []string
+	for e := range present {
+		if !known[e] {
+			extra = append(extra, e)
+		}
+	}
+	for _, e := range expected {
+		if !present[e] {
+			absent = append(absent, e)
+		}
+	}
+	sort.Strings(extra)
+	sort.Strings(absent)
+	var problems []string
+	if len(extra) > 0 {
+		problems = append(problems, fmt.Sprintf("engines %s appear in the receipt but not in -engines (add them, or leave them out on purpose with -ignore-engines)", strings.Join(extra, ", ")))
+	}
+	if len(absent) > 0 {
+		problems = append(problems, fmt.Sprintf("engines %s are expected but have no line in the receipt", strings.Join(absent, ", ")))
+	}
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
 }

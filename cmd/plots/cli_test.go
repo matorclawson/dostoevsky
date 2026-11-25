@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -193,6 +196,96 @@ func TestCLIExistingChartsAreByteIdentical(t *testing.T) {
 			}
 			if !bytes.Equal(want, got) {
 				t.Errorf("%s/%s changed: the generator no longer reproduces the committed chart", set.committed, name)
+			}
+		}
+	}
+}
+
+// M1 (cx delta 288200): the engines checked are the ones in the receipt. The same complete
+// seven-engine receipt with a footer-only meta file must not chart under the default engine
+// list, and an expected engine with no line must not be silently absent.
+func TestCLIChecksTheEnginesActuallyInTheReceipt(t *testing.T) {
+	bin := buildPlots(t)
+	dir := t.TempDir()
+	r := write(t, dir, "c.log", multiLog(multiRPS, nil))
+	footerOnly := write(t, dir, "footer.txt", "footer.1=h\ncommand=x\n")
+	_, stderr, code := plots(t, bin, dir, "-receipt", r, "-section", "*", "-meta", footerOnly, "-sketch", dir+"/none", "-out", dir+"/o1")
+	if code == 0 || !strings.Contains(stderr, "not in -engines") {
+		t.Fatalf("seven engines charted under the default list: exit %d, %s", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "o1", "throughput.svg")); err == nil {
+		t.Fatal("a chart was drawn before the engine set was checked")
+	}
+	// Leaving engines out on purpose is allowed, and then only the charted ones are drawn.
+	_, stderr, code = plots(t, bin, dir, "-receipt", r, "-section", "*", "-meta", footerOnly, "-sketch", dir+"/none", "-out", dir+"/o2",
+		"-ignore-engines", "sqlite,redis,valkey,kafka,rabbitmq")
+	if code != 0 {
+		t.Fatalf("an explicit exclusion was refused: %s", stderr)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "o2", "throughput.svg"))
+	if strings.Contains(string(b), "redis") || strings.Contains(string(b), "Redis") {
+		t.Error("an ignored engine was drawn")
+	}
+	// An expected engine with no line at all, even with the count checks off.
+	_, stderr, code = plots(t, bin, dir, "-receipt", r, "-section", "*", "-meta", footerOnly, "-sketch", dir+"/none", "-out", dir+"/o3",
+		"-engines", "dostoevsky,jetstream,nosuch", "-ignore-engines", "sqlite,redis,valkey,kafka,rabbitmq", "-trials", "0")
+	if code == 0 || !strings.Contains(stderr, "nosuch") {
+		t.Fatalf("an expected engine with no line was accepted: exit %d, %s", code, stderr)
+	}
+}
+
+// M3 (cx delta 288200): no text of the failure annotation runs off the chart. The widest line
+// is measured with the same estimate the renderer wraps to, on the all-failed fixture.
+func TestCLIFailureNotesFitTheChart(t *testing.T) {
+	bin := buildPlots(t)
+	dir := t.TempDir()
+	failed := map[string]bool{}
+	for _, e := range sevenEngines {
+		for tr := 1; tr <= 5; tr++ {
+			failed[e+"/32/"+string(rune('0'+tr))] = true
+			failed[e+"/8/"+string(rune('0'+tr))] = true
+		}
+	}
+	r := write(t, dir, "c.log", multiLog(multiRPS, failed))
+	m := write(t, dir, "m.txt", multiMeta)
+	if _, stderr, code := plots(t, bin, dir, sevenArgs(r, m, dir+"/o", "-allow-failures")...); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	re := regexp.MustCompile(`<text x="([0-9.]+)" y="([0-9.]+)" font-size="([0-9.]+)" class="f">([^<]*)</text>`)
+	for _, name := range []string{"throughput.svg", "memory.svg", "p99-latency.svg", "reopen.svg"} {
+		b, err := os.ReadFile(filepath.Join(dir, "o", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := re.FindAllStringSubmatch(string(b), -1)
+		if len(lines) < 7 {
+			t.Fatalf("%s: found %d failure lines, want at least one per engine", name, len(lines))
+		}
+		groupW := float64(width-left-right) / 3
+		for _, l := range lines {
+			x, _ := strconv.ParseFloat(l[1], 64)
+			size, _ := strconv.ParseFloat(l[3], 64)
+			text := html.UnescapeString(l[4])
+			w := textWidth(text, size)
+			if x+w > float64(width) {
+				t.Errorf("%s: %q starts at %.0f and is about %.0f wide, past the %d-unit chart", name, text, x, w, width)
+			}
+			if w > groupW {
+				t.Errorf("%s: %q is about %.0f wide, wider than its %.0f-unit group", name, text, w, groupW)
+			}
+		}
+		// The legend and footer must sit below the last failure line.
+		var last float64
+		for _, l := range lines {
+			y, _ := strconv.ParseFloat(l[2], 64)
+			if y > last {
+				last = y
+			}
+		}
+		if i := strings.Index(string(b), `<rect class="s0" x="72"`); i >= 0 {
+			legend := regexp.MustCompile(`y="([0-9]+)"`).FindStringSubmatch(string(b)[i:])
+			if y, _ := strconv.ParseFloat(legend[1], 64); y < last+10 {
+				t.Errorf("%s: the legend at y=%.0f overlaps the last failure line at y=%.0f", name, y, last)
 			}
 		}
 	}

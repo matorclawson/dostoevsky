@@ -170,8 +170,9 @@ var (
 // failedTrials counts FAILED trial lines per engine and producer count; the charts
 // show them and never drop them. allowFailures lets a receipt with failures plot.
 var (
-	failedTrials  = map[string]map[int]int{}
-	allowFailures bool
+	failedTrials   = map[string]map[int]int{}
+	allowFailures  bool
+	ignoredEngines []string
 )
 
 type chart struct {
@@ -211,6 +212,7 @@ func main() {
 	trialsPerPoint := flag.Int("trials", 5, "required trials per engine and producer count (0 disables the check)")
 	flag.BoolVar(&writeArchitecture, "architecture", true, "also write architecture.svg")
 	chartEngines := flag.String("engines", "dostoevsky,jetstream", "engines every chart must have, comma separated")
+	ignore := flag.String("ignore-engines", "", "engines present in the receipt that are deliberately left out of the charts, comma separated")
 	flag.BoolVar(&allowFailures, "allow-failures", false, "chart a receipt that has FAILED trials, showing them, instead of refusing it")
 	summary := flag.Bool("summary", false, "print validated medians of a comparison log (-receipt) instead of drawing charts")
 	producers := flag.String("expect-producers", "1,8,32", "producer counts every engine must have in -summary mode")
@@ -238,6 +240,14 @@ func main() {
 	} else {
 		expectedEngines = engines
 	}
+	if *ignore != "" {
+		ignored, err := parseEngines(*ignore)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plots:", err)
+			os.Exit(1)
+		}
+		ignoredEngines = ignored
+	}
 	if err := run(*receipt, *section, *metaPath, *sketchPath, *out, *trialsPerPoint); err != nil {
 		fmt.Fprintln(os.Stderr, "plots:", err)
 		os.Exit(1)
@@ -261,6 +271,11 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 			return fmt.Errorf("%s has %d FAILED trial lines; every failure must be shown, so plot it with -allow-failures or fix the run", receipt, n)
 		}
 	}
+	// The engines checked are the ones in the receipt, not whatever -engines says: every engine
+	// that appears must be expected or explicitly ignored, and every expected engine must appear.
+	if err := checkEngineSet(trials, expectedEngines, ignoredEngines); err != nil {
+		return fmt.Errorf("%s: %w", receipt, err)
+	}
 	if len(expectedEngines) > 2 {
 		if err := requireComparisonMeta(expectedEngines, meta); err != nil {
 			return fmt.Errorf("%s: %w", metaPath, err)
@@ -277,7 +292,7 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 	}
 	failedTrials = map[string]map[int]int{}
 	for _, t := range trials {
-		if w, err := strconv.Atoi(t["workers"]); err == nil && t["failed"] == "1" && t["engine"] != "" {
+		if w, err := strconv.Atoi(t["workers"]); err == nil && t["failed"] == "1" && inEngines(t["engine"], expectedEngines) {
 			if failedTrials[t["engine"]] == nil {
 				failedTrials[t["engine"]] = map[int]int{}
 			}
@@ -298,7 +313,7 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 	}
 	footer := footerLines(meta, receipt)
 	for _, c := range gateCharts {
-		data := collect(trials, c.key, c.scale)
+		data := onlyEngines(collect(trials, c.key, c.scale), expectedEngines)
 		if len(data) == 0 {
 			return fmt.Errorf("%s: no %q values in the gate section of %s", c.file, c.key, receipt)
 		}
@@ -452,7 +467,9 @@ func renderBars(c chart, data []series, footer []string) string {
 	verdict := winners(data, c.lower)
 	var b strings.Builder
 	footer = wrap(footer, 112)
-	h := base + 74 + 15*len(footer) + 10
+	groupW := plotW / float64(len(ws))
+	shift := 12 * failureRows(data, ws, groupW) // zero without failures, so those charts do not change
+	h := base + 74 + shift + 15*len(footer) + 10
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
 	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
@@ -468,13 +485,12 @@ func renderBars(c chart, data []series, footer []string) string {
 		fmt.Fprintf(&b, `<line class="g" x1="%d" x2="%d" y1="%.1f" y2="%.1f"/><text class="m" x="%d" y="%.1f" font-size="11" text-anchor="end">%s</text>`+"\n",
 			left, width-right, y(v), y(v), left-8, y(v)+4, format(v, stepDecimals(step)))
 	}
-	groupW := plotW / float64(len(ws))
 	barW := groupW * 0.3
 	for gi, w := range ws {
 		gx := float64(left) + groupW*float64(gi)
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="13" text-anchor="middle">%d producer%s</text>`+"\n", gx+groupW/2, base+22, w, plural(w))
-		if note := failureNote(data, w); note != "" {
-			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" text-anchor="middle" class="f">%s</text>`+"\n", gx+groupW/2, base+34, html.EscapeString(note))
+		for i, line := range failureLines(data, w, groupW) {
+			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" class="f">%s</text>`+"\n", gx+6, base+34+i*12, html.EscapeString(line))
 		}
 		for si, s := range data {
 			vs := s.values[w]
@@ -496,10 +512,10 @@ func renderBars(c chart, data []series, footer []string) string {
 	}
 	for si, s := range data {
 		lx := left + si*190
-		fmt.Fprintf(&b, `<rect class="s%d" x="%d" y="%d" width="12" height="12"/><text x="%d" y="%d" font-size="12">%s</text>`+"\n", si, lx, base+40, lx+18, base+50, label(s.engine))
+		fmt.Fprintf(&b, `<rect class="s%d" x="%d" y="%d" width="12" height="12"/><text x="%d" y="%d" font-size="12">%s</text>`+"\n", si, lx, base+40+shift, lx+18, base+50+shift, label(s.engine))
 	}
 	for i, line := range footer {
-		fmt.Fprintf(&b, `<text class="m" x="%d" y="%d" font-size="10.5">%s</text>`+"\n", left, base+74+i*15, html.EscapeString(line))
+		fmt.Fprintf(&b, `<text class="m" x="%d" y="%d" font-size="10.5">%s</text>`+"\n", left, base+74+shift+i*15, html.EscapeString(line))
 	}
 	b.WriteString("</svg>\n")
 	return withBackground(b.String())
@@ -754,4 +770,25 @@ func checkMetric(trials []trial, key string, want int) error {
 		}
 	}
 	return nil
+}
+
+func inEngines(e string, list []string) bool {
+	for _, x := range list {
+		if x == e {
+			return true
+		}
+	}
+	return false
+}
+
+// onlyEngines keeps the series of the charted engines: engines left out with
+// -ignore-engines are not drawn.
+func onlyEngines(data []series, charted []string) []series {
+	var out []series
+	for _, s := range data {
+		if inEngines(s.engine, charted) {
+			out = append(out, s)
+		}
+	}
+	return out
 }

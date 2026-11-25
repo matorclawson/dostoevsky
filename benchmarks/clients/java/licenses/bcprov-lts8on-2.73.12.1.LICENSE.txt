@@ -1,3 +1,5 @@
+Bouncy Castle licence text, read from the licence class inside bcprov-lts8on-2.73.12.1.jar (sha256 7514e0d8b9987b1cce93c15d8379d14fed2663b37e7c0b0692e596ed6b6e58a7); the jar's POM omits it.
+
 
 Copyright (c) 2000-2023 The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software

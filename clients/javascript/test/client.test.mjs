@@ -20,6 +20,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (op === "read") {
     if (u.searchParams.get("offset") === "99") return send(204);
+    if (u.searchParams.get("offset") === "77") return send(200, Buffer.alloc((1 << 20) + 1), { "Dostoevsky-Partition": "0", "Dostoevsky-Offset": "77", "Dostoevsky-Key": "", "Dostoevsky-ID": "", "Dostoevsky-Time": "t" });
     return send(200, Buffer.from([0, 255, 65]), { "Dostoevsky-Partition": "0", "Dostoevsky-Offset": u.searchParams.get("offset"),
       "Dostoevsky-Key": encodeURIComponent("+/λ"), "Dostoevsky-ID": "x", "Dostoevsky-Time": "2026-01-01T00:00:00Z" });
   }
@@ -62,4 +63,15 @@ test("position and commit", async () => {
 test("errors carry the status and the gateway's word", async () => {
   await assert.rejects(client.publish("jobs", new Uint8Array(), { id: "clash" }), (e) => e instanceof ClientError && e.status === 409 && e.code === "conflict");
   await assert.rejects(new Client(url, "wrong").position("jobs", 0, "g"), (e) => e.status === 401);
+});
+
+test("the token only travels over https or to loopback", () => {
+  for (const ok of ["http://127.0.0.1:8787", "http://localhost:1", "http://[::1]:1", "https://example.com", "https://10.0.0.5:8787"]) new Client(ok, TOKEN);
+  for (const bad of ["http://example.com", "http://10.0.0.5:8787", "http://0.0.0.0:1", "http://localhost.example.com", "ftp://127.0.0.1"]) {
+    assert.throws(() => new Client(bad, TOKEN), /refusing|Invalid/, bad);
+  }
+});
+
+test("an oversized response is refused", async () => {
+  await assert.rejects(client.read("jobs", 0, 77n), (e) => e instanceof ClientError && e.code === "oversized_response");
 });

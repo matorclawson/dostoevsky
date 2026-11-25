@@ -81,6 +81,19 @@ fn is_loopback(authority: &str) -> bool {
         || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
+/// The address actually connected to must be loopback, whatever the host name said: the token
+/// travels in clear text, so a name that resolves elsewhere must not receive it.
+fn check_resolved(addr: &std::net::SocketAddr) -> Result<(), Error> {
+    if addr.ip().is_loopback() {
+        Ok(())
+    } else {
+        Err(Error::Transport(format!(
+            "refusing to send the token: the address resolved to {} (not loopback); this client speaks plain http to loopback only",
+            addr.ip()
+        )))
+    }
+}
+
 fn transport(e: std::io::Error) -> Error {
     Error::Transport(e.to_string())
 }
@@ -175,8 +188,14 @@ fn read_response<R: BufRead>(r: &mut R) -> Result<Response, Error> {
             let size = usize::from_str_radix(size_hex, 16)
                 .map_err(|_| Error::InvalidResponse("bad chunk size".into()))?;
             if size == 0 {
-                // Trailers, if any, up to the blank line.
-                while !read_line(r)?.is_empty() {}
+                // Trailers, if any, up to the blank line, and no more of them than headers.
+                let mut trailers = 0;
+                while !read_line(r)?.is_empty() {
+                    trailers += 1;
+                    if trailers > MAX_HEADERS {
+                        return Err(Error::InvalidResponse("too many trailer lines".into()));
+                    }
+                }
                 break;
             }
             if body.len().saturating_add(size) > MAX_BODY {
@@ -270,6 +289,7 @@ impl Client {
             .map_err(transport)?
             .next()
             .ok_or_else(|| Error::Transport("address did not resolve".into()))?;
+        check_resolved(&addr)?;
         let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(transport)?;
         stream.set_read_timeout(Some(Duration::from_secs(40))).map_err(transport)?;
         stream.set_write_timeout(Some(Duration::from_secs(40))).map_err(transport)?;
@@ -486,5 +506,30 @@ mod tests {
         let (url, h) = stub(vec![ok("Dostoevsky-Next: 0\r\n", b"")]);
         Client::new(&format!("{url}/mount/"), "tok").position("t", 0, "g").unwrap();
         assert!(h.join().unwrap()[0].starts_with(b"GET /mount/dostoevsky/client/v1/position?"));
+    }
+
+    #[test]
+    fn only_a_loopback_resolved_address_receives_the_token() {
+        for ok in ["127.0.0.1:80", "127.9.9.9:1", "[::1]:80"] {
+            assert!(check_resolved(&ok.parse().unwrap()).is_ok(), "{ok}");
+        }
+        for bad in ["10.0.0.5:80", "0.0.0.0:80", "192.168.1.1:80", "[2001:db8::1]:80", "93.184.216.34:80"] {
+            let e = check_resolved(&bad.parse().unwrap()).unwrap_err();
+            assert!(e.to_string().contains("not loopback"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn chunk_trailers_are_bounded() {
+        let many: String = (0..(MAX_HEADERS + 5)).map(|i| format!("X-T{i}: v\r\n")).collect();
+        let few = "X-A: 1\r\nX-B: 2\r\n";
+        let resp = |trailers: &str| {
+            format!("HTTP/1.1 200 OK\r\nDostoevsky-Next: 3\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n0\r\n{trailers}\r\n").into_bytes()
+        };
+        let (url, h) = stub(vec![resp(few), resp(&many)]);
+        let c = Client::new(&url, "tok");
+        assert_eq!(c.position("jobs", 0, "g").unwrap().next, 3);
+        assert!(matches!(c.position("jobs", 0, "g"), Err(Error::InvalidResponse(_))));
+        h.join().unwrap();
     }
 }

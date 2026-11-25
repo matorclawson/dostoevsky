@@ -1,0 +1,16 @@
+# Python worker for the language client benchmarks
+
+One trial of the publisher workload from Python against one engine: 512-byte records, N synchronous producers, acknowledged only after the engine's durable acknowledgment, no retries, every acknowledged record read back, one receipt line. The server is started by `benchmarks/embedded/cmd/serve` (shared with the Go comparison); this worker never starts one.
+
+```sh
+python3 -m venv .dev/bench-venv && .dev/bench-venv/bin/pip install --require-hashes -r benchmarks/clients/python/requirements.txt
+BENCH_TOKEN=<token from serve's READY line> PYTHONPATH=clients/python \
+  .dev/bench-venv/bin/python benchmarks/clients/python/worker.py --engine kafka --addr 127.0.0.1:PORT --workers 8 --target 16000 --window 600
+```
+
+Engines: `dostoevsky` (our client, through the gateway), `kafka` (confluent-kafka, acks=all, no retries, no idempotence, one message per batch), `nats` (nats-py JetStream), `redis` (redis-py, XADD, no client retries). The token comes from `BENCH_TOKEN`, never the command line. A publish failure ends the run as a result (`stop=failed`), never an exit code. Stop reasons: `reached`, `window`, `failed`, `verification-failed`.
+
+The receipt line adds `p99_9_us`, `p99_99_us`, `client_rss_KiB` (the kernel's peak, `ru_maxrss`) and `client=` with the exact library version; the driver appends the server's `server_rss_KiB` and its `rss_source`. The histogram is the Go harness's (1% bins) and both are checked against `benchmarks/clients/hist_vector.json`.
+
+Tests need only the standard library: `python3 -m unittest discover -s benchmarks/clients/python/tests`.
+Not measured here: publish-to-consume latency (a separate open-loop mode, later) and reopen.

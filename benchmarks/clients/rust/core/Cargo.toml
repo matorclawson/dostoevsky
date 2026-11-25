@@ -1,0 +1,9 @@
+[package]
+name = "dostoevsky-bench-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Workload, 1% histogram, receipt line and CLI of the Rust client benchmark worker; standard library only"
+
+[dependencies]

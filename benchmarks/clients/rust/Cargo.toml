@@ -1,0 +1,7 @@
+# The core is its own workspace: standard library only, tested offline with nothing downloaded. The worker is a
+# SEPARATE workspace (worker/Cargo.toml) because cargo resolves every member of a workspace before it builds any of
+# them, and the worker's dependencies need a lockfile that exists only after the dependency check.
+[workspace]
+members = ["core"]
+exclude = ["worker"]
+resolver = "2"

@@ -36,6 +36,7 @@ func Example_quickstart() {
 	})
 	fmt.Println("paid events:", paid)
 	// quickstart:end
+
 	// Output: paid events: 1
 }
 

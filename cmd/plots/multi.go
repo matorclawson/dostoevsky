@@ -85,6 +85,66 @@ func legendColumns(texts []string, avail float64) int {
 	return 1
 }
 
+// declaredEngines is the charted set in color-slot order: the declared engines (-engines),
+// plus any engine that has data but was not declared, ordered by engineOrder. An engine keeps
+// its slot, and therefore its color and its place in the legend, even when every trial of it
+// failed and it has no bar.
+func declaredEngines(data []series) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range expectedEngines {
+		if !seen[e] {
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	for _, s := range data {
+		if !seen[s.engine] {
+			seen[s.engine] = true
+			out = append(out, s.engine)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return engineRank(out[i]) < engineRank(out[j]) })
+	return out
+}
+
+type legendEntry struct {
+	engine string
+	lines  []string // the label, wrapped to its column
+}
+
+// legendLayout chooses the columns and wraps each entry to its column's width, so an entry
+// that is too wide even for one column continues on a second line instead of clipping. It also
+// returns each row's height.
+func legendLayout(engines []string, avail float64) (cols int, entries []legendEntry, rowHeights []int) {
+	var texts []string
+	for _, e := range engines {
+		texts = append(texts, seriesLabel(e))
+	}
+	cols = legendColumns(texts, avail)
+	maxChars := int((avail/float64(cols) - 16 - 8) / (11 * textEm))
+	if maxChars < 8 {
+		maxChars = 8
+	}
+	for i, e := range engines {
+		entries = append(entries, legendEntry{e, wrap([]string{texts[i]}, maxChars)})
+	}
+	for r := 0; r*cols < len(entries); r++ {
+		most := 1
+		for c := 0; c < cols && r*cols+c < len(entries); c++ {
+			if k := len(entries[r*cols+c].lines); k > most {
+				most = k
+			}
+		}
+		h := 18
+		if most > 1 {
+			h = 12*most + 6
+		}
+		rowHeights = append(rowHeights, h)
+	}
+	return cols, entries, rowHeights
+}
+
 // seriesLabel is the legend text: the engine's label and, when the meta file says it,
 // where it ran (in process, or a server and how it was reached).
 func seriesLabel(engine string) string {
@@ -125,19 +185,35 @@ func renderMulti(c chart, data []series, footer []string) string {
 	plotW, plotH := float64(width-left-right), float64(base-top)
 	y := func(v float64) float64 { return float64(base) - v/top1*plotH }
 
-	n := len(data)
-	var legendTexts []string
-	for _, s := range data {
-		legendTexts = append(legendTexts, seriesLabel(s.engine))
+	declared := declaredEngines(data)
+	slot := map[string]int{}
+	for i, e := range declared {
+		slot[e] = i
 	}
-	cols := legendColumns(legendTexts, float64(width-left-right))
-	rows := (n + cols - 1) / cols
+	n := len(declared)
+	cols, entries, rowHeights := legendLayout(declared, float64(width-left-right))
+	legendHeight := 0
+	for _, rh := range rowHeights {
+		legendHeight += rh
+	}
 	verdict := winners(data, c.lower)
-	var names []string
+	// The description names the engines that have data, and says which declared engines have
+	// none, so it never claims a fixed pair.
+	var names, empty []string
+	present := map[string]bool{}
 	for _, s := range data {
 		names = append(names, label(s.engine))
+		present[s.engine] = true
+	}
+	for _, e := range declared {
+		if !present[e] {
+			empty = append(empty, label(e))
+		}
 	}
 	alt := strings.Replace(c.alt, "for Dostoevsky and embedded JetStream", "for "+strings.Join(names, ", "), 1)
+	if len(empty) > 0 {
+		alt += " No valid trial: " + strings.Join(empty, ", ") + "."
+	}
 	footer = wrap(footer, 112)
 	groupW := plotW / float64(len(ws))
 	failRows := failureRows(data, ws, groupW)
@@ -145,7 +221,7 @@ func renderMulti(c chart, data []series, footer []string) string {
 	if failRows > 1 {
 		legendY += 12 * (failRows - 1)
 	}
-	footerY := legendY + 18*rows + 14
+	footerY := legendY + legendHeight + 14
 	h := footerY + 15*len(footer) + 10
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
@@ -174,7 +250,8 @@ func renderMulti(c chart, data []series, footer []string) string {
 		for i, line := range failureLines(data, w, groupW) {
 			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" class="f">%s</text>`+"\n", gx+6, base+36+i*12, html.EscapeString(line))
 		}
-		for si, s := range data {
+		for _, s := range data {
+			si := slot[s.engine]
 			vs := s.values[w]
 			if len(vs) == 0 {
 				continue
@@ -201,10 +278,17 @@ func renderMulti(c chart, data []series, footer []string) string {
 			}
 		}
 	}
-	for si, s := range data {
-		lx := left + (si%cols)*(width-left-right)/cols
-		ly := legendY + (si/cols)*18
-		fmt.Fprintf(&b, `<rect class="s%d" x="%d" y="%d" width="11" height="11"/><text x="%d" y="%d" font-size="11">%s</text>`+"\n", si, lx, ly, lx+16, ly+10, html.EscapeString(seriesLabel(s.engine)))
+	rowTop := make([]int, len(rowHeights))
+	for r := 1; r < len(rowHeights); r++ {
+		rowTop[r] = rowTop[r-1] + rowHeights[r-1]
+	}
+	for i, en := range entries {
+		lx := left + (i%cols)*(width-left-right)/cols
+		ly := legendY + rowTop[i/cols]
+		fmt.Fprintf(&b, `<rect class="s%d" x="%d" y="%d" width="11" height="11"/>`+"\n", slot[en.engine], lx, ly)
+		for k, line := range en.lines {
+			fmt.Fprintf(&b, `<text x="%d" y="%d" font-size="11">%s</text>`+"\n", lx+16, ly+10+12*k, html.EscapeString(line))
+		}
 	}
 	for i, line := range footer {
 		fmt.Fprintf(&b, `<text class="m" x="%d" y="%d" font-size="10.5">%s</text>`+"\n", left, footerY+i*15, html.EscapeString(line))

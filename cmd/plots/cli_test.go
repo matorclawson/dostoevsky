@@ -369,3 +369,99 @@ func TestCLILegendFitsLongLabels(t *testing.T) {
 		t.Errorf("long labels still use %d columns; they must fall back to fewer", got)
 	}
 }
+
+// M1 (cx delta 288400): comparison rendering follows the DECLARED engine set. Seven declared,
+// five that failed every trial: only Redis and Valkey have values, yet the chart is still a
+// comparison chart with architectures in the legend, the comparison memory title, a description
+// that names the engines present (not a fixed pair) and failure notes for the five.
+func TestCLIComparisonRenderingFollowsTheDeclaredSet(t *testing.T) {
+	bin := buildPlots(t)
+	dir := t.TempDir()
+	failed := map[string]bool{}
+	for _, e := range []string{"dostoevsky", "jetstream", "sqlite", "kafka", "rabbitmq"} {
+		for _, w := range []string{"1", "8", "32"} {
+			for tr := 1; tr <= 5; tr++ {
+				failed[e+"/"+w+"/"+string(rune('0'+tr))] = true
+			}
+		}
+	}
+	r := write(t, dir, "c.log", multiLog(multiRPS, failed))
+	m := write(t, dir, "m.txt", multiMeta)
+	if _, stderr, code := plots(t, bin, dir, sevenArgs(r, m, dir+"/o", "-allow-failures")...); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join(dir, "o", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	th, mem := read("throughput.svg"), read("memory.svg")
+	if !strings.Contains(mem, "Peak memory, client plus server processes") {
+		t.Error("a seven-engine run with two engines of data must keep the comparison memory title")
+	}
+	desc := regexp.MustCompile(`<desc id="d">([^<]*)</desc>`).FindStringSubmatch(th)
+	if desc == nil {
+		t.Fatal("no description")
+	}
+	for _, want := range []string{"Redis 8.12 (AOF always)", "Valkey 9.2 (AOF always)", "No valid trial: Dostoevsky"} {
+		if !strings.Contains(desc[1], want) {
+			t.Errorf("the description lacks %q: %s", want, desc[1])
+		}
+	}
+	if strings.Contains(desc[1], "Dostoevsky and embedded JetStream") {
+		t.Errorf("the description still names the legacy pair: %s", desc[1])
+	}
+	for _, want := range []string{"Redis 8.12 (AOF always) (server, unix socket)", "Valkey 9.2 (AOF always) (server, unix socket)", "Kafka 4.4 (acks=all) (server, loopback)",
+		"Dostoevsky: 5 failed", "RabbitMQ 4.4 (quorum queue): 5 failed", `class="s3"`, `class="s4"`} {
+		if !strings.Contains(th, want) {
+			t.Errorf("throughput.svg lacks %q", want)
+		}
+	}
+	if got := strings.Count(th, `width="11" height="11"`); got != 7 {
+		t.Errorf("%d legend swatches, want one for each of the seven declared engines", got)
+	}
+}
+
+// L1 (cx delta 288400): a single label wider than one column wraps in the legend instead of
+// clipping, and its lines do not overlap vertically.
+func TestCLILegendWrapsAnOverWideLabel(t *testing.T) {
+	bin := buildPlots(t)
+	dir := t.TempDir()
+	r := write(t, dir, "c.log", multiLog(multiRPS, nil))
+	longLabel := "Kafka 4.4 (acks=all, flush inferred) with a deliberately long description that goes on and on, far past one legend column, so that it has to continue on a second line"
+	meta := write(t, dir, "m.txt", strings.Replace(multiMeta, "label.kafka=Kafka 4.4 (acks=all)", "label.kafka="+longLabel, 1))
+	if _, stderr, code := plots(t, bin, dir, sevenArgs(r, meta, dir+"/o")...); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "o", "throughput.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`<text x="([0-9]+)" y="([0-9]+)" font-size="11">([^<]*)</text>`)
+	var all []string
+	prevY := -100
+	for _, e := range re.FindAllStringSubmatch(string(b), -1) {
+		x, _ := strconv.Atoi(e[1])
+		y, _ := strconv.Atoi(e[2])
+		text := html.UnescapeString(e[3])
+		all = append(all, text)
+		if float64(x)+textWidth(text, 11) > float64(width-right) {
+			t.Errorf("legend line %q runs to about %.0f, past the right margin", text, float64(x)+textWidth(text, 11))
+		}
+		if y-prevY < 12 && y >= prevY {
+			t.Errorf("legend line %q at y=%d is within 12 units of the line above (y=%d)", text, y, prevY)
+		}
+		prevY = y
+	}
+	joined := strings.Join(all, " ")
+	for _, word := range strings.Fields(longLabel) {
+		if !strings.Contains(joined, word) {
+			t.Fatalf("the wrapped legend lost %q: %s", word, joined)
+		}
+	}
+	if kafkaLines := strings.Count(joined, "Kafka 4.4"); kafkaLines < 1 {
+		t.Fatal("the long label is missing from the legend")
+	}
+}

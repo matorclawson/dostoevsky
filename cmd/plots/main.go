@@ -434,7 +434,9 @@ func label(engine string) string {
 }
 
 func renderBars(c chart, data []series, footer []string) string {
-	if len(data) > 2 {
+	// More than two engines declared means comparison rendering, even if fewer have data
+	// (a seven-engine run where five failed every trial still draws as a comparison).
+	if len(data) > 2 || len(expectedEngines) > 2 {
 		return renderMulti(c, data, footer)
 	}
 	producers := map[int]bool{}

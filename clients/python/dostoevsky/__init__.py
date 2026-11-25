@@ -1,7 +1,8 @@
 """Synchronous Python client for the Dostoevsky v1 HTTP API."""
+import ipaddress
 from dataclasses import dataclass
 from urllib.error import HTTPError
-from urllib.parse import urlencode, unquote
+from urllib.parse import urlencode, unquote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -31,6 +32,35 @@ class Position:
     state: bytes
 
 
+MAX_BODY = 1 << 20  # the protocol's largest value, key or checkpoint state
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _check_url(url: str) -> None:
+    """The bearer token grants the whole store: only https, or http to loopback, may carry it."""
+    parts = urlsplit(url)
+    if parts.scheme == "https" and parts.hostname:
+        return
+    if parts.scheme == "http" and parts.hostname and _is_loopback(parts.hostname):
+        return
+    raise ValueError("refusing to send the token over plain http to a non-loopback address; use https://")
+
+
+def _bounded(response, limit: int) -> bytes:
+    data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ClientError(response.status, "oversized_response")
+    return data
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args):
         return None
@@ -38,6 +68,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 class Client:
     def __init__(self, url: str, token: str):
+        _check_url(url)
         self._url = url.rstrip("/") + "/dostoevsky/client/v1/"
         self._auth = {"Authorization": "Bearer " + token, "Content-Type": "application/octet-stream"}
         self._http = build_opener(_NoRedirect())
@@ -46,7 +77,7 @@ class Client:
         request = Request(self._url + op + "?" + urlencode(params), data=data, headers=self._auth)
         try:
             with self._http.open(request, timeout=40) as response:
-                return response.status, response.headers, response.read()
+                return response.status, response.headers, _bounded(response, MAX_BODY)
         except HTTPError as error:
             with error:
                 raise ClientError(error.code, error.read(256).decode(errors="replace").strip()) from error

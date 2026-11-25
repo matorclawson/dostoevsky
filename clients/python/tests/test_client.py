@@ -29,6 +29,10 @@ class Stub(BaseHTTPRequestHandler):
         if op == "read":
             if q["offset"] == "99":
                 return self._send(204, b"")
+            if q["offset"] == "77":
+                return self._send(200, b"x" * ((1 << 20) + 1), {
+                    "Dostoevsky-Partition": "0", "Dostoevsky-Offset": "77", "Dostoevsky-Key": "", "Dostoevsky-ID": "",
+                    "Dostoevsky-Time": "t"})
             return self._send(200, b"\x00\xff payload", {
                 "Dostoevsky-Partition": "0", "Dostoevsky-Offset": q["offset"],
                 "Dostoevsky-Key": quote("+/λ", safe=""), "Dostoevsky-ID": "x",
@@ -89,6 +93,18 @@ class ClientTest(unittest.TestCase):
         self.c.commit("jobs", 0, "g", 3, b"s")
         self.assertEqual(LOG[-1][1]["expected"], "3")
         self.assertEqual(LOG[-1][2], b"s")
+
+    def test_the_token_only_travels_over_https_or_to_loopback(self):
+        for ok in ("http://127.0.0.1:8787", "http://localhost:1", "http://[::1]:1", "https://example.com", "https://10.0.0.5:8787"):
+            Client(ok, TOKEN)
+        for bad in ("http://example.com", "http://10.0.0.5:8787", "http://0.0.0.0:1", "ftp://127.0.0.1", "127.0.0.1:8787", "http://localhost.example.com"):
+            with self.assertRaises(ValueError, msg=bad):
+                Client(bad, TOKEN)
+
+    def test_an_oversized_response_is_refused(self):
+        with self.assertRaises(ClientError) as e:
+            self.c.read("jobs", 0, 77)
+        self.assertEqual(e.exception.code, "oversized_response")
 
     def test_errors_carry_status_and_word(self):
         with self.assertRaises(ClientError) as e:

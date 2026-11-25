@@ -411,3 +411,22 @@ test("a connect that completes after the deadline does not go on to subscribe or
   await new Promise((r) => setTimeout(r, 250)); // the late connect has completed by now
   assert.deepEqual(calls, ["connect"], "nothing after the late connect ran");
 });
+
+test("an on-time join does not end the budget while run() is still pending: run settling at 121 ms against 30 ms fails on time", async () => {
+  const c = fakeConsumer();
+  const watch = joinWatcher(c, 30);
+  const begin = Date.now();
+  const startup = async () => {
+    await watch.step(async () => c.fire("join", { memberAssignment: {} })); // joined at once
+    await watch.step(() => new Promise((r) => setTimeout(r, 121))); // run() is slow
+  };
+  await assert.rejects(startAndJoin(startup, watch), /not joined/);
+  assert.ok(Date.now() - begin < 100, "it failed at the budget, not when run settled");
+});
+
+test("when startup and join both finish in time the timer is stopped (nothing fires later)", async () => {
+  const c = fakeConsumer();
+  const watch = joinWatcher(c, 40);
+  await startAndJoin(async () => { c.fire("join", { memberAssignment: {} }); }, watch);
+  await new Promise((r) => setTimeout(r, 120)); // an armed timer would have rejected by now: still nothing unhandled
+});

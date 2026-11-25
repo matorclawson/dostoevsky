@@ -7,6 +7,8 @@ import importlib.metadata
 import os
 import threading
 
+from core import AmbiguousOutcome
+
 TOPIC = "events"
 
 
@@ -28,6 +30,18 @@ def build_id(path: str) -> str:
         return "unknown"
 
 
+def own_client_name(module_file: str) -> str:
+    """'<name>-<version>' read from the client's own pyproject.toml next to its package, not typed here."""
+    import tomllib
+    path = os.path.join(os.path.dirname(os.path.abspath(module_file)), "..", "pyproject.toml")
+    try:
+        with open(path, "rb") as f:
+            meta = tomllib.load(f)["project"]
+        return f"{meta['name']}-{meta['version']}"
+    except (OSError, KeyError, ValueError) as e:
+        raise RuntimeError("cannot read the client's identity from %s: %s" % (path, type(e).__name__)) from e
+
+
 class Dostoevsky:
     """Our client through the gateway (HTTP/1.1 keep-alive, a small connection pool). It needs the
     pooled client: an older one that opens a connection per call would be measured as something it
@@ -40,7 +54,7 @@ class Dostoevsky:
             raise RuntimeError(
                 "dostoevsky_client at %s has no connection pool (it predates the keep-alive client, PR 41); "
                 "refusing to benchmark it" % os.path.dirname(os.path.abspath(dostoevsky_client.__file__)))
-        self.client_name = "dostoevsky-client-0.1.0(keep-alive pool)"
+        self.client_name = own_client_name(dostoevsky_client.__file__)
         self.client_build = build_id(dostoevsky_client.__file__)
         self._c = Client("http://" + addr, token)
 
@@ -62,7 +76,9 @@ class Kafka:
 
     def __init__(self, addr, token, workers):
         from confluent_kafka import Consumer, Producer, TopicPartition  # noqa: F401
-        self.client_name = _version("confluent-kafka")
+        import confluent_kafka
+        # The package and the librdkafka it bundles: the wheel's native half is part of what is measured.
+        self.client_name = _version("confluent-kafka") + "+librdkafka-" + confluent_kafka.libversion()[0]
         self._addr = addr
         self._p = Producer({
             "bootstrap.servers": addr, "acks": "all", "enable.idempotence": False, "retries": 0,
@@ -94,7 +110,8 @@ class Kafka:
         if not done.wait(self.delivery_timeout):
             abandoned.set()
             self._timed_out = True  # the message may still be queued: close() purges instead of flushing it
-            raise TimeoutError("no delivery report before the deadline")
+            # No answer in time: the broker may have stored it. The run stops as failed and says "ambiguous".
+            raise AmbiguousOutcome("no delivery report before the deadline")
         err, msg = box[0]
         if err is not None:
             raise RuntimeError("delivery failed")  # librdkafka's text is not copied into receipts

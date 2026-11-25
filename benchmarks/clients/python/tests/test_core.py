@@ -15,6 +15,11 @@ import core  # noqa: E402
 import worker  # noqa: E402
 
 VECTOR = json.load(open(os.path.join(HERE, "..", "..", "hist_vector.json")))
+REAL_CLIENT_FILE = os.path.join(HERE, "..", "..", "..", "..", "clients", "python", "dostoevsky_client", "__init__.py")
+with open(os.path.join(HERE, "..", "..", "..", "..", "clients", "python", "pyproject.toml"), "rb") as _f:
+    import tomllib
+    CLIENT_VERSION = tomllib.load(_f)["project"]["version"]
+EXAMPLES = [ln.strip() for ln in open(os.path.join(HERE, "..", "..", "receipt_examples.txt")) if ln.strip() and not ln.startswith("#")]
 
 
 class Memory:
@@ -233,10 +238,66 @@ class FailureTest(unittest.TestCase):
         self.assertEqual(core.reason(ConnectionResetError("x")), "ConnectionResetError:connection")
 
 
+def fixed_result(stop, detail="", acked=1000, ambiguous=False):
+    h = core.Hist()
+    for _ in range(acked):
+        h.add_ns(2_000_000)
+    return core.Result(acked=acked, elapsed=2.0, stop=stop, detail=detail, hist=h, ambiguous=ambiguous)
+
+
+class ReceiptFormatTest(unittest.TestCase):
+    """The lines in receipt_examples.txt are what these workers write; cmd/plots parses the same file."""
+
+    def line(self, engine, res, verified, client, build):
+        return core.receipt_line(engine, 8, res, verified, client, 51200, build)
+
+    def test_the_python_lines_equal_the_shared_examples(self):
+        want = {kv.split()[0]: kv for kv in EXAMPLES}
+        self.assertEqual(self.line("python-kafka", fixed_result(core.STOP_REACHED), 1000, "confluent-kafka-2.16.1+librdkafka-2.16.1", "n/a"),
+                         want["engine=python-kafka"])
+        self.assertEqual(self.line("python-dostoevsky", fixed_result(core.STOP_REACHED), 1000, "dostoevsky-client-0.1.0", "0123456789ab-dirty"),
+                         want["engine=python-dostoevsky"])
+        failed = fixed_result(core.STOP_FAILED, "publish 4: AmbiguousOutcome:ambiguous-timeout (after 4 acknowledged)", acked=4, ambiguous=True)
+        self.assertEqual(self.line("python-redis", failed, 4, "redis-8.1.0", "n/a"), want["engine=python-redis"])
+
+    def test_every_token_is_a_key_value_pair_even_for_a_client_name_with_spaces(self):
+        line = self.line("python-x", fixed_result(core.STOP_REACHED), 1000, "name with spaces (pool)", "build id")
+        self.assertTrue(all("=" in t for t in line.split()), line)
+
+    def test_an_ambiguous_timeout_is_reported_as_such(self):
+        class Silent(Memory):
+            def publish(self, data):
+                raise core.AmbiguousOutcome("no report")
+
+        res = core.run_workload(Silent(), 1, 5, 0)
+        self.assertTrue(res.ambiguous)
+        line = core.receipt_line("x", 1, res, 0, "c", 1)
+        self.assertIn("ambiguous=1", line)
+        self.assertIn("AmbiguousOutcome:ambiguous-timeout", line)
+
+    def test_a_gated_run_refuses_an_unknown_client_build(self):
+        class Unknown(Memory):
+            client_build = "unknown"
+
+        def run(extra):
+            out, err = io.StringIO(), io.StringIO()
+            old, sys.stderr = sys.stderr, err
+            try:
+                code = worker.main(["--engine", "memory", "--addr", "x:1", "--target", "5"] + extra, env={}, out=out,
+                                   adapters={"memory": lambda a, t, w: Unknown()})
+            finally:
+                sys.stderr = old
+            return code, out.getvalue()
+        self.assertEqual(run(["--require-known-build"]), (2, ""))
+        code, text = run([])
+        self.assertEqual(code, 0)
+        self.assertIn("client_build=unknown", text)
+
+
 class AdapterTest(unittest.TestCase):
-    def fake_module(self, name, **attrs):
+    def fake_module(self, name, file=None, **attrs):
         mod = types.ModuleType(name)
-        mod.__file__ = os.path.abspath(__file__)
+        mod.__file__ = file or os.path.abspath(__file__)
         for k, v in attrs.items():
             setattr(mod, k, v)
         saved = sys.modules.get(name)
@@ -263,9 +324,10 @@ class AdapterTest(unittest.TestCase):
 
             def _take(self):
                 return None
-        self.fake_module("dostoevsky_client", Client=Pooled)
+        self.fake_module("dostoevsky_client", file=REAL_CLIENT_FILE, Client=Pooled)
         a = adapters.Dostoevsky("127.0.0.1:1", "t", 1)
-        self.assertIn("keep-alive pool", a.client_name)
+        self.assertEqual(a.client_name, "dostoevsky-client-" + CLIENT_VERSION)  # read from the client's pyproject, not typed here
+        self.assertNotRegex(a.client_name, r"\s")
         self.assertTrue(a.client_build, "no build identity")
         self.assertRegex(a.client_build, r"^([0-9a-f]{12}(-dirty)?|unknown)$")
 
@@ -296,13 +358,14 @@ class AdapterTest(unittest.TestCase):
             def offset(self):
                 return 7
 
-        self.fake_module("confluent_kafka", Producer=FakeProducer, Consumer=object, TopicPartition=object)
+        self.fake_module("confluent_kafka", Producer=FakeProducer, Consumer=object, TopicPartition=object, libversion=lambda: ("2.16.1", 0))
         saved = adapters._version
         adapters._version = lambda dist: dist + "-test"
         self.addCleanup(lambda: setattr(adapters, "_version", saved))
         k = adapters.Kafka("127.0.0.1:1", "", 1)
+        self.assertRegex(k.client_name, r"^confluent-kafka-test\+librdkafka-2\.16\.1$")  # the native half is recorded
         k.delivery_timeout = 0.05
-        with self.assertRaises(TimeoutError):
+        with self.assertRaises(core.AmbiguousOutcome):
             k.publish(b"x")
         late = k._p.callbacks[0]
         late(None, Msg())  # a report that arrives after the deadline is ignored

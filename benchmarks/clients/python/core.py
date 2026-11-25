@@ -63,12 +63,19 @@ class Hist:
 _CLASS = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 
 
+class AmbiguousOutcome(TimeoutError):
+    """The engine gave no answer before the deadline: the publish may or may not have been stored.
+    The run stops as failed, says so, and the message is not counted."""
+
+
 def reason(e: BaseException) -> str:
     """What may go into a receipt about an engine error: the exception CLASS and one word from a
     fixed set. Never the message, which can carry tokens, addresses with credentials or payload bytes."""
     name = type(e).__name__
     cls = name if _CLASS.fullmatch(name) else "Exception"
-    if isinstance(e, TimeoutError):
+    if isinstance(e, AmbiguousOutcome):
+        word = "ambiguous-timeout"
+    elif isinstance(e, TimeoutError):
         word = "timeout"
     elif isinstance(e, ConnectionError):
         word = "connection"
@@ -91,6 +98,7 @@ class Result:
     detail: str = ""
     hist: Hist = field(default_factory=Hist)
     records: list = field(default_factory=list)  # (message index, engine offset) of every acknowledgment
+    ambiguous: bool = False  # the failing publish gave no answer: it may have been stored
 
 
 def run_workload(adapter, workers: int, target: int, window: float, clock=time.monotonic) -> Result:
@@ -107,12 +115,13 @@ def run_workload(adapter, workers: int, target: int, window: float, clock=time.m
             if state["stop"] is None:
                 state["stop"] = (kind, text)
 
-    def fail(text: str) -> None:
+    def fail(text: str, ambiguous: bool = False) -> None:
         # A failure is never hidden by an earlier "reached" or "window": whichever came first,
         # a publish that failed makes the run a failed run.
         with lock:
             if state["stop"] is None or state["stop"][0] != STOP_FAILED:
                 state["stop"] = (STOP_FAILED, text)
+            state["ambiguous"] = state.get("ambiguous", False) or ambiguous
 
     start = clock()
     deadline = start + window if window > 0 else None
@@ -135,7 +144,7 @@ def run_workload(adapter, workers: int, target: int, window: float, clock=time.m
             try:
                 offset = adapter.publish(payload(i))
             except Exception as e:  # noqa: BLE001 - any engine error is a result, never retried
-                fail(f"publish {i}: {reason(e)}")
+                fail(f"publish {i}: {reason(e)}", isinstance(e, AmbiguousOutcome))
                 return
             h.add_ns(time.perf_counter_ns() - begin)
             mine.append((i, offset))
@@ -152,6 +161,7 @@ def run_workload(adapter, workers: int, target: int, window: float, clock=time.m
     out.acked = len(out.records)
     kind, text = state["stop"] or (STOP_REACHED, "")
     out.stop = kind
+    out.ambiguous = bool(state.get("ambiguous"))
     out.detail = f"{text} (after {out.acked} acknowledged)" if kind == STOP_FAILED else text
     return out
 
@@ -174,6 +184,11 @@ def peak_rss_kib() -> int:
     return peak // 1024 if sys.platform == "darwin" else peak
 
 
+def _token(text: str) -> str:
+    """A value that stays ONE whitespace-free token, so the line parses as key=value pairs."""
+    return re.sub(r"\s+", "_", text)
+
+
 def receipt_line(engine: str, workers: int, res: Result, verified: int, client: str, rss_kib: int, build: str = "n/a") -> str:
     """One line. `result=FAILED` whenever the run failed or its read-back did not verify; the
     throughput counts only acknowledged-and-verified messages."""
@@ -185,10 +200,13 @@ def receipt_line(engine: str, workers: int, res: Result, verified: int, client: 
         f"records/s={rate:.0f}", f"elapsed_s={res.elapsed:.2f}",
         f"p50_us={res.hist.quantile_us(0.50)}", f"p95_us={res.hist.quantile_us(0.95)}",
         f"p99_us={res.hist.quantile_us(0.99)}", f"p99_9_us={res.hist.quantile_us(0.999)}",
-        f"p99_99_us={res.hist.quantile_us(0.9999)}",
+        f"p99_99_us={res.hist.quantile_us(0.9999)}", "quantiles=bin-upper-1pct",
         f"client_rss_KiB={rss_kib}", "client_rss_source=ru_maxrss",
-        "lang=python", f"client={client}", f"client_build={build}", f"stop={res.stop}",
+        "lang=python", f"client={_token(client)}", f"client_build={_token(build)}",
     ]
+    if res.ambiguous:
+        fields.append("ambiguous=1")
+    fields.append(f"stop={res.stop}")
     if res.detail:
         fields.append("detail=" + re.sub(r"[^A-Za-z0-9_.:,()/-]", "_", res.detail)[:200])
     return " ".join(fields)

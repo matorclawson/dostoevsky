@@ -14,3 +14,5 @@ The receipt line says `result=ok` or `result=FAILED` (a publish failure, even on
 
 Tests need only the standard library: `python3 -m unittest discover -s benchmarks/clients/python/tests`.
 Not measured here: publish-to-consume latency (a separate open-loop mode, later) and reopen.
+
+Receipt format: `benchmarks/clients/receipt_examples.txt` holds the lines these workers write for fixed inputs; the tests rebuild them byte for byte, and `cmd/plots` parses the same file in its own tests. Every line carries `quantiles=bin-upper-1pct`; client names are whitespace-free; a Kafka delivery timeout is reported as `ambiguous=1` (the broker may have stored the message) and the run stops as failed. `--require-known-build` (used by gated runs) refuses to run when our client's git build cannot be identified. The Python tests read `clients/python/pyproject.toml`, so run them from a full checkout.

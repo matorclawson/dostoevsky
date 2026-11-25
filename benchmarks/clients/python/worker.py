@@ -22,6 +22,8 @@ def main(argv, env=os.environ, out=sys.stdout, adapters=None):
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--target", type=int, default=2000, help="stop at this many acknowledged messages")
     ap.add_argument("--window", type=float, default=0, help="stop after this many seconds (0: no window)")
+    ap.add_argument("--require-known-build", action="store_true",
+                    help="refuse to run when our own client's git build cannot be identified (for gated runs)")
     args = ap.parse_args(argv)
     if adapters is None:
         import adapters as _adapters
@@ -33,6 +35,10 @@ def main(argv, env=os.environ, out=sys.stdout, adapters=None):
         print("workers and target must be at least 1", file=sys.stderr)
         return 2
     adapter = adapters[args.engine](args.addr, env.get("BENCH_TOKEN", ""), args.workers)
+    if args.require_known_build and getattr(adapter, "client_build", "n/a") == "unknown":
+        adapter.close()
+        print("the client build is unknown (no git commit could be read); refusing to run a gated trial", file=sys.stderr)
+        return 2
     try:
         res = core.run_workload(adapter, args.workers, args.target, args.window)
         verified, why = 0, ""

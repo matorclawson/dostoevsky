@@ -3,7 +3,7 @@
 One trial of the publisher workload from Node against one engine: 512-byte records, N concurrent synchronous producers, acknowledged only after the engine's durable acknowledgment, no retries, every acknowledged record read back, one receipt line. The server is started by `benchmarks/embedded/cmd/serve` (shared with the Go comparison); this worker never starts one. Same contract as the Python worker; offsets are BigInt.
 
 ```sh
-cd benchmarks/clients/javascript && npm ci --ignore-scripts      # needs package-lock.json: added once ENG-UK generates it and the integrity values are checked
+cd benchmarks/clients/javascript && npm ci --ignore-scripts      # from the committed package-lock.json (generated on ENG-UK; all 15 integrity values checked against DEPS-js-worker-v1.md)
 BENCH_TOKEN=<token from serve's READY line> node worker.mjs --engine kafka --addr 127.0.0.1:PORT --workers 8 --target 16000 --window 600
 ```
 

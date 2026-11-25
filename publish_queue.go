@@ -39,14 +39,16 @@ type publishQueue struct {
 	active  bool
 	pending []*queuedPublish
 	bytes   int
-	// groups and records count every journal write made for Publish calls (an inline
-	// write is a group of one). Tests read them to check how well calls are batched.
-	groups, records atomic.Int64
+	// groupAttempts and callAttempts count the journal writes attempted for Publish calls
+	// (an inline write is a group of one) and the calls in them. They are bumped when a
+	// write is attempted, before it succeeds or fails, so they are not a measure of
+	// durable records. Tests read them to check how calls are batched.
+	groupAttempts, callAttempts atomic.Int64
 }
 
 func (q *publishQueue) note(size int) {
-	q.groups.Add(1)
-	q.records.Add(int64(size))
+	q.groupAttempts.Add(1)
+	q.callAttempts.Add(int64(size))
 }
 
 func (n *Node) schedulePublish(ctx context.Context, p Partition, m Message) (Record, error) {

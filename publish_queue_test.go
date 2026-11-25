@@ -350,7 +350,7 @@ func TestDrainerTakesGatheredCallersAsOneGroup(t *testing.T) {
 		}
 		*now = now.Add(time.Second) // nobody else is coming
 	})
-	g0, r0 := n.publishes.groups.Load(), n.publishes.records.Load()
+	g0, r0 := n.publishes.groupAttempts.Load(), n.publishes.callAttempts.Load()
 	n.publishes.mu.Lock()
 	n.publishes.active = true // as in production, a drainer owns the queue
 	n.publishes.mu.Unlock()
@@ -360,10 +360,10 @@ func TestDrainerTakesGatheredCallersAsOneGroup(t *testing.T) {
 		return n.publishes.pending
 	}
 	n.drainPublishes(first)
-	if got := n.publishes.groups.Load() - g0; got != 2 {
+	if got := n.publishes.groupAttempts.Load() - g0; got != 2 {
 		t.Fatalf("%d groups, want 2 (the released four, then the four who came back)", got)
 	}
-	if got := n.publishes.records.Load() - r0; got != 8 {
+	if got := n.publishes.callAttempts.Load() - r0; got != 8 {
 		t.Fatalf("%d records, want 8", got)
 	}
 	if got := syncs.Load(); got != 2 {
@@ -397,7 +397,7 @@ func TestManyProducersGetDistinctReadableOffsets(t *testing.T) {
 	if _, err := n.Publish(ctx, p.Topic, Message{ID: "warm", Value: []byte("w")}); err != nil {
 		t.Fatal(err)
 	}
-	g0, r0 := n.publishes.groups.Load(), n.publishes.records.Load()
+	g0, r0 := n.publishes.groupAttempts.Load(), n.publishes.callAttempts.Load()
 	const producers, each = 32, 10
 	var wg sync.WaitGroup
 	offsets := make(chan Record, producers*each)
@@ -429,7 +429,7 @@ func TestManyProducersGetDistinctReadableOffsets(t *testing.T) {
 			t.Fatalf("offset %d: %v %q", r.Offset, err, got.ID)
 		}
 	}
-	groups, records := n.publishes.groups.Load()-g0, n.publishes.records.Load()-r0
+	groups, records := n.publishes.groupAttempts.Load()-g0, n.publishes.callAttempts.Load()-r0
 	if records != producers*each {
 		t.Fatalf("%d records written, want %d", records, producers*each)
 	}

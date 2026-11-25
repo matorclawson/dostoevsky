@@ -78,14 +78,23 @@ const config = "vm_memory_high_watermark.absolute = 1GiB\nloopback_users = none\
 // checks its context only before the write), so workers return, the AMQP-level
 // closes and the broker stop then run on a quiet connection.
 type connTracker struct {
-	mu    sync.Mutex
-	conns []net.Conn
+	mu     sync.Mutex
+	conns  []net.Conn
+	closed bool
 }
 
-func (t *connTracker) add(c net.Conn) {
+// add tracks c. After closeAll has run it closes c at once instead: a socket that
+// connects just before the guard trips must not wait out its handshake deadline.
+func (t *connTracker) add(c net.Conn) bool {
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		c.Close()
+		return false
+	}
 	t.conns = append(t.conns, c)
 	t.mu.Unlock()
+	return true
 }
 
 func (t *connTracker) remove(c net.Conn) {
@@ -109,6 +118,7 @@ func (t *connTracker) closeAll() {
 	t.mu.Lock()
 	conns := t.conns
 	t.conns = nil
+	t.closed = true
 	t.mu.Unlock()
 	for _, c := range conns {
 		c.Close()
@@ -128,7 +138,16 @@ func dialBroker(ctx context.Context, addr string, handshake time.Duration, t *co
 			return nil, err
 		}
 		_ = c.SetDeadline(time.Now().Add(handshake)) // the library clears it once the handshake is done
-		t.add(c)
+		// Register first, then look at cancellation again: a trip between the dial and
+		// the registration is caught here (or by add, after closeAll), never left to wait.
+		if !t.add(c) {
+			return nil, fmt.Errorf("connections were closed: %w", context.Canceled)
+		}
+		if err := ctx.Err(); err != nil {
+			t.remove(c)
+			c.Close()
+			return nil, err
+		}
 		raw = c
 		return c, nil
 	}}

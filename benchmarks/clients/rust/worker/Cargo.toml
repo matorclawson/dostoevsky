@@ -6,6 +6,9 @@ publish = false
 license = "MIT"
 description = "Rust worker for the language client benchmarks: Dostoevsky through the gateway against rdkafka, async-nats and redis"
 
+# Its own workspace root (see ../Cargo.toml).
+[workspace]
+
 [[bin]]
 name = "worker"
 path = "src/main.rs"

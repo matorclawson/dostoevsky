@@ -1,6 +1,7 @@
-# Its own workspace: nothing here is part of the Dostoevsky library, which has no dependencies. `core` is
-# standard-library only and is tested offline; `worker` carries the client libraries and is built only after
-# its lockfile has been checked (see README.md).
+# The core is its own workspace: standard library only, tested offline with nothing downloaded. The worker is a
+# SEPARATE workspace (worker/Cargo.toml) because cargo resolves every member of a workspace before it builds any of
+# them, and the worker's dependencies need a lockfile that exists only after the dependency check.
 [workspace]
-members = ["core", "worker"]
+members = ["core"]
+exclude = ["worker"]
 resolver = "2"

@@ -1,4 +1,5 @@
 """Synchronous Python client for the Dostoevsky v1 HTTP API."""
+import http.client
 import ipaddress
 from dataclasses import dataclass
 from urllib.error import HTTPError
@@ -55,9 +56,17 @@ def _check_url(url: str) -> None:
 
 
 def _bounded(response, limit: int) -> bytes:
-    data = response.read(limit + 1)
+    """The whole body, at most `limit` bytes. A body that ends before the announced length
+    (Content-Length short, or chunked without its terminating chunk) is an error, never a
+    success with a truncated value."""
+    try:
+        data = response.read(limit + 1)
+    except http.client.IncompleteRead as error:
+        raise ClientError(response.status, "incomplete_response") from error
     if len(data) > limit:
         raise ClientError(response.status, "oversized_response")
+    if response.length:  # bytes still owed by a Content-Length body
+        raise ClientError(response.status, "incomplete_response")
     return data
 
 

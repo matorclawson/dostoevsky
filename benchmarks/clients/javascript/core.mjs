@@ -9,6 +9,25 @@ export const HIST_BINS = 2400;
 const LOG = Math.log(1.01);
 export const STOP = { reached: "reached", window: "window", failed: "failed", verify: "verification-failed" };
 
+// The engine gave no answer before the deadline: the publish may or may not have been stored. The run
+// stops as failed, says so, and the message is not counted.
+export class AmbiguousOutcome extends Error {
+  constructor(message) { super(message); this.name = "AmbiguousOutcome"; }
+}
+
+// What may go into a receipt about an engine error: the error CLASS and one word from a fixed set.
+// Never the message, which can carry tokens, addresses with credentials or payload bytes.
+export function reason(e) {
+  const name = typeof e?.name === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(e.name) ? e.name : "Error";
+  const code = String(e?.code ?? "");
+  let word = "engine-error";
+  if (e instanceof AmbiguousOutcome) word = "ambiguous-timeout";
+  else if (/timeout/i.test(name) || code === "ETIMEDOUT" || code === "ABORT_ERR") word = "timeout";
+  else if (/^(ECONN|EPIPE|ENOTFOUND|EAI_)/.test(code) || /connection/i.test(name)) word = "connection";
+  else if (e instanceof TypeError || e instanceof RangeError || e instanceof SyntaxError) word = "protocol";
+  return `${name}:${word}`;
+}
+
 export class Hist {
   n = new Array(HIST_BINS).fill(0);
   static index(ns) {
@@ -45,10 +64,16 @@ const nowNs = () => process.hrtime.bigint();
 // (seconds) ends, or a publish fails. The failing publish is not counted and nothing is retried.
 // Publishes in flight when the stop is decided still complete and are counted.
 export async function runWorkload(adapter, workers, target, windowSeconds, clock = nowNs) {
-  const state = { next: 0, stop: null };
+  const state = { next: 0, stop: null, ambiguous: false };
   const hist = new Hist();
   const records = [];
   const setStop = (kind, text = "") => { if (state.stop === null) state.stop = { kind, text }; };
+  // A failure is never hidden by an earlier "reached" or "window": whichever came first, a publish
+  // that failed makes the run a failed run.
+  const fail = (text, ambiguous) => {
+    if (state.stop === null || state.stop.kind !== STOP.failed) state.stop = { kind: STOP.failed, text };
+    state.ambiguous ||= ambiguous;
+  };
   const start = clock();
   const deadline = windowSeconds > 0 ? start + BigInt(Math.round(windowSeconds * 1e9)) : null;
   async function producer() {
@@ -63,7 +88,7 @@ export async function runWorkload(adapter, workers, target, windowSeconds, clock
       try {
         offset = await adapter.publish(payload(i));
       } catch (e) {
-        setStop(STOP.failed, `publish ${i}: ${e?.name ?? "Error"}: ${e?.message ?? e}`);
+        fail(`publish ${i}: ${reason(e)}`, e instanceof AmbiguousOutcome);
         return;
       }
       hist.addNs(nowNs() - begin);
@@ -74,7 +99,7 @@ export async function runWorkload(adapter, workers, target, windowSeconds, clock
   const elapsed = Number(clock() - start) / 1e9;
   const stop = state.stop ?? { kind: STOP.reached, text: "" };
   const detail = stop.kind === STOP.failed ? `${stop.text} (after ${records.length} acknowledged)` : stop.text;
-  return { acked: records.length, elapsed, stop: stop.kind, detail, hist, records };
+  return { acked: records.length, elapsed, stop: stop.kind, detail, hist, records, ambiguous: state.ambiguous };
 }
 
 // Reads every acknowledged record back in offset order; returns "" or a plain-words failure.
@@ -85,7 +110,7 @@ export async function verify(adapter, records) {
     try {
       got = await adapter.read(offset);
     } catch (e) {
-      return `record ${i} at ${offset}: ${e?.name ?? "Error"}: ${e?.message ?? e}`;
+      return `record ${i} at ${offset}: read ${reason(e)}`;
     }
     if (!Buffer.from(got).equals(payload(i))) return `record ${i} at ${offset}: the bytes read back differ from the bytes published`;
   }
@@ -94,15 +119,23 @@ export async function verify(adapter, records) {
 
 export function peakRssKiB() { return process.resourceUsage().maxRSS; } // KiB on every platform libuv supports
 
-export function receiptLine(engine, workers, res, verified, client, rssKiB) {
-  const rate = res.elapsed > 0 ? res.acked / res.elapsed : 0;
+// A value that stays ONE whitespace-free token, so the line parses as key=value pairs.
+const token = (text) => String(text).replace(/\s+/g, "_");
+
+// One line. result=FAILED whenever the run failed or its read-back did not verify; the throughput
+// counts only acknowledged-and-verified messages.
+export function receiptLine(engine, workers, res, verified, client, rssKiB, build = "n/a") {
+  const ok = res.stop === STOP.reached || res.stop === STOP.window;
+  const rate = res.elapsed > 0 ? verified / res.elapsed : 0;
   const f = [
-    `engine=${engine}`, `workers=${workers}`, `acked=${res.acked}`, `verified=${verified}`,
+    `engine=${engine}`, `workers=${workers}`, `result=${ok ? "ok" : "FAILED"}`, `acked=${res.acked}`, `verified=${verified}`,
     `records/s=${rate.toFixed(0)}`, `elapsed_s=${res.elapsed.toFixed(2)}`,
     `p50_us=${res.hist.quantileUs(0.5)}`, `p95_us=${res.hist.quantileUs(0.95)}`, `p99_us=${res.hist.quantileUs(0.99)}`,
-    `p99_9_us=${res.hist.quantileUs(0.999)}`, `p99_99_us=${res.hist.quantileUs(0.9999)}`,
-    `client_rss_KiB=${rssKiB}`, "client_rss_source=maxRSS", "lang=javascript", `client=${client}`, `stop=${res.stop}`,
+    `p99_9_us=${res.hist.quantileUs(0.999)}`, `p99_99_us=${res.hist.quantileUs(0.9999)}`, "quantiles=bin-upper-1pct",
+    `client_rss_KiB=${rssKiB}`, "client_rss_source=maxRSS", "lang=javascript", `client=${token(client)}`, `client_build=${token(build)}`,
   ];
-  if (res.detail) f.push("detail=" + res.detail.replaceAll("\n", " ").replaceAll(" ", "_").slice(0, 200));
+  if (res.ambiguous) f.push("ambiguous=1");
+  f.push(`stop=${res.stop}`);
+  if (res.detail) f.push("detail=" + res.detail.replace(/[^A-Za-z0-9_.:,()\/-]/g, "_").slice(0, 200));
   return f.join(" ");
 }

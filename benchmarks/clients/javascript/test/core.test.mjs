@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as core from "../core.mjs";
 import { main } from "../worker.mjs";
-import { packId, unpackId } from "../adapters.mjs";
+import { buildId, identity, ownClientName, packId, unpackId, version } from "../adapters.mjs";
+
+const here = (rel) => new URL(rel, import.meta.url);
+const EXAMPLES = readFileSync(here("../../receipt_examples.txt"), "utf8").split("\n").filter((l) => l.trim() && !l.startsWith("#"));
+const PINS = JSON.parse(readFileSync(here("../package.json"), "utf8")).dependencies;
+const OWN = JSON.parse(readFileSync(here("../../../../clients/javascript/package.json"), "utf8"));
 
 const VECTOR = JSON.parse(readFileSync(new URL("../../hist_vector.json", import.meta.url)));
 
@@ -65,7 +70,8 @@ test("a failure is a result, never retried, and the failing publish is not count
   const res = await core.runWorkload(m, 1, 100, 0);
   assert.equal(res.stop, "failed");
   assert.deepEqual([res.acked, m.attempts], [5, 6]); // five acknowledged, the sixth failed, no seventh
-  assert.match(res.detail, /the engine went away/);
+  assert.match(res.detail, /Error:engine-error/);
+  assert.doesNotMatch(res.detail, /the engine went away/); // the message text never reaches a receipt
   assert.match(res.detail, /after 5 acknowledged/);
 });
 
@@ -99,7 +105,7 @@ test("the receipt line has the documented keys, one line, no secret", async () =
   const res = await core.runWorkload(memory(), 2, 100, 0);
   const line = core.receiptLine("javascript-memory", 2, res, 100, "memory-0", 12345);
   const keys = Object.fromEntries(line.split(" ").map((kv) => kv.split(/=(.*)/s).slice(0, 2)));
-  for (const k of ["engine", "workers", "acked", "verified", "records/s", "elapsed_s", "p50_us", "p95_us", "p99_us", "p99_9_us", "p99_99_us", "client_rss_KiB", "client_rss_source", "lang", "client", "stop"]) assert.ok(k in keys, k);
+  for (const k of ["engine", "workers", "acked", "verified", "records/s", "elapsed_s", "p50_us", "p95_us", "p99_us", "p99_9_us", "p99_99_us", "quantiles", "client_rss_KiB", "client_rss_source", "lang", "client", "client_build", "result", "stop"]) assert.ok(k in keys, k);
   assert.deepEqual([keys.engine, keys.stop, keys.acked, keys.verified], ["javascript-memory", "reached", "100", "100"]);
   assert.ok(!line.includes("\n"));
   const failed = core.receiptLine("x", 1, { acked: 3, elapsed: 1, stop: "failed", detail: "publish 4: boom happened", hist: new core.Hist(), records: [] }, 3, "c", 1);
@@ -141,4 +147,109 @@ test("stream IDs pack into a BigInt and back, beyond 2^53", () => {
   assert.equal(unpackId(packId(id)), id);
   assert.ok(packId(id) > BigInt(Number.MAX_SAFE_INTEGER));
   assert.throws(() => packId("5-65536"), /does not fit/);
+});
+
+function fixedResult(stop, { detail = "", acked = 1000, ambiguous = false } = {}) {
+  const hist = new core.Hist();
+  for (let i = 0; i < acked; i++) hist.addNs(2_000_000);
+  return { acked, elapsed: 2, stop, detail, hist, records: [], ambiguous };
+}
+
+test("the JavaScript lines equal the shared examples, byte for byte", () => {
+  const want = Object.fromEntries(EXAMPLES.map((l) => [l.split(" ")[0], l]));
+  assert.equal(core.receiptLine("javascript-nats", 8, fixedResult("reached"), 1000, "@nats-io/transport-node-3.4.0+@nats-io/jetstream-3.4.0", 51200, "n/a"), want["engine=javascript-nats"]);
+  assert.equal(core.receiptLine("javascript-dostoevsky", 8, fixedResult("reached"), 1000, "dostoevsky-client-0.1.0", 51200, "0123456789ab"), want["engine=javascript-dostoevsky"]);
+  const failed = fixedResult("failed", { acked: 4, detail: "publish 4: Error:engine-error (after 4 acknowledged)" });
+  assert.equal(core.receiptLine("javascript-redis", 8, failed, 4, "ioredis-6.0.0", 51200, "n/a"), want["engine=javascript-redis"]);
+});
+
+test("every token is a key=value pair even for a client name with spaces", () => {
+  const line = core.receiptLine("javascript-x", 8, fixedResult("reached"), 1000, "name with spaces (pool)", 1, "build id");
+  assert.ok(line.split(" ").every((t) => t.includes("=")), line);
+});
+
+test("a failure that lands after the run was already reached still makes it failed", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const m = memory();
+  const inner = m.publish;
+  m.publish = async (data) => {
+    if (data.readBigUInt64BE(0) === 1n) { await gate; throw new Error("reset by peer"); }
+    return inner(data);
+  };
+  const run = core.runWorkload(m, 2, 2, 0);
+  setTimeout(release, 300);
+  const res = await run;
+  assert.equal(res.stop, "failed");
+  assert.equal(res.acked, 1);
+  assert.equal(core.receiptLine("x", 2, res, 1, "c", 1).split(" ")[2], "result=FAILED");
+});
+
+test("result is FAILED for a failure and a verification failure, ok otherwise; throughput counts verified messages only", async () => {
+  const run = async (m) => { const [, lines] = await trial(["--engine", "memory", "--addr", "x:1", "--target", "20"], m); return Object.fromEntries(lines[0].split(" ").map((kv) => kv.split(/=(.*)/s).slice(0, 2))); };
+  const ok = await run(memory());
+  assert.deepEqual([ok.result, ok.stop, ok.verified], ["ok", "reached", "20"]);
+  const failed = await run(memory({ failAt: 5 }));
+  assert.deepEqual([failed.result, failed.stop], ["FAILED", "failed"]);
+  const bad = await run(memory({ corrupt: true }));
+  assert.deepEqual([bad.result, bad.stop, bad.verified, bad["records/s"]], ["FAILED", "verification-failed", "0", "0"]);
+});
+
+test("error text never reaches the receipt, only the class and a fixed word", async () => {
+  const leaky = memory();
+  leaky.publish = async () => { throw new Error("AUTH failed for redis://user:hunter2@10.0.0.9:6379 payload=abababab"); };
+  const res = await core.runWorkload(leaky, 1, 5, 0);
+  const line = core.receiptLine("x", 1, res, 0, "c", 1);
+  for (const leak of ["hunter2", "10.0.0.9", "redis://", "payload", "AUTH"]) assert.ok(!line.includes(leak), leak);
+  assert.match(line, /Error:engine-error/);
+  const m = memory();
+  const r = await core.runWorkload(m, 1, 3, 0);
+  m.read = async () => { throw new Error("secret-in-read hunter2"); };
+  const why = await core.verify(m, r.records);
+  assert.ok(!why.includes("hunter2"));
+  assert.match(why, /Error:engine-error/);
+  assert.equal(core.reason(new core.AmbiguousOutcome("x")), "AmbiguousOutcome:ambiguous-timeout");
+  assert.equal(core.reason(Object.assign(new Error("x"), { code: "ECONNRESET" })), "Error:connection");
+});
+
+test("an ambiguous timeout is reported as such", async () => {
+  const silent = memory();
+  silent.publish = async () => { throw new core.AmbiguousOutcome("no answer"); };
+  const res = await core.runWorkload(silent, 1, 5, 0);
+  assert.equal(res.ambiguous, true);
+  const line = core.receiptLine("x", 1, res, 0, "c", 1);
+  assert.match(line, / ambiguous=1 /);
+  assert.match(line, /AmbiguousOutcome:ambiguous-timeout/);
+});
+
+// These need the dependencies installed (npm ci --ignore-scripts): they fail, loudly, when they are not.
+test("every real adapter reports its installed client identity, whitespace-free, matching the pins", () => {
+  const need = (name) => { try { return version(name); } catch (e) { assert.fail(`${name} is not installed: run npm ci --ignore-scripts first (${e.message})`); } };
+  assert.equal(need("kafkajs"), `kafkajs-${PINS.kafkajs}`);
+  assert.equal(need("ioredis"), `ioredis-${PINS.ioredis}`);
+  assert.equal(need("@nats-io/jetstream"), `@nats-io/jetstream-${PINS["@nats-io/jetstream"]}`); // its exports map hides ./package.json
+  assert.equal(need("@nats-io/transport-node"), `@nats-io/transport-node-${PINS["@nats-io/transport-node"]}`);
+  for (const e of ["dostoevsky", "kafka", "nats", "redis"]) assert.doesNotMatch(identity(e), /\s/, e);
+  assert.equal(identity("dostoevsky"), `${OWN.name}-${OWN.version}`);
+  assert.equal(ownClientName(), `${OWN.name}-${OWN.version}`);
+});
+
+test("the build id is a commit (or unknown outside a checkout)", () => {
+  assert.match(buildId(), /^([0-9a-f]{12}(-dirty)?|unknown)$/);
+  assert.equal(buildId("/"), "unknown");
+});
+
+test("workers and target must be whole numbers and the window finite", async () => {
+  for (const bad of [["--workers", "1.5"], ["--workers", "1e9999"], ["--workers", "abc"], ["--target", "2.5"], ["--target", "0"], ["--window", "Infinity"], ["--window", "-1"]]) {
+    assert.equal((await trial(["--engine", "memory", "--addr", "x:1", ...bad], memory()))[0], 2, bad.join(" "));
+  }
+});
+
+test("a gated run refuses an unknown client build", async () => {
+  const unknown = memory();
+  unknown.clientBuild = "unknown";
+  assert.equal((await trial(["--engine", "memory", "--addr", "x:1", "--target", "5", "--require-known-build"], unknown))[0], 2);
+  const [code, lines] = await trial(["--engine", "memory", "--addr", "x:1", "--target", "5"], unknown);
+  assert.equal(code, 0);
+  assert.match(lines[0], /client_build=unknown/);
 });

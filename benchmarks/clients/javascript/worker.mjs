@@ -13,16 +13,24 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
   try {
     args = parseArgs({ args: argv, options: {
       engine: { type: "string" }, addr: { type: "string" }, workers: { type: "string", default: "1" },
-      target: { type: "string", default: "2000" }, window: { type: "string", default: "0" } } }).values;
+      target: { type: "string", default: "2000" }, window: { type: "string", default: "0" },
+      "require-known-build": { type: "boolean", default: false } } }).values;
   } catch (e) { console.error(e.message); return 2; }
   const workers = Number(args.workers), target = Number(args.target), windowS = Number(args.window);
-  if (!args.engine || !args.addr || !(workers >= 1) || !(target >= 1) || !(windowS >= 0)) {
-    console.error("usage: --engine E --addr host:port [--workers N>=1] [--target N>=1] [--window S>=0]");
+  // Whole numbers a double holds exactly, and a finite window: "--workers 1e9999" or "--target 2.5" is a usage error.
+  if (!args.engine || !args.addr || !Number.isSafeInteger(workers) || workers < 1 || !Number.isSafeInteger(target) || target < 1
+      || !Number.isFinite(windowS) || windowS < 0) {
+    console.error("usage: --engine E --addr host:port [--workers N>=1, an integer] [--target N>=1, an integer] [--window S>=0, finite] [--require-known-build]");
     return 2;
   }
   engines ??= (await import("./adapters.mjs")).ENGINES;
   if (!(args.engine in engines)) { console.error(`unknown engine '${args.engine}' (have ${Object.keys(engines).sort().join(", ")})`); return 2; }
   const adapter = await engines[args.engine](args.addr, env.BENCH_TOKEN ?? "");
+  if (args["require-known-build"] && adapter.clientBuild === "unknown") {
+    await adapter.close();
+    console.error("the client build is unknown (no git commit could be read); refusing to run a gated trial");
+    return 2;
+  }
   let res, verified = 0;
   try {
     res = await core.runWorkload(adapter, workers, target, windowS);
@@ -33,7 +41,7 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
   } finally {
     await adapter.close();
   }
-  out(core.receiptLine(`javascript-${args.engine}`, workers, res, verified, adapter.clientName, core.peakRssKiB()));
+  out(core.receiptLine(`javascript-${args.engine}`, workers, res, verified, adapter.clientName, core.peakRssKiB(), adapter.clientBuild ?? "n/a"));
   return 0;
 }
 

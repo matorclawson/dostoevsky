@@ -109,6 +109,9 @@ const exitSIGTERM = 128 + int(syscall.SIGTERM)
 // recorded kill is never cleared by a late SIGTERM status), and, for 143,
 // cleanShutdown confirms from the server's own state that the shutdown was clean.
 // Any other status, an exit nobody asked for or a failed confirmation is an error.
+//
+// Known limit: a leader that died by itself but has not yet been reaped by cmd.Wait still
+// accepts kill(), so such a death can look like delivery. Closing that needs a pidfd.
 func (p *Proc) StopWith(grace time.Duration, cleanShutdown func() error) error {
 	pid := p.cmd.Process.Pid
 	var err error

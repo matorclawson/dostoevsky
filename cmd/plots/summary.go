@@ -81,7 +81,7 @@ func summarize(w io.Writer, path string, want int, producers []int, expectEngine
 			}
 			kv[k] = v
 		}
-		if containsWord(fields, "FAILED") {
+		if containsWord(fields, "FAILED") || kv["result"] == "FAILED" {
 			failed++
 			problem("line %d: FAILED trial (%s, %s producers): %.120s", n, kv["engine"], kv["workers"], line)
 			continue

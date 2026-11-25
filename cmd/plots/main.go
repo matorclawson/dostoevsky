@@ -46,12 +46,30 @@ func quantileKind(t trial) string {
 	return "exact"
 }
 
+// carriesPercentiles says whether a row has percentiles at all. A FAILED row (the driver's marker, or a
+// worker's result=FAILED) and anything else without p50/p95/p99 has none, so it says nothing about how
+// percentiles were computed and must not take part in the kind check.
+func carriesPercentiles(t trial) bool {
+	if t["failed"] == "1" {
+		return false
+	}
+	for _, k := range []string{"p50_us", "p95_us", "p99_us"} {
+		if _, ok := t[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // oneQuantileKind refuses a set of trials whose percentiles mean different things: a chart that
 // mixed exact values with bin upper edges would compare numbers that are not the same quantity.
+// Only rows that carry percentiles are looked at, so a run with a failed trial is not "mixed".
 func oneQuantileKind(trials []trial) error {
 	kinds := map[string]bool{}
 	for _, t := range trials {
-		kinds[quantileKind(t)] = true
+		if carriesPercentiles(t) {
+			kinds[quantileKind(t)] = true
+		}
 	}
 	if len(kinds) > 1 {
 		return fmt.Errorf("the receipt mixes percentile kinds (quantiles=exact and quantiles=bin-upper-1pct); draw them as separate charts")
@@ -98,6 +116,9 @@ func parseTrials(path, section string) ([]trial, error) {
 			}
 			if k, v, ok := strings.Cut(field, "="); ok {
 				t[k] = v
+				if k == "result" && v == "FAILED" {
+					t["failed"] = "1" // a language worker's own verdict counts exactly like the driver's FAILED marker
+				}
 			}
 		}
 		if len(t) > 0 {

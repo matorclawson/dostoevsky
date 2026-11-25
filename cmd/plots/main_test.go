@@ -452,3 +452,39 @@ func TestEveryLanguageWorkerLineParses(t *testing.T) {
 		t.Fatalf("%d FAILED example lines, want at least two", failed)
 	}
 }
+
+// A run with a failed trial must still plot: the driver's FAILED row carries no percentiles, so it says
+// nothing about their kind, and a worker's result=FAILED row counts as a failure like the marker.
+func TestAFailedRowIsNeutralForThePercentileKindAndResultFailedIsAFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.log")
+	lines := []string{
+		"trial=1 engine=a workers=1 records/s=10 p99_us=5 quantiles=bin-upper-1pct",
+		"trial=1 engine=b workers=1 FAILED stop=failed publish_4:_Error:engine-error", // the driver's row: no percentiles, no marker
+		"trial=2 engine=b workers=1 result=FAILED records/s=0 p99_us=7 quantiles=bin-upper-1pct stop=failed",
+		"trial=2 engine=a workers=1 records/s=11 p99_us=6 quantiles=bin-upper-1pct",
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseTrials(path, "*")
+	if err != nil {
+		t.Fatalf("a run with a failed trial was refused as mixed: %v", err)
+	}
+	failed := 0
+	for _, tr := range got {
+		if tr["failed"] == "1" {
+			failed++
+		}
+	}
+	if len(got) != 4 || failed != 2 {
+		t.Fatalf("%d trials, %d marked failed; want 4 and 2 (the FAILED row and the result=FAILED row)", len(got), failed)
+	}
+	// An exact (unmarked) success next to a binned one is still mixed, whatever failed around them.
+	mixed := append(lines, "trial=3 engine=a workers=1 records/s=12 p99_us=6")
+	if err := os.WriteFile(path, []byte(strings.Join(mixed, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTrials(path, "*"); err == nil || !strings.Contains(err.Error(), "mixes percentile kinds") {
+		t.Fatalf("exact and binned successes in one receipt: %v", err)
+	}
+}

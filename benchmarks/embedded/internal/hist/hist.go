@@ -2,7 +2,7 @@
 // percentiles from: 1% wide bins from 1 microsecond up, 2400 of them, the last taking
 // everything above. A quantile is the UPPER EDGE of the bin that holds it, in whole
 // nanoseconds (receipts print it as microseconds with three decimals, so nothing is rounded
-// away), so it is accurate to 1% and never below the true value. The Python and
+// away), so it is accurate to 1% and never below the true value WITHIN THE BIN DOMAIN: from 1 microsecond up to the last bin's upper edge (1.01^2400 microseconds, about 6.5 hours). Below 1 microsecond everything is in the first bin, whose edge is 1.01 us; above the domain everything is clamped into the last bin, so there a reported value can be BELOW the true one. The Python and
 // JavaScript workers implement the same bins and are checked against the same file,
 // benchmarks/clients/hist_vector.json, so a number means the same thing in every language.
 package hist

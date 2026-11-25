@@ -277,6 +277,17 @@ func (s *logState) checkpointFollows(o *logState) error {
 		if b == nil || a.next != b.next || b.base < a.base || len(a.groups) != len(b.groups) {
 			return fmt.Errorf("partition id %d (%v): next %d, floor %d here; the checkpoint says next %d, floor %d", pid, p, a.next, a.base, b.next, b.base)
 		}
+		if b.base > a.base {
+			// Retention may raise a floor only where no group is behind it (the precondition retain
+			// enforces). Group positions are identical here, so a raised floor past one is a floor
+			// the model could not have produced. A group that was created behind a floor that was
+			// already established is fine as long as the floor does not move.
+			for g, pos := range b.groups {
+				if pos.Next < b.base {
+					return fmt.Errorf("%w: floor of partition id %d (%v) raised to %d past group %q at %d", errLogLagging, pid, p, b.base, g, pos.Next)
+				}
+			}
+		}
 		for g, pos := range a.groups {
 			if q, ok := b.groups[g]; !ok || q.Next != pos.Next || !bytes.Equal(q.State, pos.State) {
 				return fmt.Errorf("group %q of partition id %d differs", g, pid)

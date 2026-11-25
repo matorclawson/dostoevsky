@@ -677,3 +677,67 @@ func TestReplayRefusesACheckpointFromAnotherSegment(t *testing.T) {
 		t.Fatalf("a checkpoint from another segment was adopted: %v", got)
 	}
 }
+
+// cx PR 32 M1: a checkpoint may raise a floor only where Retain could have: no group behind it.
+func TestReplayRefusesARaisedFloorPastAGroup(t *testing.T) {
+	st := newLogState()
+	st.setConfig([]byte("{}"))
+	pid, _, _ := st.ensure(Partition{"t", 0})
+	for i := uint64(0); i < 10; i++ {
+		if err := st.applyRecord(pid, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.applyCommit(commit3{Partition: pid, Group: []byte("slow"), Next: 3, HasExpected: true, Expected: 0}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := appendCheckpoint3(nil, st.snapshot(1, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a legitimate raise (to the group's position) is accepted ...
+	ok := cloneLog(t, st)
+	if err = ok.retain(map[uint32]int64{pid: 3}); err != nil {
+		t.Fatal(err)
+	}
+	okCP, _ := appendCheckpoint3(nil, ok.snapshot(2, 1))
+	good := newLogState()
+	if _, err = replayAll(append(bytes.Clone(before), okCP...), good); err != nil || good.equal(ok) != nil {
+		t.Fatalf("a floor raised to a group's position was refused: %v", err)
+	}
+	// ... one past the group is not, and the state before it stays intact
+	cp := st.snapshot(2, 1)
+	cp.Partitions[0].Base = 5
+	forged, _ := appendCheckpoint3(nil, cp)
+	have := newLogState()
+	_, err = replayAll(append(bytes.Clone(before), forged...), have)
+	if !errors.Is(err, errCheckpointInvalid) || !errors.Is(err, errLogLagging) {
+		t.Fatalf("a floor raised past a group was accepted: %v", err)
+	}
+	only := newLogState()
+	if _, err = replayAll(before, only); err != nil || have.equal(only) != nil {
+		t.Fatalf("a refused checkpoint changed the state: %v", err)
+	}
+	// a group created behind an already established floor does not make the next checkpoint invalid
+	late := cloneLog(t, ok) // floor 3 established
+	if err = late.applyCommit(commit3{Partition: pid, Group: []byte("late"), Next: 1, HasExpected: true, Expected: 0}); err != nil {
+		t.Fatal(err)
+	}
+	cpLate, _ := appendCheckpoint3(nil, late.snapshot(3, 1))
+	commit, _ := appendCommit3(nil, commit3{Partition: pid, Group: []byte("late"), Next: 1, HasExpected: true, Expected: 0})
+	chain := append(append(append(bytes.Clone(before), okCP...), commit...), cpLate...)
+	if _, err = replayAll(chain, newLogState()); err != nil {
+		t.Fatalf("a group behind an established floor made a later checkpoint invalid: %v", err)
+	}
+}
+
+// cx PR 32 L1: the wire format declares an empty fence.
+func TestReplayRefusesAFenceWithABody(t *testing.T) {
+	r := newReplayer3(newLogState())
+	if err := r.Frame(f3Fence, nil); err != nil || r.Fences != 1 {
+		t.Fatalf("an empty fence: %v %d", err, r.Fences)
+	}
+	if err := r.Frame(f3Fence, []byte{1}); !errors.Is(err, errFrame3Invalid) || r.Fences != 1 {
+		t.Fatalf("a fence with a body: %v %d", err, r.Fences)
+	}
+}

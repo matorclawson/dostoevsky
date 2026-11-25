@@ -48,6 +48,11 @@ public final class ClientTest {
                 else { h.set("Dostoevsky-Partition", "0"); h.set("Dostoevsky-Offset", "7"); }
             } else if (op.equals("read")) {
                 if (q.get("offset").equals("99")) code = 204;
+                else if (q.get("offset").equals("77")) {
+                    h.set("Dostoevsky-Partition", "0"); h.set("Dostoevsky-Offset", "77"); h.set("Dostoevsky-Key", "");
+                    h.set("Dostoevsky-ID", ""); h.set("Dostoevsky-Time", "t");
+                    out = new byte[(1 << 20) + 1];
+                }
                 else {
                     h.set("Dostoevsky-Partition", "0"); h.set("Dostoevsky-Offset", q.get("offset"));
                     // The server uses PathEscape: a space is %20 and a plus sign stays a plus sign.
@@ -90,6 +95,13 @@ public final class ClientTest {
             catch (Client.ClientException e) { check(e.status == 409 && e.code.equals("conflict"), "409 word"); }
             try { new Client("http://127.0.0.1:" + server.getAddress().getPort(), "wrong").position("jobs", 0, "g"); check(false, "401 not thrown"); }
             catch (Client.ClientException e) { check(e.status == 401, "401"); }
+            try { c.read("jobs", 0, 77, 0); check(false, "oversized not refused"); }
+            catch (Client.ClientException e) { check(e.code.equals("oversized_response"), "oversized word"); }
+
+            for (var ok : new String[] {"http://127.0.0.1:8787", "http://localhost:1", "http://[::1]:1", "https://example.com", "https://10.0.0.5:8787"}) Client.checkUrl(ok);
+            for (var bad : new String[] {"http://example.com", "http://10.0.0.5:8787", "http://0.0.0.0:1", "http://localhost.example.com", "ftp://127.0.0.1", "127.0.0.1:8787"}) {
+                try { Client.checkUrl(bad); check(false, "accepted " + bad); } catch (IllegalArgumentException expected) { }
+            }
             System.out.println("ok");
         } finally {
             server.stop(0);

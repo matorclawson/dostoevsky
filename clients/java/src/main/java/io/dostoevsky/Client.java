@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -27,17 +28,34 @@ public final class Client {
         }
     }
 
+    /** The protocol's largest value, key or checkpoint state. */
+    static final int MAX_BODY = 1 << 20;
+
+    private record Reply(int statusCode, HttpHeaders headers, byte[] body) {}
+
     private final String base;
     private final String token;
     private final HttpClient http = HttpClient.newBuilder()
         .followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofSeconds(10)).build();
 
+    /** The bearer token grants the whole store: only https, or http to loopback, may carry it. */
+    static void checkUrl(String url) {
+        URI u = URI.create(url);
+        String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase();
+        String host = u.getHost() == null ? "" : u.getHost().toLowerCase();
+        boolean loopback = host.equals("localhost") || host.equals("[::1]") || host.matches("127(\\.\\d{1,3}){3}");
+        if (scheme.equals("https") && !host.isEmpty() || scheme.equals("http") && loopback) return;
+        throw new IllegalArgumentException(
+            "refusing to send the token over plain http to a non-loopback address; use https://");
+    }
+
     public Client(String url, String token) {
+        checkUrl(url);
         this.base = url.replaceAll("/+$", "") + "/dostoevsky/client/v1/";
         this.token = token;
     }
 
-    private HttpResponse<byte[]> call(String op, byte[] body, String... pairs)
+    private Reply call(String op, byte[] body, String... pairs)
             throws IOException, InterruptedException {
         var query = new StringJoiner("&");
         for (int i = 0; i < pairs.length; i += 2) {
@@ -48,23 +66,29 @@ public final class Client {
             .header("Content-Type", "application/octet-stream");
         if (body == null) request.GET();
         else request.POST(HttpRequest.BodyPublishers.ofByteArray(body));
-        var res = http.send(request.build(), HttpResponse.BodyHandlers.ofByteArray());
-        if (res.statusCode() / 100 != 2) {
-            throw new ClientException(res.statusCode(), new String(res.body(), StandardCharsets.UTF_8).strip());
+        var res = http.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
+        try (var in = res.body()) {
+            int code = res.statusCode();
+            if (code / 100 != 2) {
+                byte[] text = in.readNBytes(256);
+                throw new ClientException(code, new String(text, StandardCharsets.UTF_8).strip());
+            }
+            byte[] body = in.readNBytes(MAX_BODY + 1);
+            if (body.length > MAX_BODY) throw new ClientException(code, "oversized_response");
+            return new Reply(code, res.headers(), body);
         }
-        return res;
     }
 
-    private static String header(HttpResponse<?> res, String name) throws IOException {
+    private static String header(Reply res, String name) throws IOException {
         return res.headers().firstValue("Dostoevsky-" + name)
             .orElseThrow(() -> new IOException("Missing response header: " + name));
     }
 
-    private static String metadata(HttpResponse<?> res, String name) throws IOException {
+    private static String metadata(Reply res, String name) throws IOException {
         return URLDecoder.decode(header(res, name).replace("+", "%2B"), StandardCharsets.UTF_8);
     }
 
-    private static Receipt receipt(HttpResponse<?> res) throws IOException {
+    private static Receipt receipt(Reply res) throws IOException {
         return new Receipt(Integer.parseInt(header(res, "Partition")), Long.parseLong(header(res, "Offset")));
     }
 

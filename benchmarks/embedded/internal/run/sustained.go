@@ -218,6 +218,29 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	if err := checkMemory(); err != nil {
 		return err
 	}
+	// The package-level hooks are read ONCE here: work abandoned at the end can outlive this call, and must not read a
+	// package variable that a test (or anything else) restores afterwards.
+	usedFn, freeFn, memFn, minFree, bound := diskUsedKiB, diskFreeKiB, memAvailable, minFreeKiB, telemetryBound
+	availMem := func() string {
+		kib, err := memFn()
+		if err != nil {
+			return "unavailable"
+		}
+		return strconv.FormatUint(kib, 10)
+	}
+	checkMem := func() error {
+		kib, err := memFn()
+		if errors.Is(err, errNoMeminfo) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("cannot read available memory: %w", err)
+		}
+		if kib < minFree {
+			return fmt.Errorf("low-memory abort: %d KiB available, below %d KiB", kib, minFree)
+		}
+		return nil
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	setContext(ctx)
 	defer func() { cancel(); setContext(context.Background()) }()
@@ -271,16 +294,19 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	closed = false
 	bind()
 
+	// floor: the offset below which retention may have dropped records. failure: the first engine failure, kept apart from
+	// whichever stop was admitted first. cur: the bucket's histogram (histMu makes a rotation wait for writers of the old
+	// one). reopens and finalReopenMS are written by a reopen under the gate and read by the final line as atomic snapshots.
 	var (
 		next, acked   atomic.Int64
 		maxOffset     atomic.Uint64
-		floor         atomic.Uint64 // the offset below which retention may have dropped records
+		floor         atomic.Uint64
 		stop          atomic.Pointer[stopInfo]
-		failure       atomic.Pointer[stopInfo] // the first engine failure, kept apart from whichever stop was admitted first
-		cur           = new(latHist) // the bucket's histogram; histMu makes a rotation wait for writers of the old one
+		failure       atomic.Pointer[stopInfo]
+		cur           = new(latHist)
 		histMu        sync.RWMutex
 		total         = new(latHist)
-		reopens       atomic.Int64 // written by a reopen (under the gate), read by the final line without it: atomic snapshots
+		reopens       atomic.Int64
 		finalReopenMS atomic.Pointer[string]
 		sampMu        sync.Mutex
 		strided       []pair
@@ -298,9 +324,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	// guarded is the host memory guard that also records the available memory at the cut-off, for the final line.
 	var cutoffKiB atomic.Uint64
 	guarded := func() error {
-		e := checkMemory()
+		e := checkMem()
 		if e != nil {
-			if k, err := memAvailable(); err == nil {
+			if k, err := memFn(); err == nil {
 				cutoffKiB.CompareAndSwap(0, max(k, 1))
 			}
 		}
@@ -380,10 +406,10 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	}
 	diskText := func() (used, free string) {
 		used, free = "unmeasured", "unmeasured"
-		if u, e := diskUsedKiB(dir); e == nil {
+		if u, e := usedFn(dir); e == nil {
 			used = strconv.FormatUint(u, 10)
 		}
-		if f, e := diskFreeKiB(dir); e == nil {
+		if f, e := freeFn(dir); e == nil {
 			free = strconv.FormatUint(f, 10)
 		}
 		return
@@ -395,7 +421,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		select {
 		case r := <-ch:
 			return r[0], r[1]
-		case <-time.After(telemetryBound):
+		case <-time.After(bound):
 			return "unmeasured", "unmeasured"
 		}
 	}
@@ -555,7 +581,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			if e := guarded(); e != nil {
 				setStop(StopMemory, fmt.Sprintf("stopped by the host memory guard at %d acknowledged (%v); the engine had not finished", acked.Load(), e))
 				cancel() // a store waiting on a server stops waiting
-			} else if kib, e := diskFreeKiB(dir); e == nil && o.MinFreeDiskKiB > 0 && kib < o.MinFreeDiskKiB {
+			} else if kib, e := freeFn(dir); e == nil && o.MinFreeDiskKiB > 0 && kib < o.MinFreeDiskKiB {
 				setStop(StopDisk, fmt.Sprintf("disk nearly full at %d acknowledged: %d KiB free, below the %d KiB floor", acked.Load(), kib, o.MinFreeDiskKiB))
 			}
 			if st := stop.Load(); st != nil && now.Sub(st.at) > abandonAfter {
@@ -584,7 +610,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 					sp := serverPeak()
 					gate.RUnlock()
 					fmt.Fprintf(out, "bucket engine=%s n=%d t_s=%.0f acked=%d msgs_per_s=%.0f p99_us=%s quantiles=bin-upper-1pct harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s\n",
-						engine, n, now.Sub(start).Seconds(), a, float64(a-prevAcked)/now.Sub(prevAt).Seconds(), us3(h.quantile(0.99)), maxRSSKiB(), sp, used, availMemText(), free)
+						engine, n, now.Sub(start).Seconds(), a, float64(a-prevAcked)/now.Sub(prevAt).Seconds(), us3(h.quantile(0.99)), maxRSSKiB(), sp, used, availMem(), free)
 				}()
 			}
 			if o.KeepLast > 0 && !now.Before(retainAt) && !fenced.Load() && retaining.CompareAndSwap(false, true) {
@@ -694,6 +720,6 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		finalMS = *p
 	}
 	lw.finish(fmt.Sprintf("sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%s quantiles=bin-upper-1pct reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s mem_cutoff_KiB=%s reason=%q\n",
-		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens.Load(), finalMS, harness, server, used, availMemText(), free, cut, st.text))
+		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens.Load(), finalMS, harness, server, used, availMem(), free, cut, st.text))
 	return nil
 }

@@ -75,13 +75,13 @@ func CloseKafkaClient(c *kgo.Client) {
 // EnsureKafkaTopic creates the topic (when fresh) with one partition and a replication
 // factor of one, then waits until its leader is ready. It runs before the timed
 // publish span so topic creation can never land inside a measured publish.
-func EnsureKafkaTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
+func EnsureKafkaTopic(parent context.Context, client *kgo.Client, fresh bool, deadline time.Time) error {
 	if fresh {
 		req := kmsg.NewPtrCreateTopicsRequest()
 		t := kmsg.NewCreateTopicsRequestTopic()
 		t.Topic, t.NumPartitions, t.ReplicationFactor = KafkaTopic, 1, 1
 		req.Topics = append(req.Topics, t)
-		ctx, cancel := context.WithTimeout(run.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 		resp, err := client.Request(ctx, req)
 		cancel()
 		if err != nil {
@@ -99,7 +99,7 @@ func EnsureKafkaTopic(client *kgo.Client, fresh bool, deadline time.Time) error 
 		name := KafkaTopic
 		mt.Topic = &name
 		md.Topics = append(md.Topics, mt)
-		ctx, cancel := context.WithTimeout(run.Context(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 		resp, err := client.Request(ctx, md)
 		cancel()
 		if err == nil {
@@ -109,7 +109,7 @@ func EnsureKafkaTopic(client *kgo.Client, fresh bool, deadline time.Time) error 
 				}
 			}
 		}
-		if err := run.Context().Err(); err != nil {
+		if err := parent.Err(); err != nil {
 			return fmt.Errorf("topic readiness stopped: %w", err)
 		}
 		if time.Now().After(deadline) {
@@ -145,6 +145,7 @@ type KafkaOptions struct {
 	ClusterID      string // used when not Fresh
 	Port           int
 	ControllerPort int
+	Ctx            context.Context // when set, replaces run.Context() for every wait, so a cancel stops the start
 }
 
 // KafkaBroker is a started, ready broker and a client connected to it.
@@ -163,10 +164,16 @@ func (k *KafkaBroker) Stop() error {
 }
 
 // StartKafka formats (when fresh), starts the broker, waits until it reports this trial's
-// cluster ID, and makes sure the topic has a ready leader, all under run.Context().
+// cluster ID, and makes sure the topic has a ready leader, all under o.Ctx (or run.Context()).
 func StartKafka(o KafkaOptions) (*KafkaBroker, error) {
 	if o.Home == "" || o.Java == "" {
 		return nil, fmt.Errorf("BENCH_KAFKA_HOME and BENCH_JAVA_HOME must be set")
+	}
+	ctxOf := func() context.Context {
+		if o.Ctx != nil {
+			return o.Ctx
+		}
+		return run.Context()
 	}
 	home, java, dir, fresh, clusterID, port, controller := o.Home, o.Java, o.Dir, o.Fresh, o.ClusterID, o.Port, o.ControllerPort
 	env := []string{"JAVA_HOME=" + java, "KAFKA_HEAP_OPTS=-Xms1g -Xmx1g", "LOG_DIR=" + filepath.Join(dir, "logs")}
@@ -176,7 +183,7 @@ func StartKafka(o KafkaOptions) (*KafkaBroker, error) {
 		return nil, err
 	}
 	storage := func(args ...string) (string, error) {
-		ctx, cancel := context.WithTimeout(run.Context(), 120*time.Second)
+		ctx, cancel := context.WithTimeout(ctxOf(), 120*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, script(home, "kafka-storage.sh"), args...)
 		cmd.Env = append(os.Environ(), env...)
@@ -201,7 +208,7 @@ func StartKafka(o KafkaOptions) (*KafkaBroker, error) {
 		return nil, err
 	}
 	const ready = 180 * time.Second
-	if err = run.Within(run.Context(), ready+5*time.Second, func() error { return proc.WaitReady("tcp", addr, ready) }); err != nil {
+	if err = run.Within(ctxOf(), ready+5*time.Second, func() error { return proc.WaitReady("tcp", addr, ready) }); err != nil {
 		return fail(err)
 	}
 	client, err := kgo.NewClient(KafkaClientOptions(addr)...) // builds the client; it dials lazily
@@ -212,7 +219,7 @@ func StartKafka(o KafkaOptions) (*KafkaBroker, error) {
 	// trial formatted, and it must answer before the deadline.
 	deadline := time.Now().Add(ready)
 	for {
-		ctx, cancel := context.WithTimeout(run.Context(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(ctxOf(), 5*time.Second)
 		resp, e := client.Request(ctx, kmsg.NewPtrMetadataRequest())
 		cancel()
 		if e == nil {
@@ -224,7 +231,7 @@ func StartKafka(o KafkaOptions) (*KafkaBroker, error) {
 				return fail(fmt.Errorf("broker reports cluster %q, not this trial's %q", *md.ClusterID, clusterID))
 			}
 		}
-		if cerr := run.Context().Err(); cerr != nil {
+		if cerr := ctxOf().Err(); cerr != nil {
 			CloseKafkaClient(client)
 			return fail(fmt.Errorf("broker readiness stopped: %w", cerr))
 		}
@@ -234,7 +241,7 @@ func StartKafka(o KafkaOptions) (*KafkaBroker, error) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if err = EnsureKafkaTopic(client, fresh, time.Now().Add(120*time.Second)); err != nil {
+	if err = EnsureKafkaTopic(ctxOf(), client, fresh, time.Now().Add(120*time.Second)); err != nil {
 		CloseKafkaClient(client)
 		return fail(err)
 	}

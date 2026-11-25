@@ -7,6 +7,7 @@ package servers
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -33,16 +34,18 @@ type Server struct {
 	Token  string // secret for this trial only
 	Proc   *serverproc.Proc
 	stop   func() error // engine-specific shutdown; nil means a plain Stop
+	name   string       // nats: the server_name this trial's configuration carries (not derived from the token)
 }
 
 // Options select the binary and where the trial's files go.
 type Options struct {
-	Bin    string        // the server executable (not used by kafka)
-	Home   string        // kafka: the unpacked kafka_2.13-<version> directory
-	Java   string        // kafka: the JDK
-	Env    []string      // extra environment for the server process (for example GOMAXPROCS)
-	Dir    string        // private directory for this trial
-	Sample time.Duration // memory sampling interval (default 50 ms)
+	Ctx    context.Context // cancels the start: the server is stopped and Start returns (default: never)
+	Bin    string          // the server executable (not used by kafka)
+	Home   string          // kafka: the unpacked kafka_2.13-<version> directory
+	Java   string          // kafka: the JDK
+	Env    []string        // extra environment for the server process (for example GOMAXPROCS)
+	Dir    string          // private directory for this trial
+	Sample time.Duration   // memory sampling interval (default 50 ms)
 }
 
 // Engines lists what Start accepts.
@@ -50,6 +53,9 @@ var Engines = []string{"gateway", "redis", "nats", "kafka"}
 
 // Start launches the engine's server and returns once it answers as the launched process.
 func Start(engine string, o Options) (*Server, error) {
+	if o.Ctx == nil {
+		o.Ctx = context.Background()
+	}
 	if engine == "kafka" {
 		return startKafkaServer(o)
 	}
@@ -68,6 +74,11 @@ func Start(engine string, o Options) (*Server, error) {
 		return nil, err
 	}
 	token := hex.EncodeToString(raw)
+	nameRaw := make([]byte, 8) // a separate random value: the server's name is not derived from its secret
+	if _, err = rand.Read(nameRaw); err != nil {
+		return nil, err
+	}
+	name := "bench-" + hex.EncodeToString(nameRaw)
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	var args, env []string
 	switch engine {
@@ -82,7 +93,7 @@ func Start(engine string, o Options) (*Server, error) {
 		args = []string{conf}
 	case "nats":
 		conf := filepath.Join(o.Dir, "server.conf")
-		if err = os.WriteFile(conf, []byte(NATSConfig(o.Dir, port, token)), 0o600); err != nil {
+		if err = os.WriteFile(conf, []byte(NATSConfig(o.Dir, port, token, name)), 0o600); err != nil {
 			return nil, err
 		}
 		args = []string{"-c", conf}
@@ -93,9 +104,21 @@ func Start(engine string, o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{Engine: engine, Addr: addr, Token: token, Proc: proc}
-	if err = proc.WaitReady("tcp", addr, 60*time.Second); err == nil {
-		err = s.confirm()
+	s := &Server{Engine: engine, Addr: addr, Token: token, Proc: proc, name: name}
+	// Readiness runs beside a cancellation: if the driver is told to stop while the server is
+	// still starting, the server is stopped here and nothing is left running.
+	ready := make(chan error, 1)
+	go func() {
+		e := proc.WaitReady("tcp", addr, 60*time.Second)
+		if e == nil {
+			e = s.confirm(o.Ctx)
+		}
+		ready <- e
+	}()
+	select {
+	case err = <-ready:
+	case <-o.Ctx.Done():
+		err = fmt.Errorf("start cancelled: %w", o.Ctx.Err())
 	}
 	if err != nil {
 		proc.Stop(5 * time.Second)
@@ -125,7 +148,7 @@ func startKafkaServer(o Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	k, err := StartKafka(KafkaOptions{Home: o.Home, Java: o.Java, Dir: o.Dir, Fresh: true, Port: port, ControllerPort: controller})
+	k, err := StartKafka(KafkaOptions{Home: o.Home, Java: o.Java, Dir: o.Dir, Fresh: true, Port: port, ControllerPort: controller, Ctx: o.Ctx})
 	if err != nil {
 		return nil, fmt.Errorf("kafka: %w", err)
 	}
@@ -136,25 +159,23 @@ func startKafkaServer(o Options) (*Server, error) {
 // RedisConfig is one trial's redis.conf: loopback TCP on its own port, a password, and
 // the shared durability settings.
 func RedisConfig(dir string, port int, token string) string {
-	return fmt.Sprintf("port %d\nbind 127.0.0.1\nprotected-mode yes\nrequirepass %s\ndir %s\n", port, token, dir) + RedisDurability
+	return fmt.Sprintf("port %d\nbind 127.0.0.1\nprotected-mode yes\nrequirepass %s\ndir %q\n", port, token, dir) + RedisDurability
 }
 
 // NATSConfig is one trial's nats-server configuration. sync_interval: always is the
 // file form of the SyncAlways option the Go comparison sets (nats-server v2.15.3,
 // server/opts.go: case "sync", "sync_interval": "always" sets opts.SyncAlways).
-func NATSConfig(dir string, port int, token string) string {
+func NATSConfig(dir string, port int, token, name string) string {
 	return fmt.Sprintf("listen: 127.0.0.1:%d\nserver_name: %q\nauthorization { token: %q }\njetstream { store_dir: %q\n sync_interval: always }\n",
-		port, serverName(token), token, filepath.Join(dir, "nats"))
+		port, name, token, filepath.Join(dir, "nats"))
 }
-
-func serverName(token string) string { return "bench-" + token[:12] }
 
 // confirm checks that the process answering on Addr is the launched server, by a
 // secret only that process was given.
-func (s *Server) confirm() error {
+func (s *Server) confirm(ctx context.Context) error {
 	switch s.Engine {
 	case "gateway":
-		req, err := http.NewRequest("GET", "http://"+s.Addr+"/dostoevsky/client/v1/read?topic=events&partition=0&offset=0&wait_ms=0", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", "http://"+s.Addr+"/dostoevsky/client/v1/read?topic=events&partition=0&offset=0&wait_ms=0", nil)
 		if err != nil {
 			return err
 		}
@@ -196,7 +217,7 @@ func (s *Server) confirm() error {
 		defer c.Close()
 		c.SetDeadline(time.Now().Add(10 * time.Second))
 		line, err := bufio.NewReader(c).ReadString('\n')
-		if err != nil || !strings.HasPrefix(line, "INFO ") || !strings.Contains(line, `"server_name":"`+serverName(s.Token)+`"`) {
+		if err != nil || !strings.HasPrefix(line, "INFO ") || !strings.Contains(line, `"server_name":"`+s.name+`"`) {
 			return fmt.Errorf("the process answering is not the launched nats-server: %q (%v)", line, err)
 		}
 	}

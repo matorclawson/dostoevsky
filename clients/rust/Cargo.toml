@@ -1,0 +1,9 @@
+[package]
+name = "dostoevsky-client"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Synchronous, dependency-free client for the Dostoevsky binary HTTP API (plain http only)"
+readme = "README.md"
+
+[dependencies]

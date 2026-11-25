@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -141,9 +140,9 @@ func Example_retention() {
 func Example_backup() {
 	dir, cfg, node, ctx, p, done := demo()
 	defer done()
-	backupDir := filepath.Join(filepath.Dir(dir), filepath.Base(dir)+"-backup")
-	defer os.RemoveAll(backupDir)
+	defer os.RemoveAll(dir + "-backup")
 	// snippet:backup
+	backupDir := dir + "-backup"
 	if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: "order-1", Value: []byte("paid")}); err != nil {
 		panic(err)
 	}

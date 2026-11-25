@@ -15,7 +15,7 @@ Go 1.22 or later. The module has no dependencies outside the standard library.
 
 ## 2. Open a store
 
-A store is a directory. The configuration names this node, lists all nodes (one, here) and declares each topic with its partition count. Paste this once at the top of `func main()`; every step below is pasted after it, as its own block:
+A store is a directory. The configuration names this node, lists all nodes (one, here) and declares each topic with its partition count. Paste this once at the top of `func main()`; every step below is pasted right after it, in the same function, one step at a time:
 
 ```go
 dir, err := os.MkdirTemp("", "dostoevsky-guide")
@@ -30,10 +30,9 @@ if err != nil {
 defer node.Close()
 ctx := context.Background()
 p := dostoevsky.Partition{Topic: "orders", Number: 0}
-backupDir := dir + "-backup" // step 7's destination; it must not exist
 ```
 
-**Each step is self-contained**: its block publishes whatever records it needs, so you can paste any step after the setup on its own. The steps are not one continuous session: pasted one after another against the same store, later steps would meet the records and cursors of earlier ones (for example, step 5 commits offset 0 of a group that step 4 already moved). The test `TestGuideCodeBlocksCompile` pastes every block in reading order, each step in its own braces, and compiles the result with `go vet`. Only one process can open a directory at a time. A second `Open` fails on the lock instead of corrupting the journal.
+**Each step is self-contained**: its block publishes whatever records it needs, so you can paste any step after the setup on its own. The steps are not one continuous session: pasted one after another against the same store, later steps would meet the records and cursors of earlier ones (for example, step 5 commits offset 0 of a group that step 4 already moved). The test `TestGuideCodeBlocksCompile` does exactly that for each step: it builds one `main` from the setup block followed by that step in the same scope, with no extra braces, and runs `go vet`; a second test proves it can fail by compiling a deliberately broken step. Only one process can open a directory at a time. A second `Open` fails on the lock instead of corrupting the journal.
 
 ## 3. Publish and read
 
@@ -146,6 +145,7 @@ Retention rewrites the journal and needs room for a second copy while it runs. P
 
 <!-- snippet:backup -->
 ```go
+backupDir := dir + "-backup"
 if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: "order-1", Value: []byte("paid")}); err != nil {
 	panic(err)
 }

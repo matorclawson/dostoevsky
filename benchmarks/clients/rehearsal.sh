@@ -5,7 +5,17 @@
 # Nothing is pasted by hand: the locations below are the ones the runtime inventory lists; override with the variables.
 set -eu
 rt=${ZEO_RUNTIMES:-/opt/zeo/runtimes}
-nats=${NATS_SERVER:-/Users/rodbot/zeo/runtimes-local/nats-server-v2.15.3}
+# nats-server v2.15.3: $NATS_SERVER, else a search of the runtimes (and a local-runtimes directory under $HOME), else PATH.
+nats=${NATS_SERVER:-}
+if [ -z "$nats" ]; then
+  for d in "$rt" "${HOME:-/nonexistent}/zeo/runtimes-local"; do
+    [ -d "$d" ] || continue
+    nats=$(find "$d" -maxdepth 3 -type f -name 'nats-server*' 2>/dev/null | sort | head -1)
+    [ -n "$nats" ] && break
+  done
+fi
+[ -n "$nats" ] || nats=$(command -v nats-server || true)
+[ -n "$nats" ] || { echo "no nats-server found: set NATS_SERVER (it must be v2.15.3)" >&2; exit 2; }
 py=${PYTHON3:-python3}
 window=${REHEARSAL_WINDOW:-60}
 find_one() { # directory, shell pattern (matched against the path) -> the first file that matches, or exit 2
@@ -20,7 +30,7 @@ kafka_start=$(find_one "$rt/kafka-4.4.0" '*/bin/kafka-server-start.sh')
 kafka_home=$(dirname "$(dirname "$kafka_start")")
 java=$(find_one "$rt/temurin-21.0.13.1+2" '*/bin/java')
 java_home=$(dirname "$(dirname "$java")")
-[ -x "$nats" ] || { echo "no nats-server at $nats" >&2; exit 2; }
+[ -x "$nats" ] || { echo "no executable nats-server at $nats" >&2; exit 2; }
 "$nats" --version | grep -q 'v2.15.3' || { echo "$nats is not nats-server v2.15.3" >&2; exit 2; }
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -42,7 +52,9 @@ JAVAC="$java_home/bin/javac" PATH="$java_home/bin:$PATH" sh benchmarks/clients/j
   echo "git_head=$(git rev-parse HEAD) dirty=$(git status --porcelain | wc -l | tr -d ' ')"
   echo "nats-server=$("$nats" --version) sha256=$(sha "$nats")"
   echo "redis-server=$("$redis" --version) sha256=$(sha "$redis")"
-  echo "kafka_home=$kafka_home"
+  echo "kafka_home=$kafka_home version=$(JAVA_HOME="$java_home" "$kafka_home/bin/kafka-topics.sh" --version 2>/dev/null | head -1)"
+  for j in "$kafka_home"/libs/kafka-server-*.jar "$kafka_home"/libs/kafka_2.13-*.jar; do [ -f "$j" ] && echo "kafka_jar=$(basename "$j") sha256=$(sha "$j")"; done
+  echo "kafka_start_script sha256=$(sha "$kafka_start")"
   echo "java=$("$java" -version 2>&1 | head -1) home=$java_home"
   echo "node=$(node --version) python=$(.dev/bench-venv/bin/python --version 2>&1)"
   echo "serve sha256=$(sha .dev/clients/serve)"

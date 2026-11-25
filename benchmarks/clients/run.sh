@@ -36,22 +36,65 @@ worker_cmd() { # lang engine addr workers count window -> the command line (toke
     python) echo "${PYTHON_BIN:-.dev/bench-venv/bin/python} benchmarks/clients/python/worker.py --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
     javascript) echo "node benchmarks/clients/javascript/worker.mjs --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
     java) echo "java -Xmx${JAVA_HEAP:-256m} -Dbench.deps=benchmarks/clients/java/deps.lock -Dbench.repo=. -cp '.dev/bench-java/classes:.dev/bench-java/lib/*' io.github.rodriveracom.dostoevsky.bench.Main --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
+    rust) echo "env BENCH_REPO=. benchmarks/clients/rust/worker/target/release/worker --engine $e --addr $a --workers $w --target $c --window $win --require-known-build" ;;
     *) echo "" ;;
   esac
 }
 
 field() { # key line -> the value of key=value (first match), empty if absent
-  printf '%s\n' "$2" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1
+  printf '%s\n' "$2" | tr ' ' '\n' | sed -n "s|^$1=||p" | head -1
 }
 
-# run_cell lang engine workers count window trial  -> prints one line on stdout; returns 0 ok, 1 failed
+# ---- cleanup: whatever ends the script (a TERM, an INT, a normal exit), the trial's server is stopped and its directory
+# ---- (which holds the token) is removed. Every wait is bounded: a hung server is killed, never waited for forever.
+CUR_DIR=""; CUR_SPID=""; CUR_WPID=""
+
+stop_pid() { # pid seconds: TERM, wait up to `seconds`, then KILL; returns at once if it is already gone
+  p=$1; secs=${2:-10}
+  [ -n "$p" ] || return 0
+  kill -TERM "$p" 2>/dev/null || { wait "$p" 2>/dev/null; return 0; }
+  i=0
+  while kill -0 "$p" 2>/dev/null && [ $i -lt $((secs * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$p" 2>/dev/null; then kill -KILL "$p" 2>/dev/null; fi
+  wait "$p" 2>/dev/null
+  return 0
+}
+
+cleanup_trial() {
+  exec 3>&-
+  stop_pid "$CUR_WPID" 5
+  stop_pid "$CUR_SPID" "${STOP_WAIT:-120}"
+  if [ -n "$CUR_DIR" ]; then rm -f "$CUR_DIR/in" "$CUR_DIR/out" "$CUR_DIR/err" "$CUR_DIR/wout" "$CUR_DIR/werr"; rmdir "$CUR_DIR" 2>/dev/null; fi
+  CUR_DIR=""; CUR_SPID=""; CUR_WPID=""
+}
+trap 'cleanup_trial; trap - EXIT; exit 143' TERM
+trap 'cleanup_trial; trap - EXIT; exit 130' INT
+trap cleanup_trial EXIT
+
+# valid_receipt line lang engine workers -> prints the name of the first thing wrong, nothing when the line is whole
+valid_receipt() {
+  v_line=$1; v_want_engine=$2-$3; v_want_workers=$4
+  for k in engine workers result acked verified records/s elapsed_s p50_us p95_us p99_us p99_9_us p99_99_us quantiles client_rss_KiB client_rss_source lang client client_build stop; do
+    [ -n "$(field "$k" "$v_line")" ] || { echo "missing_$(echo "$k" | tr '/' '_')"; return; }
+  done
+  for k in workers acked verified client_rss_KiB; do
+    case "$(field "$k" "$v_line")" in *[!0-9]*) echo "not_a_number_$k"; return ;; esac
+  done
+  [ "$(field workers "$v_line")" = "$v_want_workers" ] || { echo "wrong_workers"; return; }
+  [ "$(field engine "$v_line")" = "$v_want_engine" ] || { echo "wrong_engine"; return; }
+  case "$(field result "$v_line")" in ok|FAILED) ;; *) echo "bad_result"; return ;; esac
+  [ "$(field quantiles "$v_line")" = "bin-upper-1pct" ] || { echo "bad_quantiles"; return; }
+}
+
+# run_cell lang engine workers count window trial: sets RESULT to one line, returns 0 when the trial succeeded.
 run_cell() {
   l=$1; e=$2; w=$3; c=$4; win=$5; n=$6
   se=$(serve_engine "$e")
-  d=$(mktemp -d "${TMPDIR:-/tmp}/clients-trial.XXXXXX") || { echo "trial=$n engine=$l-$e workers=$w FAILED no_temp_dir"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/clients-trial.XXXXXX") || { RESULT="trial=$n engine=$l-$e workers=$w FAILED no_temp_dir"; return 1; }
+  CUR_DIR=$d
   mkfifo "$d/in"
   "$serve" -engine "$se" < "$d/in" > "$d/out" 2> "$d/err" &
-  spid=$!
+  spid=$!; CUR_SPID=$spid
   exec 3> "$d/in" # holding this open keeps the server running; closing it stops it
   i=0; ready=""
   while [ $i -lt "${READY_WAIT:-3600}" ]; do # tenths of a second (6 minutes): Kafka needs minutes
@@ -60,39 +103,51 @@ run_cell() {
     sleep 0.1; i=$((i + 1))
   done
   if [ -z "$ready" ]; then
-    exec 3>&-; wait "$spid" 2>/dev/null
-    echo "trial=$n engine=$l-$e workers=$w FAILED server_did_not_become_ready"
-    rm -f "$d/in" "$d/out" "$d/err"; rmdir "$d" 2>/dev/null
+    RESULT="trial=$n engine=$l-$e workers=$w FAILED server_did_not_become_ready"
+    cleanup_trial
     return 1
   fi
   addr=$(field addr "$ready"); token=$(field token "$ready")
   cmd=$(worker_cmd "$l" "$e" "$addr" "$w" "$c" "$win")
-  line=""; code=0
+  line=""; code=0; diag=""
   if [ -z "$cmd" ]; then code=2; else
-    line=$(BENCH_TOKEN="$token" sh -c "$cmd" 2> "$d/werr") || code=$?
+    # In the background so a TERM reaches the trap at once; exec so the pid is the worker itself and a kill reaches it.
+    BENCH_TOKEN="$token" sh -c "exec $cmd" > "$d/wout" 2> "$d/werr" &
+    CUR_WPID=$!
+    wait "$CUR_WPID"; code=$?
+    CUR_WPID=""
+    line=$(head -n 1 "$d/wout" 2>/dev/null)
+    # At most 120 characters of the worker's first error line, reduced to a safe alphabet, with the token masked.
+    diag=$(head -n 1 "$d/werr" 2>/dev/null | head -c 120)
+    [ -n "$token" ] && diag=$(printf '%s' "$diag" | sed "s/$token/_token_/g")
+    diag=$(printf '%s' "$diag" | sed 's/[^A-Za-z0-9_.:,()\/-]/_/g')
   fi
   token=""; ready=""
-  exec 3>&- # the server's stdin closes: it stops, prints STOPPED
-  wait "$spid"; scode=$?
+  # The server's stdin closes: it stops, prints STOPPED. Bounded: a server that does not stop is killed.
+  exec 3>&-
+  i=0
+  while kill -0 "$spid" 2>/dev/null && [ $i -lt $((${STOP_WAIT:-120} * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$spid" 2>/dev/null; then stop_pid "$spid" 5; scode=137; else wait "$spid"; scode=$?; fi
+  CUR_SPID=""
   stopped=$(grep -m1 '^STOPPED ' "$d/out" 2>/dev/null)
-  rc=0
+  rc=0; bad=""
+  [ -n "$line" ] && bad=$(valid_receipt "$line" "$l" "$e" "$w")
   if [ $code -ne 0 ] || [ -z "$line" ]; then
-    echo "trial=$n engine=$l-$e workers=$w FAILED worker_exit_$code"
-    rc=1
+    RESULT="trial=$n engine=$l-$e workers=$w FAILED worker_exit_$code${diag:+:$diag}"; rc=1
+  elif [ -n "$bad" ]; then
+    RESULT="trial=$n engine=$l-$e workers=$w FAILED incomplete_worker_receipt:$bad"; rc=1
   elif [ $scode -ne 0 ] || [ -z "$stopped" ]; then
-    echo "trial=$n engine=$l-$e workers=$w FAILED server_did_not_stop_cleanly"
-    rc=1
+    RESULT="trial=$n engine=$l-$e workers=$w FAILED server_did_not_stop_cleanly"; rc=1
   elif [ "$(field result "$line")" = "FAILED" ]; then
     # Converted to the marker cmd/plots counts as a failed trial: everything after FAILED is a diagnostic.
-    echo "trial=$n engine=$(field engine "$line") workers=$w FAILED stop=$(field stop "$line") $(field detail "$line")"
-    rc=1
+    RESULT="trial=$n engine=$(field engine "$line") workers=$w FAILED stop=$(field stop "$line") $(field detail "$line")"; rc=1
   else
     srss=$(field server_rss_KiB "$stopped"); crss=$(field client_rss_KiB "$line")
-    case "$srss$crss" in *[!0-9]*|"") echo "trial=$n engine=$l-$e workers=$w FAILED memory_not_reported"; rc=1 ;; *)
-      echo "trial=$n $line server_rss_KiB=$srss server_rss_source=$(field rss_source "$stopped") total_rss_KiB=$((srss + crss))" ;;
+    case "$srss" in *[!0-9]*|"") RESULT="trial=$n engine=$l-$e workers=$w FAILED server_memory_not_reported"; rc=1 ;; *)
+      RESULT="trial=$n $line server_rss_KiB=$srss server_rss_source=$(field rss_source "$stopped") total_rss_KiB=$((srss + crss))" ;;
     esac
   fi
-  rm -f "$d/in" "$d/out" "$d/err" "$d/werr"; rmdir "$d" 2>/dev/null
+  cleanup_trial
   return $rc
 }
 
@@ -105,8 +160,11 @@ if [ "${BENCH_SKIP_SMOKE:-0}" != 1 ]; then
   smoke_failed=0
   for cell in $cells; do
     for w in 1 8 32; do
-      out=$(run_cell "${cell%%:*}" "${cell#*:}" "$w" "${BENCH_SMOKE_COUNT:-200}" 0 0) || { smoke_failed=$((smoke_failed + 1)); printf 'smoke FAILED %s\n' "$out" >&2; continue; }
-      printf 'smoke ok %s %s\n' "$cell" "$w" >&2
+      if run_cell "${cell%%:*}" "${cell#*:}" "$w" "${BENCH_SMOKE_COUNT:-200}" 0 0; then
+        printf 'smoke ok %s %s\n' "$cell" "$w" >&2
+      else
+        smoke_failed=$((smoke_failed + 1)); printf 'smoke FAILED %s\n' "$RESULT" >&2
+      fi
     done
   done
   if [ $smoke_failed -ne 0 ]; then echo "smoke failed ($smoke_failed trials): no timed trial was run" >&2; exit 3; fi
@@ -123,6 +181,7 @@ while [ $rep -le "$rounds" ]; do
   for w in 1 8 32; do
     for cell in $order; do
       run_cell "${cell%%:*}" "${cell#*:}" "$w" "$target" "$window" "$rep" || failed=$((failed + 1))
+      printf '%s\n' "$RESULT"
     done
   done
   rep=$((rep + 1))

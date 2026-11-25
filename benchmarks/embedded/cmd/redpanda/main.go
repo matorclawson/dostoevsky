@@ -163,14 +163,61 @@ func checkClusterConfig(body []byte) error {
 	if err := json.Unmarshal(body, &cfg); err != nil {
 		return fmt.Errorf("cluster_config: %w", err)
 	}
-	wc, ok := cfg["write_caching_default"].(bool)
-	if !ok {
-		return fmt.Errorf("cluster_config has no boolean write_caching_default")
+	// write_caching_default is a documented enum (true, false, disabled); the admin API
+	// may give it as a JSON boolean or as a string. false and disabled both mean that
+	// acknowledgments wait for the disk; anything else, or no value, fails closed. The raw
+	// shape is kept in the evidence files.
+	switch v := cfg["write_caching_default"].(type) {
+	case bool:
+		if !v {
+			return nil
+		}
+	case string:
+		if v == "false" || v == "disabled" {
+			return nil
+		}
+		return fmt.Errorf("write_caching_default is %q: acknowledgments may not wait for the disk", v)
+	case nil:
+		return fmt.Errorf("cluster_config has no write_caching_default")
+	default:
+		return fmt.Errorf("write_caching_default has an unreadable type %T", v)
 	}
-	if wc {
-		return fmt.Errorf("write_caching_default is true: acknowledgments would not wait for the disk")
+	return fmt.Errorf("write_caching_default is true: acknowledgments would not wait for the disk")
+}
+
+// checkClusterIdentity ties the Kafka listener to the broker we launched: the cluster id
+// the Kafka API reports must be the cluster uuid the admin API reports (whose process is
+// proven ours by its data directory). The Kafka API may give it bare or with a "redpanda."
+// prefix. A stray broker on the Kafka port reports a different id.
+func checkClusterIdentity(adminBody []byte, kafkaID *string) error {
+	var u map[string]any
+	if err := json.Unmarshal(adminBody, &u); err != nil {
+		return fmt.Errorf("cluster uuid: %w", err)
+	}
+	uuid, _ := u["cluster_uuid"].(string)
+	if uuid == "" {
+		uuid, _ = u["uuid"].(string)
+	}
+	if uuid == "" {
+		return fmt.Errorf("the admin API gave no cluster uuid")
+	}
+	if kafkaID == nil || *kafkaID == "" {
+		return fmt.Errorf("the Kafka API reported no cluster id")
+	}
+	if *kafkaID != uuid && *kafkaID != "redpanda."+uuid {
+		return fmt.Errorf("the Kafka listener reports cluster %q, not this trial's broker %q", *kafkaID, uuid)
 	}
 	return nil
+}
+
+// checkBrokers requires the Kafka metadata to list node 0 at this trial's own address.
+func checkBrokers(brokers []kmsg.MetadataResponseBroker, host string, port int) error {
+	for _, b := range brokers {
+		if b.NodeID == 0 && b.Host == host && int(b.Port) == port {
+			return nil
+		}
+	}
+	return fmt.Errorf("the Kafka metadata does not list node 0 at %s:%d", host, port)
 }
 
 // checkTopicWriteCaching requires the benchmark topic's effective write.caching, as
@@ -237,6 +284,33 @@ func saveEvidence(open, name string, body []byte) error {
 	}
 	_, err = f.Write(body)
 	return errors.Join(err, f.Close())
+}
+
+func saveEvidenceFor(open string) func(name string, body []byte) error {
+	return func(name string, body []byte) error { return saveEvidence(open, name, body) }
+}
+
+// bindListener reads the Kafka API's own view (cluster id and brokers) and requires it to
+// be this trial's broker: the same cluster uuid as the admin API and node 0 at our address.
+func bindListener(client *kgo.Client, adminUUID []byte, save func(string, []byte) error, host string, port int) error {
+	ctx, cancel := context.WithTimeout(run.Context(), 30*time.Second)
+	defer cancel()
+	resp, err := client.Request(ctx, kmsg.NewPtrMetadataRequest())
+	if err != nil {
+		return fmt.Errorf("metadata: %w", err)
+	}
+	md := resp.(*kmsg.MetadataResponse)
+	raw, _ := json.Marshal(struct {
+		ClusterID *string
+		Brokers   []kmsg.MetadataResponseBroker
+	}{md.ClusterID, md.Brokers})
+	if err = save("kafka_metadata.json", raw); err != nil {
+		return err
+	}
+	if err = checkClusterIdentity(adminUUID, md.ClusterID); err != nil {
+		return err
+	}
+	return checkBrokers(md.Brokers, host, port)
 }
 
 func checkReady(body []byte) (bool, error) {
@@ -473,7 +547,15 @@ func main() {
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
+		open := "open2-reopen"
+		if fresh {
+			open = "open1-fresh"
+		}
+		// Every raw readback is saved before it is judged, so a failed trial keeps its evidence.
 		node, err := adminGet(run.Context(), aaddr, "/v1/node_config")
+		if err == nil {
+			err = saveEvidence(open, "node_config.json", node)
+		}
 		if err == nil {
 			err = checkNodeConfig(node, dir)
 		}
@@ -482,20 +564,27 @@ func main() {
 		}
 		cluster, err := adminGet(run.Context(), aaddr, "/v1/cluster_config?include_defaults=true")
 		if err == nil {
+			err = saveEvidence(open, "cluster_config.json", cluster)
+		}
+		if err == nil {
 			err = checkClusterConfig(cluster)
 		}
 		if err != nil {
 			return fail(err)
 		}
-		open := "open2-reopen"
-		if fresh {
-			open = "open1-fresh"
+		uuid, err := adminGet(run.Context(), aaddr, "/v1/cluster/uuid")
+		if err == nil {
+			err = saveEvidence(open, "cluster_uuid.json", uuid)
 		}
-		if err = errors.Join(saveEvidence(open, "node_config.json", node), saveEvidence(open, "cluster_config.json", cluster)); err != nil {
+		if err != nil {
 			return fail(err)
 		}
 		client, err := kgo.NewClient(clientOptions(kaddr)...)
 		if err != nil {
+			return fail(err)
+		}
+		if err = bindListener(client, uuid, saveEvidenceFor(open), "127.0.0.1", kafka); err != nil {
+			closeClient(client)
 			return fail(err)
 		}
 		if err = ensureTopic(client, fresh, time.Now().Add(120*time.Second)); err != nil {

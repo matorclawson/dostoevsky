@@ -151,16 +151,72 @@ func TestEvidenceIsKeptPerTrialAndNeverOverwritten(t *testing.T) {
 }
 
 func TestClusterConfigReadbackIsStrict(t *testing.T) {
-	if err := checkClusterConfig([]byte(`{"write_caching_default": false, "x": 1}`)); err != nil {
-		t.Fatal(err)
+	for name, body := range map[string]string{
+		"bool false":      `{"write_caching_default": false, "x": 1}`,
+		"string false":    `{"write_caching_default": "false"}`,
+		"string disabled": `{"write_caching_default": "disabled"}`,
+	} {
+		if err := checkClusterConfig([]byte(body)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 	for name, body := range map[string]string{
-		"on":     `{"write_caching_default": true}`,
-		"absent": `{"x": 1}`,
-		"string": `{"write_caching_default": "false"}`,
-		"bad":    `{`,
+		"bool true":   `{"write_caching_default": true}`,
+		"string true": `{"write_caching_default": "true"}`,
+		"unknown":     `{"write_caching_default": "maybe"}`,
+		"empty":       `{"write_caching_default": ""}`,
+		"number":      `{"write_caching_default": 0}`,
+		"null":        `{"write_caching_default": null}`,
+		"absent":      `{"x": 1}`,
+		"bad":         `{`,
 	} {
 		if err := checkClusterConfig([]byte(body)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+func TestListenerIsTiedToTheTrialBroker(t *testing.T) {
+	id := func(s string) *string { return &s }
+	for name, kafka := range map[string]*string{"bare": id("abc-123"), "prefixed": id("redpanda.abc-123")} {
+		if err := checkClusterIdentity([]byte(`{"cluster_uuid": "abc-123"}`), kafka); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := checkClusterIdentity([]byte(`{"uuid": "abc-123"}`), id("abc-123")); err != nil {
+		t.Errorf("uuid key: %v", err)
+	}
+	for name, c := range map[string]struct {
+		admin string
+		kafka *string
+	}{
+		"stray broker":     {`{"cluster_uuid": "abc-123"}`, id("redpanda.other")},
+		"suffix only":      {`{"cluster_uuid": "abc-123"}`, id("xabc-123")},
+		"no kafka id":      {`{"cluster_uuid": "abc-123"}`, nil},
+		"empty kafka id":   {`{"cluster_uuid": "abc-123"}`, id("")},
+		"no admin uuid":    {`{}`, id("abc-123")},
+		"admin not a map":  {`[1]`, id("abc-123")},
+		"empty admin uuid": {`{"cluster_uuid": ""}`, id("")},
+	} {
+		if err := checkClusterIdentity([]byte(c.admin), c.kafka); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	b := func(node int32, host string, port int32) kmsg.MetadataResponseBroker {
+		x := kmsg.NewMetadataResponseBroker()
+		x.NodeID, x.Host, x.Port = node, host, port
+		return x
+	}
+	if err := checkBrokers([]kmsg.MetadataResponseBroker{b(0, "127.0.0.1", 31001)}, "127.0.0.1", 31001); err != nil {
+		t.Fatal(err)
+	}
+	for name, bs := range map[string][]kmsg.MetadataResponseBroker{
+		"other port": {b(0, "127.0.0.1", 9092)},
+		"other host": {b(0, "10.0.0.1", 31001)},
+		"other node": {b(1, "127.0.0.1", 31001)},
+		"none":       nil,
+	} {
+		if err := checkBrokers(bs, "127.0.0.1", 31001); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
 	}

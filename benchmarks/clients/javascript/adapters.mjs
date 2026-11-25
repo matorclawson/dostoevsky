@@ -75,10 +75,23 @@ export async function dostoevsky(addr, token) {
   };
 }
 
+// The two kafkajs clients. A consumer INHERITS the retry settings of the client it is created from, so the read-back
+// consumer must come from a client of its own: the producer's client has retries 0 (a publish is never retried), and a
+// consumer group on a fresh broker needs retries, because the group coordinator (the __consumer_offsets topic) is
+// created lazily and the first FindCoordinator is answered "not available". The second rehearsal failed exactly there.
+export function kafkaClientConfigs(addr, logLevel) {
+  return {
+    writer: { brokers: [addr], clientId: "bench", logLevel, retry: { retries: 0 } },
+    reader: { brokers: [addr], clientId: "bench-verify", logLevel }, // kafkajs's default retries
+  };
+}
+
 // kafkajs: acks=all (-1), no idempotence, no retries, one message per send.
 export async function kafka(addr, token) {
   const { Kafka, logLevel } = await import("kafkajs");
-  const k = new Kafka({ brokers: [addr], clientId: "bench", logLevel: logLevel.NOTHING, retry: { retries: 0 } });
+  const cfg = kafkaClientConfigs(addr, logLevel.NOTHING);
+  const k = new Kafka(cfg.writer);
+  const readerClient = new Kafka(cfg.reader);
   const producer = k.producer({ allowAutoTopicCreation: false, idempotent: false, retry: { retries: 0 } });
   await producer.connect();
   let consumer = null;
@@ -93,9 +106,9 @@ export async function kafka(addr, token) {
     },
     read: async (offset) => {
       if (consumer === null) {
-        // Read-back is not a publish: the no-retry rule is about acknowledged writes. A consumer group needs a coordinator,
-        // which a fresh broker creates on first use, so the consumer keeps kafkajs's default retries while it joins.
-        consumer = k.consumer({ groupId: "verify" });
+        // Read-back is not a publish: the no-retry rule is about acknowledged writes. This consumer belongs to the reader
+        // client (default retries), not the producer's client (retries 0), which it would otherwise inherit.
+        consumer = readerClient.consumer({ groupId: "verify" });
         // Do not read until the group has actually been joined and a partition assigned; a crash is an error with its
         // cause, not a silent wait. (A "negative timeout" warning from kafkajs's own heartbeat timer is harmless noise.)
         const { GROUP_JOIN, CRASH, REBALANCING, FETCH_START } = consumer.events;

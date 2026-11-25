@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import * as core from "../core.mjs";
 import { main } from "../worker.mjs";
-import { buildId, identity, ownClientName, packId, unpackId, version } from "../adapters.mjs";
+import { buildId, identity, kafkaClientConfigs, ownClientName, packId, unpackId, version } from "../adapters.mjs";
 
 const here = (rel) => new URL(rel, import.meta.url);
 const EXAMPLES = readFileSync(here("../../receipt_examples.txt"), "utf8").split("\n").filter((l) => l.trim() && !l.startsWith("#"));
@@ -326,4 +326,12 @@ test("the deadline is absolute: a clock that starts at zero cannot make it negat
   const map = new Map();
   const sleep = async (ms) => { t += ms; if (t >= 60) map.set(7n, "ok"); };
   assert.equal(await core.takeWhenItArrives(map, 7n, 1000, now, sleep), "ok");
+});
+
+test("the verification consumer's client keeps kafkajs's default retries while the producer's client never retries", () => {
+  const { writer, reader } = kafkaClientConfigs("127.0.0.1:9", 0);
+  assert.deepEqual(writer.retry, { retries: 0 }, "a publish is never retried");
+  assert.equal("retry" in reader, false, "the reader client must not carry the producer's retry setting (a consumer inherits it)");
+  assert.notEqual(reader.clientId, writer.clientId);
+  assert.deepEqual([writer.brokers, reader.brokers], [["127.0.0.1:9"], ["127.0.0.1:9"]]);
 });

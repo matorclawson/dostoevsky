@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -600,7 +601,7 @@ func TestSustainedTheMemoryGuardCoversTheFinalVerification(t *testing.T) {
 			}
 			return 1 << 30, nil
 		})
-	if r["stop"] != StopMemory || !strings.Contains(r["reason"], "memory guard") || r["mem_cutoff_KiB"] != "100" {
+	if r["stop"] != StopMemory || !strings.Contains(r["reason"], "memory guard") || r["mem_avail_at_trip_KiB"] != "100" || r["mem_cutoff_KiB"] != strconv.FormatUint(minFreeKiB, 10) {
 		t.Fatalf("%v", r)
 	}
 }
@@ -666,7 +667,7 @@ func TestSustainedMemoryThatFallsDuringTheFinalCloseIsACutoff(t *testing.T) {
 			}
 			return 1 << 30, nil
 		})
-	if r["stop"] != StopMemory || r["mem_cutoff_KiB"] != "100" {
+	if r["stop"] != StopMemory || r["mem_avail_at_trip_KiB"] != "100" || r["mem_cutoff_KiB"] != strconv.FormatUint(minFreeKiB, 10) {
 		t.Fatalf("%v", r)
 	}
 }
@@ -687,7 +688,39 @@ func TestSustainedAMemoryTripDuringTheFinalCloseIsLatchedEvenIfMemoryRecovers(t 
 			}
 			return 1 << 30, nil
 		})
-	if r["stop"] != StopMemory || r["mem_cutoff_KiB"] != "100" {
+	if r["stop"] != StopMemory || r["mem_avail_at_trip_KiB"] != "100" || r["mem_cutoff_KiB"] != strconv.FormatUint(minFreeKiB, 10) {
 		t.Fatalf("%v", r)
+	}
+}
+
+// L2 (cc): the data directory is removed BEFORE the normal receipt is written.
+type receiptProbe struct {
+	tmp   string
+	buf   bytes.Buffer
+	left  int
+	final bool
+}
+
+func (r *receiptProbe) Write(b []byte) (int, error) {
+	if strings.HasPrefix(string(b), "sustained ") {
+		entries, _ := os.ReadDir(r.tmp)
+		r.left, r.final = len(entries), true
+	}
+	return r.buf.Write(b)
+}
+
+func TestSustainedTheDataDirectoryIsGoneWhenTheReceiptIsWritten(t *testing.T) {
+	check := withTemp(t)
+	_ = check
+	tmp := os.Getenv("TMPDIR")
+	fastTick(t)
+	setMemory(t, func() (uint64, error) { return 1 << 30, nil })
+	f := newFake()
+	probe := &receiptProbe{tmp: tmp}
+	if err := executeSustained("fake", func(string, bool) (Store, error) { return f, nil }, Sustained{Window: 30 * time.Second, Target: 50, Workers: 1, Bucket: time.Hour}, probe); err != nil {
+		t.Fatal(err)
+	}
+	if !probe.final || probe.left != 0 {
+		t.Fatalf("final=%v, %d entries were still in the temp directory when the receipt was written", probe.final, probe.left)
 	}
 }

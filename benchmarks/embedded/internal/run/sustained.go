@@ -228,18 +228,19 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		}
 		return strconv.FormatUint(kib, 10)
 	}
-	checkMem := func() error {
+	// checkMem returns the reading it judged, so a trip is reported with the value that tripped it (one reading, not two).
+	checkMem := func() (uint64, error) {
 		kib, err := memFn()
 		if errors.Is(err, errNoMeminfo) {
-			return nil
+			return 0, nil
 		}
 		if err != nil {
-			return fmt.Errorf("cannot read available memory: %w", err)
+			return 0, fmt.Errorf("cannot read available memory: %w", err)
 		}
 		if kib < minFree {
-			return fmt.Errorf("low-memory abort: %d KiB available, below %d KiB", kib, minFree)
+			return kib, fmt.Errorf("low-memory abort: %d KiB available, below %d KiB", kib, minFree)
 		}
-		return nil
+		return kib, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	setContext(ctx)
@@ -329,11 +330,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	var cutoffKiB atomic.Uint64
 	var memTrip atomic.Pointer[stopInfo]
 	guarded := func() error {
-		e := checkMem()
+		k, e := checkMem()
 		if e != nil {
-			if k, err := memFn(); err == nil {
-				cutoffKiB.CompareAndSwap(0, max(k, 1))
-			}
+			cutoffKiB.CompareAndSwap(0, max(k, 1)) // the reading that tripped it
 			memTrip.CompareAndSwap(nil, &stopInfo{StopMemory, fmt.Sprintf("stopped by the host memory guard at %d acknowledged (%v)", acked.Load(), e), time.Now()})
 		}
 		return e
@@ -634,6 +633,25 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	elapsed := time.Since(start)
 	// Retention is fenced and joined BEFORE anything closes the store: a Close that overlaps an active Retain is a bug of
 	// the harness. A retention still blocked after abandonAfter is reported and the store is then left unclosed.
+	// A guard that can cancel across the final phases (reopen, verification, close), not just between calls.
+	guardStop := make(chan struct{})
+	guardDone := make(chan struct{})
+	go func() {
+		defer close(guardDone)
+		t := time.NewTicker(tickEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-guardStop:
+				return
+			case <-t.C:
+				if e := guarded(); e != nil {
+					cancel() // a store waiting on a server stops waiting
+					return
+				}
+			}
+		}
+	}()
 	fenced.Store(true)
 	over.Store(true)
 	retentionDone := make(chan struct{})
@@ -679,25 +697,6 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		st = &stopInfo{StopFailed, st.text + "; retention or a reopen still running after " + abandonAfter.String() + ", the store was not closed; the data directory " + dir + " was left in place", st.at}
 	}
 	owned := !abandoned && !retentionStuck // only then is the store ours to reopen, read and close
-	// A guard that can cancel across the final phases (reopen, verification, close), not just between calls.
-	guardStop := make(chan struct{})
-	guardDone := make(chan struct{})
-	go func() {
-		defer close(guardDone)
-		t := time.NewTicker(tickEvery)
-		defer t.Stop()
-		for {
-			select {
-			case <-guardStop:
-				return
-			case <-t.C:
-				if e := guarded(); e != nil {
-					cancel() // a store waiting on a server stops waiting
-					return
-				}
-			}
-		}
-	}()
 	if (st.kind == StopReached || st.kind == StopWindow) && owned {
 		// A finished run closes, reopens and verifies once more; a problem there is the result.
 		if bad := reopen(true); bad != nil {
@@ -719,16 +718,24 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	if t := memTrip.Load(); t != nil && (st.kind == StopReached || st.kind == StopWindow) {
 		st = t // a trip at ANY point of the run counts, even if memory has recovered since
 	}
-	cut := "none"
+	// mem_cutoff_KiB is the configured threshold; the reading that tripped it is a separate key.
+	cut, atTrip := "none", "none"
 	if k := cutoffKiB.Load(); k > 0 && st.kind == StopMemory {
-		cut = strconv.FormatUint(k, 10)
+		cut, atTrip = strconv.FormatUint(minFree, 10), strconv.FormatUint(k, 10)
+	}
+	// The data directory is removed BEFORE the receipt: a receipt for a normal run means the run is clean, files and all.
+	if !keepDir {
+		if rerr := removeAll(dir); rerr != nil {
+			st = &stopInfo{StopFailed, st.text + "; removing the data directory: " + rerr.Error(), st.at}
+		}
+		keepDir = true // already done; the deferred removal has nothing left to do
 	}
 	// The final line and the shut-off of the writer are ONE step: nothing can print after the receipt.
 	finalMS := "none"
 	if p := finalReopenMS.Load(); p != nil {
 		finalMS = *p
 	}
-	lw.finish(fmt.Sprintf("sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%s quantiles=bin-upper-1pct reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s mem_cutoff_KiB=%s reason=%q\n",
-		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens.Load(), finalMS, harness, server, used, availMem(), free, cut, st.text))
+	lw.finish(fmt.Sprintf("sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%s quantiles=bin-upper-1pct reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s mem_cutoff_KiB=%s mem_avail_at_trip_KiB=%s reason=%q\n",
+		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens.Load(), finalMS, harness, server, used, availMem(), free, cut, atTrip, st.text))
 	return nil
 }

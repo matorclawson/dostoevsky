@@ -74,3 +74,16 @@ func TestTheGatewayControlIsUnpinnedByDefaultAndPinnedOnlyOnRequest(t *testing.T
 		t.Fatalf("pinned: label %q env %v", engineLabel(), gatewayEnv())
 	}
 }
+
+func TestTheGatewayProcsSettingIsValidated(t *testing.T) {
+	for _, ok := range []string{"", "unpinned", "1", "2", "16"} {
+		if err := checkProcs(ok); err != nil {
+			t.Errorf("%q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"0", "-1", "01", "1.5", "two", " 1", "1 ", "pinned", "UNPINNED"} {
+		if checkProcs(bad) == nil {
+			t.Errorf("%q accepted: the label would not say what ran", bad)
+		}
+	}
+}

@@ -119,6 +119,17 @@ func (s store) Close() {
 // pinnedProcs is the explicit GOMAXPROCS of the equal-budget variant (BENCH_GATEWAY_GOMAXPROCS=1), or "" for the HEADLINE
 // control: the gateway exactly as the language cells get it (the serve driver starts it with no GOMAXPROCS), the default,
 // label "gateway". A pinned run is a separate, labelled row ("gateway-pinned1"), only when asked for.
+// checkProcs accepts "", "unpinned" or a positive whole number: anything else would be a label that does not say what ran.
+func checkProcs(v string) error {
+	if v == "" || v == "unpinned" {
+		return nil
+	}
+	if n, err := strconv.Atoi(v); err != nil || n < 1 || strconv.Itoa(n) != v {
+		return fmt.Errorf("BENCH_GATEWAY_GOMAXPROCS must be unset, \"unpinned\" or a positive whole number, not %q", v)
+	}
+	return nil
+}
+
 func pinnedProcs() string {
 	v := os.Getenv("BENCH_GATEWAY_GOMAXPROCS")
 	if v == "unpinned" {
@@ -145,6 +156,10 @@ func engineLabel() string {
 }
 
 func main() {
+	if err := checkProcs(os.Getenv("BENCH_GATEWAY_GOMAXPROCS")); err != nil {
+		fmt.Fprintln(os.Stderr, "FAILED:", err)
+		os.Exit(2)
+	}
 	bin := os.Getenv("BENCH_SERVER_BIN")
 	workers := 1
 	for i, a := range os.Args { // the harness's own flag, read early to size the connection pool

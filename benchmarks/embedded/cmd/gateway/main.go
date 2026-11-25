@@ -18,20 +18,17 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/run"
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/serverproc"
+	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/servers"
 )
 
 const prefix = "/dostoevsky/client/v1/"
@@ -137,35 +134,13 @@ func main() {
 		}
 	}
 	run.Main("gateway", func(dir string, _ bool) (run.Store, error) {
-		if bin == "" {
-			return nil, fmt.Errorf("BENCH_SERVER_BIN is not set")
-		}
-		raw := make([]byte, 32)
-		if _, err := rand.Read(raw); err != nil {
-			return nil, err
-		}
-		token := hex.EncodeToString(raw)
-		port, err := serverproc.FreePort()
+		// The same code that starts the gateway for the language benchmarks (internal/servers).
+		// Start returns after an authorized read succeeded, which ends the timed restart:
+		// reopen is the process start until the gateway answers a read.
+		srv, err := servers.Start("gateway", servers.Options{Bin: bin, Dir: dir, Env: []string{"GOMAXPROCS=" + gatewayProcs()}})
 		if err != nil {
 			return nil, err
 		}
-		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-		proc, err := serverproc.Start(bin, []string{"-listen", addr, "-data", filepath.Join(dir, "data")},
-			append(os.Environ(), "DOSTOEVSKY_TOKEN="+token, "GOMAXPROCS="+gatewayProcs()), filepath.Join(dir, "server.log"), 50*time.Millisecond)
-		if err != nil {
-			return nil, err
-		}
-		if err = proc.WaitReady("tcp", addr, 60*time.Second); err != nil {
-			proc.Stop(5 * time.Second)
-			return nil, err
-		}
-		s := store{newClient(workers), "http://" + addr, token, proc}
-		// The first successful data request ends the timed restart: reopen is the process
-		// start until the gateway answers a read (204 on an empty log, 200 otherwise).
-		if _, _, err = s.do("GET", "read?topic=events&partition=0&offset=0&wait_ms=0", nil); err != nil {
-			s.Close()
-			return nil, err
-		}
-		return s, nil
+		return store{newClient(workers), "http://" + srv.Addr, srv.Token, srv.Proc}, nil
 	})
 }

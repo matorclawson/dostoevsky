@@ -70,6 +70,17 @@ impl Response {
     }
 }
 
+/// The bearer token grants the whole store, and this client has no TLS: it may only talk to loopback.
+fn is_loopback(authority: &str) -> bool {
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        authority.rsplit_once(':').map_or(authority, |(h, _)| h)
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 fn transport(e: std::io::Error) -> Error {
     Error::Transport(e.to_string())
 }
@@ -210,8 +221,9 @@ fn receipt(r: &Response) -> Result<Receipt, Error> {
 }
 
 impl Client {
-    /// `base` is `http://host:port` with an optional path prefix. Construction never
-    /// fails: any other scheme is reported as an `Error::Transport` by every call.
+    /// `base` is `http://host:port` with an optional path prefix, and the host must be
+    /// loopback. Construction never fails: any other URL is reported as an
+    /// `Error::Transport` by every call, before anything is sent.
     pub fn new(base: &str, token: &str) -> Self {
         let trimmed = base.trim_end_matches('/');
         let (scheme_ok, rest) = match trimmed.strip_prefix("http://") {
@@ -224,7 +236,7 @@ impl Client {
         };
         Self {
             // An unsupported scheme is kept as an empty authority and reported by call().
-            authority: if scheme_ok { authority.to_string() } else { String::new() },
+            authority: if scheme_ok && is_loopback(authority) { authority.to_string() } else { String::new() },
             prefix: format!("{path}/dostoevsky/client/v1/"),
             auth: format!("Bearer {token}"),
         }
@@ -233,7 +245,9 @@ impl Client {
     fn call(&self, op: &str, args: &[(&str, &str)], data: Option<&[u8]>) -> Result<Response, Error> {
         if self.authority.is_empty() {
             return Err(Error::Transport(
-                "only http:// URLs are supported; use a local TLS-terminating proxy for https".into(),
+                "refusing to send the token: this client speaks plain http to loopback only; \
+                 TLS needs a local TLS-terminating proxy (or the future tls feature)"
+                    .into(),
             ));
         }
         let query: Vec<String> = args.iter().map(|(k, v)| format!("{k}={}", encode(v))).collect();
@@ -457,9 +471,14 @@ mod tests {
     }
 
     #[test]
-    fn https_is_refused_with_a_plain_message() {
-        let e = Client::new("https://example.com", "tok").position("t", 0, "g").unwrap_err();
-        assert!(e.to_string().contains("only http://"), "{e}");
+    fn only_loopback_http_may_carry_the_token() {
+        for bad in ["https://example.com", "http://example.com:80", "http://10.0.0.5:8787", "http://0.0.0.0:1", "http://localhost.example.com:1", "http://127.0.0.1.example.com:1"] {
+            let e = Client::new(bad, "tok").position("t", 0, "g").unwrap_err();
+            assert!(matches!(e, Error::Transport(_)) && e.to_string().contains("refusing"), "{bad}: {e}");
+        }
+        for ok in ["http://127.0.0.1:8787", "http://localhost:1", "http://[::1]:1", "http://127.9.9.9:1"] {
+            assert!(!Client::new(ok, "tok").authority.is_empty(), "{ok}");
+        }
     }
 
     #[test]

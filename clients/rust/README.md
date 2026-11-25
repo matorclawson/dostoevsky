@@ -1,6 +1,6 @@
 # dostoevsky-client (Rust)
 
-Synchronous, **zero dependencies**: standard library only, so Cargo fetches nothing and builds offline. Plain `http://` only (HTTP/1.1, one connection per call). For a TLS gateway, put a local TLS-terminating proxy in front and point the client at it. Rust 1.80 or newer.
+Synchronous, **zero dependencies**: standard library only, so Cargo fetches nothing and builds offline. Plain `http://` only (HTTP/1.1, one connection per call), **and only to a loopback address**: the client refuses any other host before sending the whole-store token. There is no TLS yet: for a remote gateway, put a local TLS-terminating proxy in front, or wait for the opt-in `tls` feature (a later, separately reviewed PR; never on by default). Rust 1.80 or newer.
 
 ```sh
 DOSTOEVSKY_TOKEN=a-token-of-at-least-16-bytes go run ./cmd/dostoevsky-gateway &   # from the repository root

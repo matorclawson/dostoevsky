@@ -1,6 +1,6 @@
 # dostoevsky-client (Rust)
 
-Synchronous, **zero dependencies**: standard library only, so Cargo fetches nothing and builds offline. Plain `http://` only (HTTP/1.1, one connection per call), **and only to a loopback address**: the client refuses any other host before sending the whole-store token. There is no TLS yet: for a remote gateway, put a local TLS-terminating proxy in front, or wait for the opt-in `tls` feature (a later, separately reviewed PR; never on by default). Rust 1.80 or newer.
+Synchronous, **zero dependencies**: standard library only, so Cargo fetches nothing and builds offline. Plain `http://` only (HTTP/1.1 keep-alive over a small pool of connections; a `Client` can be shared between threads; `close()` drops the pool), **and only to a loopback address**: the client refuses any other host before sending the whole-store token. There is no TLS yet: for a remote gateway, put a local TLS-terminating proxy in front, or wait for the opt-in `tls` feature (a later, separately reviewed PR; never on by default). Rust 1.80 or newer.
 
 ```sh
 DOSTOEVSKY_TOKEN=a-token-of-at-least-16-bytes go run ./cmd/dostoevsky-gateway &   # from the repository root
@@ -13,6 +13,8 @@ let ack = c.publish("jobs", b"payload", "k", "once")?;           // same id + pa
 let rec = c.read("jobs", ack.partition, ack.offset, 1000)?;       // None when nothing arrives in time
 c.commit("jobs", ack.partition, "workers", ack.offset, b"")?;
 ```
+
+A call that fails on a reused connection before any reply is repeated once on a fresh one only when that is safe: reads, positions, and publishes that carry an `id`. An id-less publish or a commit is never repeated for you.
 
 Errors are `Error::Api(status, word)` (`conflict`, `expired`, `limit`, ...), `Error::Transport` or `Error::InvalidResponse`. Responses are capped at 1 MiB.
 

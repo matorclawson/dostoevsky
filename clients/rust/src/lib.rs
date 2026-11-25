@@ -1,17 +1,23 @@
 //! Synchronous client for Dostoevsky's HTTP API. Standard library only: no crates are
-//! fetched. It speaks plain `http://` (HTTP/1.1, one connection per call). For a TLS
-//! gateway, run a local TLS-terminating proxy and point this client at it.
+//! fetched. It speaks plain `http://` to loopback (HTTP/1.1 keep-alive over a small pool
+//! of connections, so a `Client` can be shared between threads). For a TLS gateway, run a
+//! local TLS-terminating proxy and point this client at it.
 //! All payloads and checkpoint states are bytes.
 use std::{
     fmt,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
-    time::Duration,
+    sync::Mutex,
+    time::{Duration, Instant},
 };
 
 const MAX_BODY: usize = 1_048_576;
 const MAX_LINE: u64 = 8192;
 const MAX_HEADERS: usize = 100;
+const MAX_IDLE: usize = 8; // idle connections kept per Client
+const IDLE_LIMIT: Duration = Duration::from_secs(30); // the gateway closes idle connections at 60 s
+
+type Conn = BufReader<TcpStream>;
 
 #[derive(Debug)]
 pub enum Error {
@@ -52,6 +58,8 @@ pub struct Client {
     authority: String, // host:port
     prefix: String,    // path prefix, ending in the API version
     auth: String,
+    timeout: Duration,
+    idle: Mutex<Vec<(Conn, Instant)>>, // most recently used last
 }
 
 struct Response {
@@ -153,32 +161,54 @@ fn read_exact_limited<R: Read>(r: &mut R, n: usize) -> Result<Vec<u8>, Error> {
     Ok(v)
 }
 
-fn read_response<R: BufRead>(r: &mut R) -> Result<Response, Error> {
-    let status_line = read_line(r)?;
-    let mut parts = status_line.splitn(3, ' ');
-    if !parts.next().is_some_and(|v| v.starts_with("HTTP/1.")) {
-        return Err(Error::InvalidResponse("not an HTTP/1.x response".into()));
-    }
-    let status: u16 = parts
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| Error::InvalidResponse("bad status line".into()))?;
-    let mut headers = Vec::new();
-    loop {
-        let line = read_line(r)?;
-        if line.is_empty() {
-            break;
+/// Returns the response and whether the connection may carry another request: the body was
+/// delimited by its own framing, the server speaks HTTP/1.1 and did not say `Connection: close`.
+fn read_response<R: BufRead>(r: &mut R) -> Result<(Response, bool), Error> {
+    let mut interim = 0usize;
+    // Interim replies (100 Continue, 103 Early Hints, ...) come before the final reply on the same
+    // connection. Read past them: returning one as the answer would leave the real reply in the
+    // stream for the next call on a pooled connection to pick up.
+    let (status, headers, http11) = loop {
+        let status_line = read_line(r)?;
+        let mut parts = status_line.splitn(3, ' ');
+        let version = parts.next().unwrap_or("");
+        if !version.starts_with("HTTP/1.") {
+            return Err(Error::InvalidResponse("not an HTTP/1.x response".into()));
         }
-        if headers.len() >= MAX_HEADERS {
-            return Err(Error::InvalidResponse("too many headers".into()));
+        let http11 = version == "HTTP/1.1";
+        let status: u16 = parts
+            .next()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| Error::InvalidResponse("bad status line".into()))?;
+        let mut headers = Vec::new();
+        loop {
+            let line = read_line(r)?;
+            if line.is_empty() {
+                break;
+            }
+            if headers.len() >= MAX_HEADERS {
+                return Err(Error::InvalidResponse("too many headers".into()));
+            }
+            let (k, v) = line
+                .split_once(':')
+                .ok_or_else(|| Error::InvalidResponse("bad header line".into()))?;
+            headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
         }
-        let (k, v) = line
-            .split_once(':')
-            .ok_or_else(|| Error::InvalidResponse("bad header line".into()))?;
-        headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
-    }
+        if status == 101 {
+            return Err(Error::InvalidResponse("unexpected protocol switch (101)".into()));
+        }
+        if (100..200).contains(&status) {
+            interim += 1;
+            if interim > MAX_HEADERS {
+                return Err(Error::InvalidResponse("too many interim replies".into()));
+            }
+            continue;
+        }
+        break (status, headers, http11);
+    };
     let find = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone());
-    let body = if status == 204 || status == 304 || (100..200).contains(&status) {
+    let mut framed = true; // false when the body ran to the end of the stream
+    let body = if status == 204 || status == 304 {
         Vec::new()
     } else if find("transfer-encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked")) {
         let mut body = Vec::new();
@@ -216,6 +246,7 @@ fn read_response<R: BufRead>(r: &mut R) -> Result<Response, Error> {
         }
         read_exact_limited(r, n)?
     } else {
+        framed = false;
         let mut v = Vec::new();
         r.take(MAX_BODY as u64 + 1).read_to_end(&mut v).map_err(transport)?;
         if v.len() > MAX_BODY {
@@ -223,7 +254,8 @@ fn read_response<R: BufRead>(r: &mut R) -> Result<Response, Error> {
         }
         v
     };
-    Ok(Response { status, headers, body })
+    let closes = find("connection").is_some_and(|v| v.to_ascii_lowercase().contains("close"));
+    Ok((Response { status, headers, body }, framed && http11 && !closes))
 }
 
 fn receipt(r: &Response) -> Result<Receipt, Error> {
@@ -258,10 +290,87 @@ impl Client {
             authority: if scheme_ok && is_loopback(authority) { authority.to_string() } else { String::new() },
             prefix: format!("{path}/dostoevsky/client/v1/"),
             auth: format!("Bearer {token}"),
+            timeout: Duration::from_secs(40),
+            idle: Mutex::new(Vec::new()),
         }
     }
 
-    fn call(&self, op: &str, args: &[(&str, &str)], data: Option<&[u8]>) -> Result<Response, Error> {
+    /// Drops every pooled connection. Connections are also dropped when the Client is.
+    pub fn close(&self) {
+        self.idle.lock().unwrap().clear();
+    }
+
+    fn take(&self) -> Option<Conn> {
+        let mut idle = self.idle.lock().unwrap();
+        while let Some((conn, since)) = idle.pop() {
+            if since.elapsed() <= IDLE_LIMIT {
+                return Some(conn);
+            }
+        }
+        None
+    }
+
+    fn give(&self, conn: Conn) {
+        let mut idle = self.idle.lock().unwrap();
+        if idle.len() < MAX_IDLE {
+            idle.push((conn, Instant::now()));
+        }
+    }
+
+    fn connect(&self) -> Result<Conn, Error> {
+        let addr = self
+            .authority
+            .to_socket_addrs()
+            .map_err(transport)?
+            .next()
+            .ok_or_else(|| Error::Transport("address did not resolve".into()))?;
+        check_resolved(&addr)?;
+        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(transport)?;
+        stream.set_read_timeout(Some(self.timeout)).map_err(transport)?;
+        stream.set_write_timeout(Some(self.timeout)).map_err(transport)?;
+        Ok(BufReader::new(stream))
+    }
+
+    /// One request and its reply on `conn`. The flag in the error says that nothing of a reply
+    /// was seen (the connection was dead or went away): the only case a repeat can be considered.
+    fn exchange(conn: &mut Conn, head: &str, data: Option<&[u8]>) -> Result<(Response, bool), (Error, bool)> {
+        let dead = |e: std::io::Error| {
+            let timed_out = matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock);
+            (transport(e), !timed_out)
+        };
+        let stream = conn.get_mut();
+        stream.write_all(head.as_bytes()).map_err(dead)?;
+        if let Some(bytes) = data {
+            stream.write_all(bytes).map_err(dead)?;
+        }
+        stream.flush().map_err(dead)?;
+        match conn.fill_buf() {
+            Ok(b) if b.is_empty() => {
+                return Err((Error::Transport("connection closed before a reply".into()), true))
+            }
+            Err(e) => return Err(dead(e)),
+            Ok(_) => {}
+        }
+        read_response(conn).map_err(|e| (e, false))
+    }
+
+    fn finish(&self, conn: Conn, res: Response, reusable: bool) -> Result<Response, Error> {
+        if reusable {
+            self.give(conn);
+        }
+        if (200..300).contains(&res.status) {
+            Ok(res)
+        } else {
+            let end = res.body.len().min(256);
+            let code = String::from_utf8_lossy(&res.body[..end]).trim().to_string();
+            Err(Error::Api(res.status, code))
+        }
+    }
+
+    /// One call. A request that fails on a REUSED connection before any reply is repeated once
+    /// on a fresh connection, but only when `retry_safe`: reads, positions and publishes that
+    /// carry an id. Anything else returns the error rather than risk a duplicate.
+    fn call(&self, op: &str, args: &[(&str, &str)], data: Option<&[u8]>, retry_safe: bool) -> Result<Response, Error> {
         if self.authority.is_empty() {
             return Err(Error::Transport(
                 "refusing to send the token: this client speaks plain http to loopback only; \
@@ -272,7 +381,7 @@ impl Client {
         let query: Vec<String> = args.iter().map(|(k, v)| format!("{k}={}", encode(v))).collect();
         let method = if data.is_some() { "POST" } else { "GET" };
         let mut head = format!(
-            "{method} {}{op}?{} HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n",
+            "{method} {}{op}?{} HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/octet-stream\r\n",
             self.prefix,
             query.join("&"),
             self.authority,
@@ -283,33 +392,23 @@ impl Client {
         }
         head.push_str("\r\n");
 
-        let addr = self
-            .authority
-            .to_socket_addrs()
-            .map_err(transport)?
-            .next()
-            .ok_or_else(|| Error::Transport("address did not resolve".into()))?;
-        check_resolved(&addr)?;
-        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(transport)?;
-        stream.set_read_timeout(Some(Duration::from_secs(40))).map_err(transport)?;
-        stream.set_write_timeout(Some(Duration::from_secs(40))).map_err(transport)?;
-        stream.write_all(head.as_bytes()).map_err(transport)?;
-        if let Some(bytes) = data {
-            stream.write_all(bytes).map_err(transport)?;
+        if let Some(mut conn) = self.take() {
+            match Self::exchange(&mut conn, &head, data) {
+                Ok((res, reusable)) => return self.finish(conn, res, reusable),
+                Err((e, before_reply)) => {
+                    if !(before_reply && retry_safe) {
+                        return Err(e);
+                    }
+                }
+            }
         }
-        stream.flush().map_err(transport)?;
-        let res = read_response(&mut BufReader::new(stream))?;
-        if (200..300).contains(&res.status) {
-            Ok(res)
-        } else {
-            let end = res.body.len().min(256);
-            let code = String::from_utf8_lossy(&res.body[..end]).trim().to_string();
-            Err(Error::Api(res.status, code))
-        }
+        let mut conn = self.connect()?;
+        let (res, reusable) = Self::exchange(&mut conn, &head, data).map_err(|(e, _)| e)?;
+        self.finish(conn, res, reusable)
     }
 
     pub fn publish(&self, topic: &str, value: &[u8], key: &str, id: &str) -> Result<Receipt, Error> {
-        receipt(&self.call("publish", &[("topic", topic), ("key", key), ("id", id)], Some(value))?)
+        receipt(&self.call("publish", &[("topic", topic), ("key", key), ("id", id)], Some(value), !id.is_empty())?)
     }
     pub fn read(&self, topic: &str, partition: u16, offset: i64, wait_ms: u32) -> Result<Option<Record>, Error> {
         let res = self.call(
@@ -321,6 +420,7 @@ impl Client {
                 ("wait_ms", &wait_ms.to_string()),
             ],
             None,
+            true,
         )?;
         if res.status == 204 {
             return Ok(None);
@@ -338,6 +438,7 @@ impl Client {
             "position",
             &[("topic", topic), ("partition", &partition.to_string()), ("group", group)],
             None,
+            true,
         )?;
         let next = res
             .header("Dostoevsky-Next")?
@@ -355,6 +456,7 @@ impl Client {
                 ("expected", &expected.to_string()),
             ],
             Some(state),
+            false, // never repeated for you: a repeat after a lost reply would answer 409
         )?;
         Ok(())
     }
@@ -366,37 +468,55 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    /// Serves one canned response per connection and returns the raw requests it saw.
-    fn stub(responses: Vec<Vec<u8>>) -> (String, thread::JoinHandle<Vec<Vec<u8>>>) {
+    /// Accepts one connection per plan entry and, on each, answers one request per response in
+    /// that entry, then closes the connection. Returns the raw requests it saw, in order.
+    fn stub(plan: Vec<Vec<Vec<u8>>>) -> (String, thread::JoinHandle<Vec<Vec<u8>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let handle = thread::spawn(move || {
             let mut seen = Vec::new();
-            for response in responses {
+            for responses in plan {
                 let (mut s, _) = listener.accept().unwrap();
                 let mut r = BufReader::new(s.try_clone().unwrap());
-                let mut raw = Vec::new();
-                let mut length = 0usize;
-                loop {
-                    let mut line = String::new();
-                    r.read_line(&mut line).unwrap();
-                    raw.extend(line.as_bytes());
-                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = v.trim().parse().unwrap();
+                for response in responses {
+                    let mut raw = Vec::new();
+                    let mut length = 0usize;
+                    loop {
+                        let mut line = String::new();
+                        if r.read_line(&mut line).unwrap() == 0 {
+                            return seen; // the client went away
+                        }
+                        raw.extend(line.as_bytes());
+                        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            length = v.trim().parse().unwrap();
+                        }
+                        if line == "\r\n" {
+                            break;
+                        }
                     }
-                    if line == "\r\n" {
-                        break;
-                    }
+                    let mut body = vec![0u8; length];
+                    r.read_exact(&mut body).unwrap();
+                    raw.extend(body);
+                    seen.push(raw);
+                    s.write_all(&response).unwrap();
                 }
-                let mut body = vec![0u8; length];
-                r.read_exact(&mut body).unwrap();
-                raw.extend(body);
-                seen.push(raw);
-                s.write_all(&response).unwrap();
             }
             seen
         });
         (url, handle)
+    }
+    /// One connection per response, each told to close after its reply.
+    fn one_each(responses: Vec<Vec<u8>>) -> Vec<Vec<Vec<u8>>> {
+        responses
+            .into_iter()
+            .map(|mut r| {
+                let at = r.windows(2).position(|w| w == b"\r\n").map_or(0, |i| i + 2);
+                let tail = r.split_off(at);
+                r.extend(b"Connection: close\r\n");
+                r.extend(tail);
+                vec![r]
+            })
+            .collect()
     }
     fn ok(headers: &str, body: &[u8]) -> Vec<u8> {
         let mut v = format!("HTTP/1.1 200 OK\r\n{headers}Content-Length: {}\r\n\r\n", body.len()).into_bytes();
@@ -419,7 +539,7 @@ mod tests {
 
     #[test]
     fn publish_sends_binary_body_token_and_escaped_params() {
-        let (url, h) = stub(vec![ok("Dostoevsky-Partition: 0\r\nDostoevsky-Offset: 7\r\n", b"")]);
+        let (url, h) = stub(one_each(vec![ok("Dostoevsky-Partition: 0\r\nDostoevsky-Offset: 7\r\n", b"")]));
         let ack = Client::new(&url, "tok").publish("jobs", &[0, 255], "+/\u{3bb}", "once").unwrap();
         assert_eq!((ack.partition, ack.offset), (0, 7));
         let raw = h.join().unwrap().remove(0);
@@ -433,7 +553,7 @@ mod tests {
     fn read_returns_binary_value_from_content_length_and_chunked() {
         let chunked = b"HTTP/1.1 200 OK\r\nDostoevsky-Partition: 0\r\nDostoevsky-Offset: 5\r\nDostoevsky-Key: +/%CE%BB%20x\r\nDostoevsky-ID: x\r\nDostoevsky-Time: t\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n\x00\xff\r\n1;ext=1\r\nA\r\n0\r\n\r\n".to_vec();
         let plain = ok("Dostoevsky-Partition: 0\r\nDostoevsky-Offset: 5\r\nDostoevsky-Key: k\r\nDostoevsky-ID: i\r\nDostoevsky-Time: t\r\n", &[0, 255, 65]);
-        let (url, h) = stub(vec![chunked, plain]);
+        let (url, h) = stub(one_each(vec![chunked, plain]));
         let c = Client::new(&url, "tok");
         let r = c.read("jobs", 0, 5, 100).unwrap().unwrap();
         assert_eq!((r.receipt.offset, r.key.as_str(), r.id.as_str(), r.value.as_slice()), (5, "+/\u{3bb} x", "x", &[0u8, 255, 65][..]));
@@ -445,11 +565,11 @@ mod tests {
 
     #[test]
     fn no_content_is_none_and_errors_carry_status_and_word() {
-        let (url, h) = stub(vec![
+        let (url, h) = stub(one_each(vec![
             b"HTTP/1.1 204 No Content\r\n\r\n".to_vec(),
             b"HTTP/1.1 409 Conflict\r\nContent-Length: 9\r\n\r\nconflict\n".to_vec(),
             b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 13\r\n\r\nunauthorized\n".to_vec(),
-        ]);
+        ]));
         let c = Client::new(&url, "tok");
         assert!(c.read("jobs", 0, 99, 0).unwrap().is_none());
         match c.publish("jobs", b"", "", "clash") {
@@ -462,10 +582,10 @@ mod tests {
 
     #[test]
     fn position_and_commit() {
-        let (url, h) = stub(vec![
+        let (url, h) = stub(one_each(vec![
             ok("Dostoevsky-Next: 3\r\n", &[1, 2]),
             b"HTTP/1.1 204 No Content\r\n\r\n".to_vec(),
-        ]);
+        ]));
         let c = Client::new(&url, "tok");
         let p = c.position("jobs", 0, "g").unwrap();
         assert_eq!((p.next, p.state), (3, vec![1, 2]));
@@ -477,12 +597,12 @@ mod tests {
 
     #[test]
     fn oversized_and_malformed_responses_are_refused() {
-        let (url, h) = stub(vec![
+        let (url, h) = stub(one_each(vec![
             b"HTTP/1.1 200 OK\r\nContent-Length: 1048577\r\n\r\n".to_vec(),
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n".to_vec(),
             b"garbage\r\n\r\n".to_vec(),
             b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort".to_vec(),
-        ]);
+        ]));
         let c = Client::new(&url, "tok");
         for _ in 0..4 {
             assert!(matches!(c.position("jobs", 0, "g"), Err(Error::InvalidResponse(_))));
@@ -503,9 +623,72 @@ mod tests {
 
     #[test]
     fn a_path_prefix_is_kept() {
-        let (url, h) = stub(vec![ok("Dostoevsky-Next: 0\r\n", b"")]);
+        let (url, h) = stub(one_each(vec![ok("Dostoevsky-Next: 0\r\n", b"")]));
         Client::new(&format!("{url}/mount/"), "tok").position("t", 0, "g").unwrap();
         assert!(h.join().unwrap()[0].starts_with(b"GET /mount/dostoevsky/client/v1/position?"));
+    }
+
+    fn client(url: &str) -> Client {
+        let mut c = Client::new(url, "tok");
+        c.timeout = Duration::from_secs(3); // a wrongly opened extra connection fails fast, not after 40 s
+        c
+    }
+
+    #[test]
+    fn keep_alive_serves_many_calls_on_one_connection() {
+        let next = || ok("Dostoevsky-Next: 3\r\n", &[1, 2]);
+        let (url, h) = stub(vec![vec![next(), next(), next(), next()]]); // ONE connection, four replies
+        let c = client(&url);
+        for _ in 0..4 {
+            assert_eq!(c.position("jobs", 0, "g").unwrap().next, 3);
+        }
+        assert_eq!(h.join().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn a_server_that_says_close_gets_a_new_connection_next_time() {
+        let next = ok("Dostoevsky-Next: 3\r\n", &[]);
+        let mut closing = next.clone();
+        let at = closing.windows(2).position(|w| w == b"\r\n").unwrap() + 2;
+        closing.splice(at..at, b"Connection: close\r\n".iter().cloned());
+        let (url, h) = stub(vec![vec![closing], vec![next]]);
+        let c = client(&url);
+        c.position("jobs", 0, "g").unwrap();
+        c.position("jobs", 0, "g").unwrap();
+        assert_eq!(h.join().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_dead_reused_connection_is_retried_for_safe_calls_only() {
+        let next = || ok("Dostoevsky-Next: 3\r\n", &[]);
+        let ack = || ok("Dostoevsky-Partition: 0\r\nDostoevsky-Offset: 7\r\n", b"");
+        // Each connection answers once and is then closed by the stub, leaving a dead one pooled.
+        let (url, h) = stub(vec![vec![next()], vec![next()], vec![ack()], vec![next()]]);
+        let c = client(&url);
+        c.position("jobs", 0, "g").unwrap(); // connection 1, pooled
+        c.position("jobs", 0, "g").unwrap(); // pooled one is dead: retried on connection 2
+        c.publish("jobs", b"x", "", "once").unwrap(); // connection 2 is dead; an id makes it safe: connection 3
+        // Connection 3 is dead. An id-less publish and a commit must NOT be repeated for you.
+        let e = c.publish("jobs", b"x", "", "").unwrap_err();
+        assert!(matches!(e, Error::Transport(_)), "{e:?}");
+        c.position("jobs", 0, "g").unwrap(); // the dead one was dropped; this safe call opens connection 4
+        let e = c.commit("jobs", 0, "g", 3, b"s");
+        assert!(matches!(e, Err(Error::Transport(_))), "{e:?}");
+        drop(c);
+        let seen = h.join().unwrap();
+        assert!(!seen.iter().any(|r| r.starts_with(b"POST /dostoevsky/client/v1/commit")), "the commit reached the server");
+    }
+
+    #[test]
+    fn many_threads_share_one_client() {
+        let c = std::sync::Arc::new(client("http://127.0.0.1:1")); // refused: every call fails the same way
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let c = c.clone();
+                thread::spawn(move || c.position("jobs", 0, "g").is_err())
+            })
+            .collect();
+        assert!(workers.into_iter().all(|w| w.join().unwrap()));
     }
 
     #[test]
@@ -526,10 +709,31 @@ mod tests {
         let resp = |trailers: &str| {
             format!("HTTP/1.1 200 OK\r\nDostoevsky-Next: 3\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n0\r\n{trailers}\r\n").into_bytes()
         };
-        let (url, h) = stub(vec![resp(few), resp(&many)]);
+        let (url, h) = stub(one_each(vec![resp(few), resp(&many)]));
         let c = Client::new(&url, "tok");
         assert_eq!(c.position("jobs", 0, "g").unwrap().next, 3);
         assert!(matches!(c.position("jobs", 0, "g"), Err(Error::InvalidResponse(_))));
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn interim_replies_are_read_past_so_a_pooled_connection_stays_in_step() {
+        let first = ok("Dostoevsky-Next: 3\r\n", &[]);
+        let second = ok("Dostoevsky-Next: 4\r\n", &[]);
+        let mut interim_then_first = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </x>\r\n\r\n".to_vec();
+        interim_then_first.extend(first);
+        // One connection: the first reply is preceded by interim replies, then a second exchange follows.
+        let (url, h) = stub(vec![vec![interim_then_first, second]]);
+        let c = client(&url);
+        assert_eq!(c.position("jobs", 0, "g").unwrap().next, 3);
+        assert_eq!(c.position("jobs", 0, "g").unwrap().next, 4, "the second call read a stale reply");
+        assert_eq!(h.join().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_protocol_switch_is_refused() {
+        let (url, h) = stub(one_each(vec![b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\n\r\n".to_vec()]));
+        assert!(matches!(client(&url).position("jobs", 0, "g"), Err(Error::InvalidResponse(_))));
         h.join().unwrap();
     }
 }

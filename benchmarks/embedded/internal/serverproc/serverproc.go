@@ -97,49 +97,80 @@ func (p *Proc) Stop(grace time.Duration) error { return p.StopWith(grace, nil) }
 const exitSIGTERM = 128 + int(syscall.SIGTERM)
 
 // StopWith is Stop for a server that traps SIGTERM and exits 143 after shutting
-// down. Exit 143 counts as success only when all of these hold: the process was
-// still running when this call signaled it, it exited within the grace period
-// without being killed, and cleanShutdown (when given) confirms from the server's
-// own state that the shutdown was clean. A SIGTERM death, as before, is success.
-// Any other status, an exit 143 that nobody asked for, or a failed confirmation
-// is an error.
+// down. It does two separate things.
+//
+// Cleanup: the whole process group always gets SIGTERM, SIGKILL after the grace
+// period, and any member still alive once the leader is gone is killed, whatever
+// happened to the leader (an Erlang VM's helpers, a wrapper script's children).
+//
+// Judging the leader's exit: a SIGTERM death or exit 143 counts as success only when
+// the process was still running when we signaled it, our SIGTERM was delivered to it
+// (the kill call succeeded, not ESRCH), it was not killed after the grace period (a
+// recorded kill is never cleared by a late SIGTERM status), and, for 143,
+// cleanShutdown confirms from the server's own state that the shutdown was clean.
+// Any other status, an exit nobody asked for or a failed confirmation is an error.
 func (p *Proc) StopWith(grace time.Duration, cleanShutdown func() error) error {
-	pgid := p.cmd.Process.Pid
+	pid := p.cmd.Process.Pid
 	var err error
 	exitedFirst := false
 	select {
 	case err = <-p.exit:
 		exitedFirst = true // it was already gone: nothing of ours stopped it
 	default:
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	}
+	delivered := false
+	if !exitedFirst {
+		delivered = syscall.Kill(pid, syscall.SIGTERM) == nil
+	}
+	_ = syscall.Kill(-pid, syscall.SIGTERM) // cleanup: the group, always
 	killed := false
 	if !exitedFirst {
 		select {
 		case err = <-p.exit:
 		case <-time.After(grace):
 			killed = true
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
 			err = <-p.exit
 			err = errors.Join(errors.New("server did not stop within the grace period and was killed"), err)
 		}
 	}
+	reapGroup(pid, time.Second)
 	p.sampleOnce()
 	close(p.stop)
 	<-p.done
+	return judgeExit(err, exitedFirst, delivered, killed, cleanShutdown)
+}
+
+// reapGroup waits briefly for the members of the leader's group to exit, then
+// kills whatever is left. It never says anything about how the leader exited.
+func reapGroup(pgid int, wait time.Duration) {
+	deadline := time.Now().Add(wait)
+	for syscall.Kill(-pgid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// judgeExit decides whether the leader's exit is a clean stop (see StopWith).
+func judgeExit(err error, exitedFirst, delivered, killed bool, cleanShutdown func() error) error {
+	if killed {
+		return err // a recorded kill is final, whatever status the wait reported
+	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-			// A server stopped by our SIGTERM may report a signal; that is not a failure.
-			if ws.Signaled() && ws.Signal() == syscall.SIGTERM && !exitedFirst {
+			if ws.Signaled() && ws.Signal() == syscall.SIGTERM && delivered && !exitedFirst {
 				return nil
 			}
 			if ws.Exited() && ws.ExitStatus() == exitSIGTERM {
 				switch {
 				case exitedFirst:
 					return fmt.Errorf("server exited with status %d on its own, before it was stopped: %w", exitSIGTERM, err)
-				case killed:
-					return err
+				case !delivered:
+					return fmt.Errorf("server exited with status %d but our SIGTERM was not delivered to it: %w", exitSIGTERM, err)
 				case cleanShutdown == nil:
 					return fmt.Errorf("server exited with status %d after SIGTERM and no clean-shutdown check was given: %w", exitSIGTERM, err)
 				}

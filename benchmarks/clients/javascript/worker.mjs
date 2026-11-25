@@ -21,6 +21,8 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
       // Prints the raw engine error to stderr for a person at a terminal. run.sh never passes it; the receipt never has it.
       "debug-errors": { type: "boolean", default: false } } }).values;
   } catch (e) { console.error(e.message); return 2; }
+  // A raw engine error can carry anything: never under the driver, which keeps the last stderr line of a failed worker.
+  if (args["debug-errors"] && env.BENCH_DRIVER) { console.error("--debug-errors is for a person at a terminal; it is refused under the benchmark driver"); return 2; }
   const workers = Number(args.workers), target = Number(args.target), windowS = Number(args.window);
   // Whole numbers a double holds exactly, and a finite window: "--workers 1e9999" or "--target 2.5" is a usage error.
   if (!args.engine || !args.addr || !Number.isSafeInteger(workers) || workers < 1 || !Number.isSafeInteger(target) || target < 1
@@ -53,5 +55,5 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).then((code) => process.exit(code), (e) => { console.error(e); process.exit(1); });
+  main(process.argv.slice(2)).then((code) => process.exit(code), (e) => { console.error(`worker error: ${core.reason(e)}`); process.exit(1); }); // one deliberate line, not a stack
 }

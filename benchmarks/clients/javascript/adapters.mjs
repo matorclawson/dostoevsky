@@ -111,19 +111,11 @@ export async function kafka(addr, token) {
         consumer = readerClient.consumer({ groupId: "verify" });
         // Do not read until the group has actually been joined and a partition assigned; a crash is an error with its
         // cause, not a silent wait. (A "negative timeout" warning from kafkajs's own heartbeat timer is harmless noise.)
-        const { GROUP_JOIN, CRASH, REBALANCING, FETCH_START } = consumer.events;
-        let settled = false;
-        const joined = new Promise((resolve, reject) => {
-          consumer.on(GROUP_JOIN, (e) => { debug.log("group join", JSON.stringify(e.payload.memberAssignment)); settled = true; resolve(); });
-          consumer.on(CRASH, (e) => { debug.log("consumer crash", e.payload.error); if (!settled) reject(e.payload.error); });
-          consumer.on(REBALANCING, (e) => debug.log("rebalancing", e.payload.groupId));
-          consumer.on(FETCH_START, () => debug.log("fetch start"));
-        });
+        const joined = joinWatcher(consumer, 60000);
         await consumer.connect();
         await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
         await consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } });
-        let timer;
-        await Promise.race([joined, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("consumer group not joined within 60 s")), 60000); })]).finally(() => clearTimeout(timer));
+        await joined;
         consumer.seek({ topic: TOPIC, partition: 0, offset: "0" }); // from the beginning, whatever the group's own position
       }
       try {
@@ -135,6 +127,31 @@ export async function kafka(addr, token) {
     },
     close: async () => { if (consumer) await consumer.disconnect(); await producer.disconnect(); },
   };
+}
+
+// Resolves when the consumer has joined its group and been assigned a partition. kafkajs reports a failure as CRASH with
+// `restart`: true when it will start the consumer again itself (a coordinator not yet elected on a fresh broker is
+// the usual cause), so that crash only waits, within the budget, for the next join; a crash with restart false is
+// terminal and rejects at once. On a timeout the error carries the last crash's type, so a receipt can tell
+// "no coordinator yet" from "topic not found". Call it BEFORE consumer.connect(): the listeners must exist first.
+export function joinWatcher(consumer, budgetMs) {
+  const { GROUP_JOIN, CRASH, REBALANCING, FETCH_START } = consumer.events;
+  let timer, last = null;
+  const joined = new Promise((resolve, reject) => {
+    consumer.on(GROUP_JOIN, (e) => { debug.log("group join", JSON.stringify(e.payload.memberAssignment)); resolve(); });
+    consumer.on(CRASH, (e) => {
+      debug.log("consumer crash", e.payload.restart ? "(restart scheduled)" : "(terminal)", e.payload.error);
+      if (e.payload.restart === false) reject(e.payload.error); else last = e.payload.error;
+    });
+    consumer.on(REBALANCING, (e) => debug.log("rebalancing", e.payload.groupId));
+    consumer.on(FETCH_START, () => debug.log("fetch start"));
+    timer = setTimeout(() => {
+      const err = new Error("consumer group not joined within the budget");
+      if (last) { err.type = last.type ?? last.name; err.code = last.code; }
+      reject(err);
+    }, budgetMs);
+  });
+  return joined.finally(() => clearTimeout(timer));
 }
 
 // @nats-io/transport-node + @nats-io/jetstream (the v3 client).

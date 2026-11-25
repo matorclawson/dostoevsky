@@ -165,7 +165,7 @@ run_cell() {
   if [ -z "$cmd" ]; then code=2; else
     # In the background so a TERM reaches the trap at once; exec so the pid is the worker itself and a kill reaches it;
     # 3>&- so the worker does not inherit the FIFO's write end (it would keep the server's stdin open).
-    BENCH_TOKEN="$token" sh -c "exec $cmd" 3>&- > "$d/wout" 2> "$d/werr" &
+    BENCH_DRIVER=1 BENCH_TOKEN="$token" sh -c "exec $cmd" 3>&- > "$d/wout" 2> "$d/werr" &
     CUR_WPID=$!
     # A deadline: the window plus time to read everything back, or WORKER_MAX seconds when given; 10 minutes without a window.
     limit=${WORKER_MAX:-$(( win > 0 ? win * 3 + 1800 : 600 ))}

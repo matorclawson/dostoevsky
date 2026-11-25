@@ -25,7 +25,11 @@ export function reason(e) {
   else if (/timeout/i.test(name) || code === "ETIMEDOUT" || code === "ABORT_ERR") word = "timeout";
   else if (/^(ECONN|EPIPE|ENOTFOUND|EAI_)/.test(code) || /connection/i.test(name)) word = "connection";
   else if (e instanceof TypeError || e instanceof RangeError || e instanceof SyntaxError) word = "protocol";
-  return `${name}:${word}`;
+  // A kafkajs protocol error names its cause with a fixed upper-case type (UNKNOWN_TOPIC_OR_PARTITION) and a number:
+  // both are safe, unlike the message, and tell a missing topic from a leader election.
+  const type = typeof e?.type === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(e.type) ? `:${e.type}` : "";
+  const num = Number.isSafeInteger(e?.code) && e.code >= 0 ? `,${e.code}` : "";
+  return `${name}:${word}${type}${type ? num : ""}`;
 }
 
 export class Hist {

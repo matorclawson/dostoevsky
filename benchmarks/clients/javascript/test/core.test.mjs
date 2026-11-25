@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import * as core from "../core.mjs";
 import { main } from "../worker.mjs";
-import { buildId, identity, kafkaClientConfigs, ownClientName, packId, unpackId, version } from "../adapters.mjs";
+import { buildId, identity, joinWatcher, kafkaClientConfigs, ownClientName, packId, unpackId, version } from "../adapters.mjs";
 
 const here = (rel) => new URL(rel, import.meta.url);
 const EXAMPLES = readFileSync(here("../../receipt_examples.txt"), "utf8").split("\n").filter((l) => l.trim() && !l.startsWith("#"));
@@ -334,4 +334,47 @@ test("the verification consumer's client keeps kafkajs's default retries while t
   assert.equal("retry" in reader, false, "the reader client must not carry the producer's retry setting (a consumer inherits it)");
   assert.notEqual(reader.clientId, writer.clientId);
   assert.deepEqual([writer.brokers, reader.brokers], [["127.0.0.1:9"], ["127.0.0.1:9"]]);
+});
+
+// A fake consumer with kafkajs's event names; `fire` delivers an event to what joinWatcher registered.
+function fakeConsumer() {
+  const handlers = {};
+  return { events: { GROUP_JOIN: "join", CRASH: "crash", REBALANCING: "reb", FETCH_START: "fetch" },
+    on: (name, fn) => { handlers[name] = fn; }, fire: (name, payload) => handlers[name]({ payload }) };
+}
+
+test("a crash kafkajs will restart waits for the next join; a terminal crash rejects at once", async () => {
+  const c = fakeConsumer();
+  const p = joinWatcher(c, 5000);
+  const err = Object.assign(new Error("coordinator"), { type: "GROUP_COORDINATOR_NOT_AVAILABLE" });
+  c.fire("crash", { error: err, restart: true });
+  c.fire("join", { memberAssignment: {} }); // the restarted consumer joins
+  await p; // resolved, not rejected
+
+  const c2 = fakeConsumer();
+  const p2 = joinWatcher(c2, 5000);
+  c2.fire("crash", { error: err, restart: false });
+  await assert.rejects(p2, (e) => e === err);
+});
+
+test("a restartable crash that never joins ends at the budget with the crash's type for the receipt", async () => {
+  const c = fakeConsumer();
+  const p = joinWatcher(c, 30);
+  c.fire("crash", { error: Object.assign(new Error("x"), { type: "UNKNOWN_TOPIC_OR_PARTITION", code: 3 }), restart: true });
+  await assert.rejects(p, (e) => core.reason(e) === "Error:engine-error:UNKNOWN_TOPIC_OR_PARTITION,3");
+});
+
+test("reason carries a protocol error's fixed type and code but never its message or a free-text type", () => {
+  const e = Object.assign(new Error("secret message token=abc"), { name: "KafkaJSProtocolError", type: "UNKNOWN_TOPIC_OR_PARTITION", code: 3 });
+  assert.equal(core.reason(e), "KafkaJSProtocolError:engine-error:UNKNOWN_TOPIC_OR_PARTITION,3");
+  assert.equal(core.reason(Object.assign(new Error("m"), { type: "has spaces and secret" })), "Error:engine-error");
+});
+
+test("--debug-errors is refused under the benchmark driver", async () => {
+  const lines = [];
+  const orig = console.error; console.error = (m) => lines.push(String(m));
+  try {
+    assert.equal(await main(["--engine", "x", "--addr", "a:1", "--debug-errors"], { BENCH_DRIVER: "1" }, () => {}, {}), 2);
+  } finally { console.error = orig; }
+  assert.match(lines.join("\n"), /refused under the benchmark driver/);
 });

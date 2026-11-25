@@ -11,22 +11,29 @@ sequenceDiagram
     participant A as Publish A
     participant B as Publish B
     participant C as Publish C
+    participant D as Publish D
     participant J as Journal
-    A->>J: write frame, sync (node idle: inline)
-    B->>B: arrives during A's sync: joins the queue
-    C->>C: arrives during A's sync: joins the queue
+    A->>J: node idle: write and sync inline
+    B->>B: arrives during A's write: claims the queue, waits for the node lock
+    C->>C: arrives while the queue is active: queued
+    D->>D: queued
     J-->>A: acknowledged
-    B->>J: one write and one sync for B and C
+    B->>J: B writes and syncs by itself
     J-->>B: acknowledged
+    C->>J: a drainer takes C and D: one write, one sync
     J-->>C: acknowledged
+    J-->>D: acknowledged
 ```
 
-- An idle node writes inline, with no queue and no goroutine.
-- Calls that arrive while a write is in flight wait in a bounded queue: at most 64 calls and 1 MiB of topic, key, ID and value bytes. When it is full, further callers wait on the node lock, which is the backpressure.
-- The next writer takes the whole queue, encodes it into one buffer, writes it, syncs once and then releases every caller in the group with its own receipt.
+This is how the code behaves on main. The first contender (B) writes alone; callers that arrive once a queue is active share a group.
+
+- A node with no queue active and no writer writes inline, with no queue bookkeeping.
+- A call that finds the node busy and no queue active becomes the first contender: it marks the queue active, waits for the node lock and writes its own record by itself.
+- Calls that arrive while a queue is active wait in a bounded queue: at most 64 calls and 1 MiB of topic, key, ID and value bytes. When it is full, further callers wait on the node lock, which is the backpressure.
+- After the first contender's write, a drainer goroutine takes everything queued, encodes it into one buffer, writes it, syncs once and releases every caller in the group with its own receipt. It keeps taking groups while calls keep arriving; when the queue is empty it hands the queue back and the next call finds an idle node.
 - Nobody is acknowledged before the sync that covers their record. If the sync fails the whole group fails and the node refuses further writes until it is reopened.
 
-With one producer there is nothing to share, so throughput is bounded by one sync per record. With 32 producers each sync covers many records. The [publisher gate](publisher-gate.md) measures this: medians of 4,005, 13,252 and 36,422 messages/s at 1, 8 and 32 producers.
+With one producer there is nothing to share, so throughput is bounded by one sync per record. With many producers, groups of queued callers share a sync, so each sync covers many records. The [publisher gate](publisher-gate.md) measures this: medians of 4,005, 13,252 and 36,422 messages/s at 1, 8 and 32 producers.
 
 ![Median messages per second at 1, 8 and 32 producers for Dostoevsky and embedded JetStream.](img/throughput.svg)
 

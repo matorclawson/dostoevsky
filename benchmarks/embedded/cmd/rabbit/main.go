@@ -35,6 +35,7 @@ func serverEnv(dir, node string, amqpPort, distPort, epmdPort int) []string {
 	return []string{
 		"HOME=" + filepath.Join(dir, "home"),
 		"RABBITMQ_NODENAME=" + node,
+		"RABBITMQ_USE_LONGNAME=false",
 		"RABBITMQ_NODE_IP_ADDRESS=127.0.0.1",
 		"RABBITMQ_NODE_PORT=" + strconv.Itoa(amqpPort),
 		"RABBITMQ_DIST_PORT=" + strconv.Itoa(distPort),
@@ -47,8 +48,22 @@ func serverEnv(dir, node string, amqpPort, distPort, epmdPort int) []string {
 	}
 }
 
-// config bounds memory the same way for every run (the 1 GiB watermark is stated on the chart).
-const config = "vm_memory_high_watermark.absolute = 1GiB\nloopback_users = none\n"
+// brokerConfig bounds memory the same way for every run (the 1 GiB watermark is stated
+// on the chart) and gives the cluster a name that only this trial knows, which is what
+// the identity check compares: the broker reports it as cluster_name.
+func brokerConfig(clusterName string) string {
+	return "vm_memory_high_watermark.absolute = 1GiB\nloopback_users = none\ncluster_name = " + clusterName + "\n"
+}
+
+// checkIdentity keeps readiness tied to the launched broker: the cluster name it
+// reports must be exactly this trial's.
+func checkIdentity(props amqp.Table, want string) error {
+	got, _ := props["cluster_name"].(string)
+	if got != want {
+		return fmt.Errorf("broker reports cluster %q, not this trial's %q", got, want)
+	}
+	return nil
+}
 
 // Every blocking call to the broker runs under the trial context (cancelled when
 // the memory guard trips) with its own deadline; where amqp091-go has no context
@@ -378,7 +393,7 @@ func main() {
 		if err := os.WriteFile(filepath.Join(dir, "enabled_plugins"), []byte("[].\n"), 0o600); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(filepath.Join(dir, "conf.d", "rabbitmq.conf"), []byte(config), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "conf.d", "rabbitmq.conf"), []byte(brokerConfig(node)), 0o600); err != nil {
 			return nil, err
 		}
 		env := serverEnv(dir, node, ports[0], ports[1], ports[2])
@@ -431,9 +446,9 @@ func main() {
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
-		// Tie readiness to the launched node: the cluster name carries its private name.
-		if name, _ := conn.Properties["cluster_name"].(string); name != node {
-			return failAll(fmt.Errorf("broker reports node %q, not this trial's %q", name, node))
+		// Tie readiness to the launched broker: the cluster name carries this trial's private name.
+		if err = checkIdentity(conn.Properties, node); err != nil {
+			return failAll(err)
 		}
 		const channels = 64
 		pool := make(chan publisher, channels)

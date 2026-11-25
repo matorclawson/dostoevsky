@@ -90,25 +90,64 @@ func (p *Proc) WaitReady(network, addr string, timeout time.Duration) error {
 }
 
 // Stop asks the whole process group to terminate and kills it after grace.
-func (p *Proc) Stop(grace time.Duration) error {
+func (p *Proc) Stop(grace time.Duration) error { return p.StopWith(grace, nil) }
+
+// exitSIGTERM is the status a JVM reports after it trapped SIGTERM and finished a
+// clean shutdown: 128 plus the signal number.
+const exitSIGTERM = 128 + int(syscall.SIGTERM)
+
+// StopWith is Stop for a server that traps SIGTERM and exits 143 after shutting
+// down. Exit 143 counts as success only when all of these hold: the process was
+// still running when this call signaled it, it exited within the grace period
+// without being killed, and cleanShutdown (when given) confirms from the server's
+// own state that the shutdown was clean. A SIGTERM death, as before, is success.
+// Any other status, an exit 143 that nobody asked for, or a failed confirmation
+// is an error.
+func (p *Proc) StopWith(grace time.Duration, cleanShutdown func() error) error {
 	pgid := p.cmd.Process.Pid
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	var err error
+	exitedFirst := false
 	select {
 	case err = <-p.exit:
-	case <-time.After(grace):
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		err = <-p.exit
-		err = errors.Join(errors.New("server did not stop within the grace period and was killed"), err)
+		exitedFirst = true // it was already gone: nothing of ours stopped it
+	default:
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	}
+	killed := false
+	if !exitedFirst {
+		select {
+		case err = <-p.exit:
+		case <-time.After(grace):
+			killed = true
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			err = <-p.exit
+			err = errors.Join(errors.New("server did not stop within the grace period and was killed"), err)
+		}
 	}
 	p.sampleOnce()
 	close(p.stop)
 	<-p.done
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		// A server stopped by our SIGTERM may report a signal; that is not a failure.
-		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGTERM {
-			return nil
+		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+			// A server stopped by our SIGTERM may report a signal; that is not a failure.
+			if ws.Signaled() && ws.Signal() == syscall.SIGTERM && !exitedFirst {
+				return nil
+			}
+			if ws.Exited() && ws.ExitStatus() == exitSIGTERM {
+				switch {
+				case exitedFirst:
+					return fmt.Errorf("server exited with status %d on its own, before it was stopped: %w", exitSIGTERM, err)
+				case killed:
+					return err
+				case cleanShutdown == nil:
+					return fmt.Errorf("server exited with status %d after SIGTERM and no clean-shutdown check was given: %w", exitSIGTERM, err)
+				}
+				if cerr := cleanShutdown(); cerr != nil {
+					return fmt.Errorf("server exited with status %d after SIGTERM but its shutdown is not confirmed clean: %w", exitSIGTERM, cerr)
+				}
+				return nil
+			}
 		}
 	}
 	return err

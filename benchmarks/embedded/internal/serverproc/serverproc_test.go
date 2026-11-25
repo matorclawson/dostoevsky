@@ -1,8 +1,10 @@
 package serverproc
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,5 +60,70 @@ func TestPeakIsAnErrorWhenTheServerWasNeverMeasured(t *testing.T) {
 	p.peak[4243] = 20
 	if kib, err := p.PeakKiB(); err != nil || kib != 120 {
 		t.Fatalf("sum of per-process peaks = %d, %v; want 120", kib, err)
+	}
+}
+
+func needProcfs(t *testing.T) {
+	t.Helper()
+	if _, ok := vmHWM(os.Getpid()); !ok {
+		t.Skip("needs procfs (Linux); run on the Linux gate host")
+	}
+}
+
+// A shell that traps SIGTERM and exits 143, as a JVM does after a clean shutdown.
+const trapsTerm = `trap 'exit 143' TERM; sleep 30 & wait`
+
+func startTrap(t *testing.T, script string) *Proc {
+	t.Helper()
+	p, err := Start("sh", []string{"-c", script}, nil, filepath.Join(t.TempDir(), "log"), 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // let the shell install its trap
+	return p
+}
+
+func TestExit143AfterOurSIGTERMIsSuccessOnlyWhenShutdownIsConfirmedClean(t *testing.T) {
+	needProcfs(t)
+	if err := startTrap(t, trapsTerm).StopWith(10*time.Second, func() error { return nil }); err != nil {
+		t.Fatalf("a confirmed clean exit 143 after our SIGTERM was rejected: %v", err)
+	}
+	err := startTrap(t, trapsTerm).StopWith(10*time.Second, func() error { return errors.New("no clean-shutdown marker") })
+	if err == nil || !strings.Contains(err.Error(), "not confirmed clean") || !strings.Contains(err.Error(), "no clean-shutdown marker") {
+		t.Fatalf("an unconfirmed exit 143 was accepted: %v", err)
+	}
+	// Plain Stop has no confirmation to offer, so 143 stays a failure.
+	if err := startTrap(t, trapsTerm).Stop(10 * time.Second); err == nil || !strings.Contains(err.Error(), "143") {
+		t.Fatalf("exit 143 without a clean-shutdown check was accepted: %v", err)
+	}
+}
+
+func TestExit143WithoutOurSIGTERMFails(t *testing.T) {
+	needProcfs(t)
+	p, err := Start("sh", []string{"-c", "exit 143"}, nil, filepath.Join(t.TempDir(), "log"), 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond) // it has exited by itself
+	err = p.StopWith(10*time.Second, func() error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "on its own") {
+		t.Fatalf("an exit 143 that we did not cause was accepted: %v", err)
+	}
+}
+
+func TestOtherExitStatusesStayFailures(t *testing.T) {
+	needProcfs(t)
+	err := startTrap(t, `trap 'exit 7' TERM; sleep 30 & wait`).StopWith(10*time.Second, func() error { return nil })
+	if err == nil {
+		t.Fatal("exit status 7 was accepted")
+	}
+}
+
+func TestAServerThatIgnoresSIGTERMIsKilledAndFails(t *testing.T) {
+	needProcfs(t)
+	p := startTrap(t, `trap '' TERM; while :; do sleep 1; done`)
+	err := p.StopWith(300*time.Millisecond, func() error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "was killed") {
+		t.Fatalf("a killed server was reported as a clean stop: %v", err)
 	}
 }

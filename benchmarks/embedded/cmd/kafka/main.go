@@ -85,6 +85,7 @@ type store struct {
 	client *kgo.Client
 	proc   *serverproc.Proc
 	addr   string
+	logDir string
 	mu     sync.Mutex
 	loaded map[uint64][]byte
 	reader *kgo.Client
@@ -161,7 +162,10 @@ func closeClient(c *kgo.Client) {
 func (s *store) Close() {
 	closeClient(s.reader)
 	closeClient(s.client)
-	if err := s.proc.Stop(60 * time.Second); err != nil {
+	// kafka-server-start's JVM traps SIGTERM and exits 143 after a clean shutdown.
+	// That is accepted only because we sent the SIGTERM and Kafka's own clean-shutdown
+	// marker is present in the log directory.
+	if err := s.proc.StopWith(60*time.Second, func() error { return cleanShutdown(s.logDir) }); err != nil {
 		panic(err)
 	}
 }
@@ -211,6 +215,21 @@ func ensureTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// cleanShutdown confirms from Kafka's own state that the broker shut down cleanly:
+// its log manager writes .kafka_cleanshutdown into each log directory when it does.
+func cleanShutdown(logDir string) error {
+	if _, err := os.Stat(filepath.Join(logDir, ".kafka_cleanshutdown")); err != nil {
+		var names []string
+		if entries, e := os.ReadDir(logDir); e == nil {
+			for _, en := range entries {
+				names = append(names, en.Name())
+			}
+		}
+		return fmt.Errorf("no .kafka_cleanshutdown marker in %s (it holds %v): %w", logDir, names, err)
+	}
+	return nil
 }
 
 func script(home, name string) string { return filepath.Join(home, "bin", name) }
@@ -307,6 +326,6 @@ func main() {
 			closeClient(client)
 			return fail(err)
 		}
-		return &store{client: client, proc: proc, addr: addr}, nil
+		return &store{client: client, proc: proc, addr: addr, logDir: filepath.Join(dir, "kafka-logs")}, nil
 	})
 }

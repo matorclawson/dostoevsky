@@ -27,10 +27,10 @@ sequenceDiagram
 
 This is how the code behaves on main. The first contender (B) writes alone; callers that arrive once a queue is active share a group.
 
-- A node with no queue active and no writer writes inline, with no queue bookkeeping.
+- A call that finds the node lock free writes inline, with no queue bookkeeping (on main this fast path is a bare `TryLock`).
 - A call that finds the node busy and no queue active becomes the first contender: it marks the queue active, waits for the node lock and writes its own record by itself.
 - Calls that arrive while a queue is active wait in a bounded queue: at most 64 calls and 1 MiB of topic, key, ID and value bytes. When it is full, further callers wait on the node lock, which is the backpressure.
-- After the first contender's write, a drainer goroutine takes everything queued, encodes it into one buffer, writes it, syncs once and releases every caller in the group with its own receipt. It keeps taking groups while calls keep arriving; when the queue is empty it hands the queue back and the next call finds an idle node.
+- After the first contender's write, a drainer goroutine takes everything queued, encodes it into one buffer, writes it, syncs once and releases every caller in the group with its own receipt. That single write is the eligible-batch path: if validating the batch fails (wrong owner, a conflicting ID, invalid input, a limit), the calls are written one by one instead, so one bad call cannot reject its neighbors; a call that was cancelled before the group formed, or that repeats an ID already written, needs no write. The drainer keeps taking groups while calls keep arriving; when the queue is empty it hands the queue back and the next call finds a free lock.
 - Nobody is acknowledged before the sync that covers their record. If the sync fails the whole group fails and the node refuses further writes until it is reopened.
 
 With one producer there is nothing to share, so throughput is bounded by one sync per record. With many producers, groups of queued callers share a sync, so each sync covers many records. The [publisher gate](publisher-gate.md) measures this: medians of 4,005, 13,252 and 36,422 messages/s at 1, 8 and 32 producers.

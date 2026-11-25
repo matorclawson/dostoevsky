@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -273,5 +274,55 @@ func TestConcurrentPublishAcrossRetainAndReopen(t *testing.T) {
 	}
 	if len(seen) != workers*each {
 		t.Fatalf("acknowledged %d, want %d", len(seen), workers*each)
+	}
+}
+
+// With many synchronous producers every caller of a group waits for that group, so
+// the queue is empty when they are released. The groups must still stay large:
+// the drainer gathers the callers it just released instead of letting one of them
+// write alone. The sync is slowed to 2 ms so the producers' timing is irrelevant.
+func TestGroupCommitKeepsGroupsFullUnderClosedLoopLoad(t *testing.T) {
+	old := syncData
+	syncData = func(f *os.File) error { time.Sleep(2 * time.Millisecond); return old(f) }
+	t.Cleanup(func() { syncData = old })
+	n := openTest(t, t.TempDir(), config())
+	// The first write of a journal is a full sync; get it out of the way.
+	if _, err := n.Publish(ctx, p.Topic, Message{ID: "warm", Value: []byte("w")}); err != nil {
+		t.Fatal(err)
+	}
+	g0, r0 := n.publishes.groups.Load(), n.publishes.records.Load()
+	const producers, each = 32, 25
+	var wg sync.WaitGroup
+	offsets := make(chan int64, producers*each)
+	for w := 0; w < producers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < each; i++ {
+				id := fmt.Sprintf("p%d-%d", w, i)
+				r, err := n.Publish(ctx, p.Topic, Message{ID: id, Value: []byte(id)})
+				if err != nil {
+					t.Errorf("publish %s: %v", id, err)
+					return
+				}
+				offsets <- r.Offset
+			}
+		}()
+	}
+	wg.Wait()
+	close(offsets)
+	seen := map[int64]bool{}
+	for o := range offsets {
+		if seen[o] {
+			t.Fatalf("offset %d acknowledged twice", o)
+		}
+		seen[o] = true
+	}
+	groups, records := n.publishes.groups.Load()-g0, n.publishes.records.Load()-r0
+	if records != producers*each {
+		t.Fatalf("%d records written, want %d", records, producers*each)
+	}
+	if avg := float64(records) / float64(groups); avg < 22 {
+		t.Fatalf("average group of %.1f over %d groups; with %d producers the groups should stay near full", avg, groups, producers)
 	}
 }

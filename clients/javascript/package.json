@@ -21,6 +21,6 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test"
   }
 }

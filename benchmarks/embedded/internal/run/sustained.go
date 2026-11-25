@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/hist"
 )
 
 // Sustained mode runs one engine under a fixed window with a target, the way the 100M
@@ -108,26 +110,16 @@ var (
 	}
 )
 
-// ----- a small latency histogram: 1% resolution from 1 microsecond up, fixed size -----
+// ----- the latency histogram of a sustained run -----
 
-const histBins = 2400
+// latHist is internal/hist's bins (shared with every other harness and language) with atomic counters, because the
+// producers add to it concurrently. The bin of a duration is hist.Index, so a number means the same thing everywhere.
+type latHist struct{ n [hist.Bins]atomic.Uint64 }
 
-var histLog = math.Log(1.01)
-
-type hist struct{ n [histBins]atomic.Uint64 }
-
-func histIndex(d time.Duration) int {
-	us := float64(d) / 1e3
-	if us < 1 {
-		return 0
-	}
-	return min(int(math.Log(us)/histLog), histBins-1)
-}
-
-func (h *hist) add(d time.Duration) { h.n[histIndex(d)].Add(1) }
+func (h *latHist) add(d time.Duration) { h.n[hist.Index(d)].Add(1) }
 
 // quantile returns the upper edge of the bin holding the q-th quantile, so it is accurate to 1%.
-func (h *hist) quantile(q float64) time.Duration {
+func (h *latHist) quantile(q float64) time.Duration {
 	var total uint64
 	for i := range h.n {
 		total += h.n[i].Load()
@@ -235,8 +227,8 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		maxOffset     atomic.Uint64
 		floor         atomic.Uint64 // the offset below which retention may have dropped records
 		stop          atomic.Pointer[stopInfo]
-		cur           atomic.Pointer[hist]
-		total         = new(hist)
+		cur           atomic.Pointer[latHist]
+		total         = new(latHist)
 		reopens       int
 		finalReopenMS = "none"
 		sampMu        sync.Mutex
@@ -244,7 +236,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		ring          [1000]pair
 		ringN         int
 	)
-	cur.Store(new(hist))
+	cur.Store(new(latHist))
 	setStop := func(kind, text string) { stop.CompareAndSwap(nil, &stopInfo{kind, text, time.Now()}) }
 	stride := max(o.Target/2000, 1)
 
@@ -434,7 +426,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 				continue
 			}
 			if !now.Before(bucketEnd) {
-				h := cur.Swap(new(hist))
+				h := cur.Swap(new(latHist))
 				time.Sleep(time.Millisecond) // writers that loaded the old histogram finish adding
 				a := acked.Load()
 				used, free := diskText()

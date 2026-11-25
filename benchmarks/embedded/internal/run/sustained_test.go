@@ -300,7 +300,7 @@ func TestSustainedRefusesAnInvalidWorkloadAndALowStart(t *testing.T) {
 }
 
 func TestSustainedHistogramQuantilesAreWithinOnePercent(t *testing.T) {
-	h := new(hist)
+	h := new(latHist)
 	for i := 0; i < 990; i++ {
 		h.add(time.Millisecond)
 	}
@@ -315,10 +315,10 @@ func TestSustainedHistogramQuantilesAreWithinOnePercent(t *testing.T) {
 	if !within(p50, time.Millisecond) || !within(p99, time.Millisecond) || !within(p100, 100*time.Millisecond) {
 		t.Fatalf("p50 %v p99 %v max %v", p50, p99, p100)
 	}
-	if new(hist).quantile(0.99) != 0 {
+	if new(latHist).quantile(0.99) != 0 {
 		t.Fatal("an empty histogram has no quantile")
 	}
-	var huge hist
+	var huge latHist
 	huge.add(1000 * time.Hour) // clamps to the last bin instead of indexing out of range
 	if huge.quantile(1) <= 0 {
 		t.Fatal("a huge latency vanished")

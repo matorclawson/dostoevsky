@@ -153,6 +153,14 @@ type stopInfo struct {
 	at         time.Time
 }
 
+// memEvent is the first memory-guard trip, captured as ONE event: the stop it implies, the reading that tripped it
+// ("unmeasured" when the memory read itself failed) and the guard's error.
+type memEvent struct {
+	stop    stopInfo
+	reading string
+	err     error
+}
+
 type pair struct {
 	i   int64
 	off uint64
@@ -228,19 +236,20 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		}
 		return strconv.FormatUint(kib, 10)
 	}
-	// checkMem returns the reading it judged, so a trip is reported with the value that tripped it (one reading, not two).
-	checkMem := func() (uint64, error) {
+	// checkMem returns the reading it judged and whether there is one, so a trip is reported with the value that tripped
+	// it (one reading, not two; zero is a reading, a failed read is not).
+	checkMem := func() (uint64, bool, error) {
 		kib, err := memFn()
 		if errors.Is(err, errNoMeminfo) {
-			return 0, nil
+			return 0, false, nil
 		}
 		if err != nil {
-			return 0, fmt.Errorf("cannot read available memory: %w", err)
+			return 0, false, fmt.Errorf("cannot read available memory: %w", err)
 		}
 		if kib < minFree {
-			return kib, fmt.Errorf("low-memory abort: %d KiB available, below %d KiB", kib, minFree)
+			return kib, true, fmt.Errorf("low-memory abort: %d KiB available, below %d KiB", kib, minFree)
 		}
-		return kib, nil
+		return kib, true, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	setContext(ctx)
@@ -325,18 +334,28 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		setStop(StopFailed, text)
 	}
 	stride := max(o.Target/2000, 1)
-	// guarded is the host memory guard that also records the available memory at the cut-off, for the final line.
-	// The FIRST trip is latched (memTrip and cutoffKiB): memory that recovers before the run returns cannot erase it.
-	var cutoffKiB atomic.Uint64
-	var memTrip atomic.Pointer[stopInfo]
+	// guarded is the host memory guard. The FIRST trip is latched (memTrip): memory that recovers before the run returns
+	// cannot erase it.
+	var memTrip atomic.Pointer[memEvent]
 	guarded := func() error {
-		k, e := checkMem()
+		k, measured, e := checkMem()
 		if e != nil {
-			cutoffKiB.CompareAndSwap(0, max(k, 1)) // the reading that tripped it
-			memTrip.CompareAndSwap(nil, &stopInfo{StopMemory, fmt.Sprintf("stopped by the host memory guard at %d acknowledged (%v)", acked.Load(), e), time.Now()})
+			reading := "unmeasured"
+			if measured {
+				reading = strconv.FormatUint(k, 10)
+			}
+			memTrip.CompareAndSwap(nil, &memEvent{stopInfo{StopMemory, fmt.Sprintf("stopped by the host memory guard at %d acknowledged (%v)", acked.Load(), e), time.Now()}, reading, e})
 		}
 		return e
 	}
+	// guardCancel cancels the run's context on behalf of the guard, and byGuard says an error is that cancellation coming
+	// back. Only those errors are the guard's: any other engine or verification failure stays what it is.
+	var guardCancelled atomic.Bool
+	guardCancel := func() {
+		guardCancelled.Store(true)
+		cancel()
+	}
+	byGuard := func(e error) bool { return guardCancelled.Load() && errors.Is(e, context.Canceled) }
 
 	start := time.Now()
 	deadline := start.Add(o.Window) // monotonic: producers check it themselves, so slow telemetry cannot extend the window
@@ -369,6 +388,10 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 				off, e := s.Publish(data)
 				d := time.Since(begin)
 				gate.RUnlock()
+				if e != nil && byGuard(e) {
+					setStop(StopMemory, memTrip.Load().stop.text)
+					return
+				}
 				if e != nil {
 					// Never retried: an ambiguous publish is the engine's failure.
 					setFailure(fmt.Sprintf("engine failed at %d acknowledged: publish %d: %v", acked.Load(), i, e))
@@ -476,6 +499,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 				}
 			}
 			got, e := s.Read(p.off)
+			if e != nil && byGuard(e) {
+				return 0, memoryCut{memTrip.Load().err}
+			}
 			binary.BigEndian.PutUint64(want, uint64(p.i))
 			if e != nil || !bytes.Equal(got, want) {
 				return 0, fmt.Errorf("record %d at offset %d read back wrong: %v", p.i, p.off, e)
@@ -495,6 +521,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		if over.Load() && !final { // the run ended while a background reopen waited for the lock: it must not touch the store now
 			return nil
 		}
+		if t := memTrip.Load(); t != nil { // a latched trip: no reopen is started, even if memory has recovered
+			return &t.stop
+		}
 		if me := guarded(); me != nil {
 			return fail(StopMemory, "stopped by the host memory guard before the reopen at %d acknowledged (%v)", acked.Load(), me)
 		}
@@ -504,6 +533,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		begin := time.Now()
 		ns, e := open(dir, false)
 		ms := float64(time.Since(begin)) / 1e6
+		if e != nil && byGuard(e) {
+			return &memTrip.Load().stop
+		}
 		if e != nil {
 			return fail(StopFailed, "engine failed at %d acknowledged: reopen: %v", acked.Load(), e)
 		}
@@ -548,6 +580,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		keep := top - uint64(o.KeepLast)
 		begin := time.Now()
 		if e := r.Retain(keep); e != nil {
+			if byGuard(e) {
+				return // the latched trip is the result
+			}
 			setFailure(fmt.Sprintf("engine failed at %d acknowledged: retention: %v", acked.Load(), e))
 			return
 		}
@@ -585,7 +620,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		case now := <-tick.C:
 			if e := guarded(); e != nil {
 				setStop(StopMemory, fmt.Sprintf("stopped by the host memory guard at %d acknowledged (%v); the engine had not finished", acked.Load(), e))
-				cancel() // a store waiting on a server stops waiting
+				guardCancel() // a store waiting on a server stops waiting
 			} else if kib, e := freeFn(dir); e == nil && o.MinFreeDiskKiB > 0 && kib < o.MinFreeDiskKiB {
 				setStop(StopDisk, fmt.Sprintf("disk nearly full at %d acknowledged: %d KiB free, below the %d KiB floor", acked.Load(), kib, o.MinFreeDiskKiB))
 			}
@@ -646,7 +681,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 				return
 			case <-t.C:
 				if e := guarded(); e != nil {
-					cancel() // a store waiting on a server stops waiting
+					guardCancel() // a store waiting on a server stops waiting
 					return
 				}
 			}
@@ -715,13 +750,19 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	<-guardDone
 	// Checked once more before a normal completion is reported: memory that fell during the final close is still a cut-off.
 	guarded()
-	if t := memTrip.Load(); t != nil && (st.kind == StopReached || st.kind == StopWindow) {
-		st = t // a trip at ANY point of the run counts, even if memory has recovered since
+	trip := memTrip.Load()
+	if trip != nil && (st.kind == StopReached || st.kind == StopWindow) {
+		st = &trip.stop // a trip at ANY point of the run counts, even if memory has recovered since
 	}
-	// mem_cutoff_KiB is the configured threshold; the reading that tripped it is a separate key.
-	cut, atTrip := "none", "none"
-	if k := cutoffKiB.Load(); k > 0 && st.kind == StopMemory {
-		cut, atTrip = strconv.FormatUint(minFree, 10), strconv.FormatUint(k, 10)
+	// mem_cutoff_KiB is on every receipt, as in the ordinary trial: the configured threshold, or "unavailable" where
+	// available memory cannot be measured (the guard then did not apply). mem_avail_at_trip_KiB is the reading that
+	// tripped the guard ("unmeasured" if the read failed), whatever the stop reason, or "none".
+	cut, atTrip := strconv.FormatUint(minFree, 10), "none"
+	if _, e := memFn(); errors.Is(e, errNoMeminfo) {
+		cut = "unavailable"
+	}
+	if trip != nil {
+		atTrip = trip.reading
 	}
 	// The data directory is removed BEFORE the receipt: a receipt for a normal run means the run is clean, files and all.
 	if !keepDir {

@@ -2,8 +2,10 @@ package run
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -722,5 +724,147 @@ func TestSustainedTheDataDirectoryIsGoneWhenTheReceiptIsWritten(t *testing.T) {
 	}
 	if !probe.final || probe.left != 0 {
 		t.Fatalf("final=%v, %d entries were still in the temp directory when the receipt was written", probe.final, probe.left)
+	}
+}
+
+// lowWhen reports 100 KiB once the flag is set, and plenty before.
+func lowWhen(flag *atomic.Bool) func() (uint64, error) {
+	return func() (uint64, error) {
+		if flag.Load() {
+			return 100, nil
+		}
+		return 1 << 30, nil
+	}
+}
+
+// cancelledRead blocks the verification read until the harness context is cancelled, then answers with answer.
+type cancelledRead struct {
+	*fake
+	waiting *atomic.Bool
+	answer  func(context.Context) ([]byte, error)
+}
+
+func (s cancelledRead) Read(uint64) ([]byte, error) {
+	s.waiting.Store(true)
+	ctx := s.boundContext()
+	select {
+	case <-ctx.Done():
+		return s.answer(ctx)
+	case <-time.After(5 * time.Second):
+		return nil, errors.New("the guard never cancelled")
+	}
+}
+
+// 315400 M1: a final read cancelled by the guard is a memory stop with its reading, not a verification failure.
+func TestSustainedAReadCancelledByTheGuardIsAMemoryStop(t *testing.T) {
+	var waiting atomic.Bool
+	s := cancelledRead{newFake(), &waiting, func(ctx context.Context) ([]byte, error) { return nil, fmt.Errorf("read: %w", ctx.Err()) }}
+	_, r := sustainedRunMem(t, func() Store { return s }, Sustained{Window: 30 * time.Second, Target: 10, Workers: 1, Bucket: time.Hour}, lowWhen(&waiting))
+	if r["stop"] != StopMemory || r["mem_avail_at_trip_KiB"] != "100" || r["mem_cutoff_KiB"] != strconv.FormatUint(minFreeKiB, 10) {
+		t.Fatalf("%v", r)
+	}
+}
+
+// 315400 M1: wrong bytes are still a verification failure when the guard has tripped, and the trip is still reported.
+func TestSustainedAGuardTripDoesNotHideWrongBytes(t *testing.T) {
+	var waiting atomic.Bool
+	s := cancelledRead{newFake(), &waiting, func(context.Context) ([]byte, error) { return []byte("wrong"), nil }}
+	_, r := sustainedRunMem(t, func() Store { return s }, Sustained{Window: 30 * time.Second, Target: 10, Workers: 1, Bucket: time.Hour}, lowWhen(&waiting))
+	if r["stop"] != StopVerify || r["mem_avail_at_trip_KiB"] != "100" {
+		t.Fatalf("%v", r)
+	}
+}
+
+// cancelledRetain: the tenth publish waits for the retention to start, and the retention lasts until it is cancelled.
+type cancelledRetain struct {
+	*fake
+	began chan struct{}
+	armed *atomic.Bool
+	count *atomic.Int64
+}
+
+func (s cancelledRetain) Publish(b []byte) (uint64, error) {
+	if s.count.Add(1) != 10 {
+		return s.fake.Publish(b)
+	}
+	<-s.began
+	o, err := s.fake.Publish(b)
+	s.armed.Store(true)
+	return o, err
+}
+
+func (s cancelledRetain) Retain(uint64) error {
+	close(s.began)
+	ctx := s.boundContext()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("retain: %w", ctx.Err())
+	case <-time.After(5 * time.Second):
+		return errors.New("the guard never cancelled")
+	}
+}
+
+// 315400: a retention cancelled by the guard is not an engine failure, and a latched trip starts no final reopen even
+// after memory has recovered.
+func TestSustainedARetentionCancelledByTheGuardIsAMemoryStopWithNoReopen(t *testing.T) {
+	var armed, tripped atomic.Bool
+	s := cancelledRetain{newFake(), make(chan struct{}), &armed, new(atomic.Int64)}
+	lines, r := sustainedRunMem(t, func() Store { return s }, Sustained{Window: 30 * time.Second, Target: 10, Workers: 1, Bucket: time.Hour, KeepLast: 1, RetainEvery: time.Millisecond},
+		func() (uint64, error) {
+			if armed.Load() && tripped.CompareAndSwap(false, true) {
+				return 100, nil // low exactly once, then recovered
+			}
+			return 1 << 30, nil
+		})
+	if r["stop"] != StopMemory || r["mem_avail_at_trip_KiB"] != "100" || r["final_reopen_ms"] != "none" || countPrefix(lines, "reopen ") != 0 {
+		t.Fatalf("%v", r)
+	}
+}
+
+// 315400: zero is a reading and prints as 0; a failed memory read has no reading.
+func TestSustainedTheTripReadingIsNeverInvented(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		kib  uint64
+		err  error
+		want string
+	}{{"zero", 0, nil, "0"}, {"read-error", 0, errors.New("broken meminfo"), "unmeasured"}} {
+		t.Run(c.name, func(t *testing.T) {
+			var low atomic.Bool
+			f := newFake()
+			f.onClose = func(n int32) {
+				if n == 2 { // the final close
+					low.Store(true)
+				}
+			}
+			_, r := sustainedRunMem(t, func() Store { return f }, Sustained{Window: 30 * time.Second, Target: 100, Workers: 1, Bucket: time.Hour},
+				func() (uint64, error) {
+					if low.Load() {
+						return c.kib, c.err
+					}
+					return 1 << 30, nil
+				})
+			if r["stop"] != StopMemory || r["mem_avail_at_trip_KiB"] != c.want {
+				t.Fatalf("%v", r)
+			}
+		})
+	}
+}
+
+// 315400: every receipt carries the threshold, or says the guard did not apply.
+func TestSustainedEveryReceiptCarriesTheMemoryCutoff(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		want string
+	}{{"measured", nil, strconv.FormatUint(minFreeKiB, 10)}, {"no-meminfo", errNoMeminfo, "unavailable"}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFake()
+			_, r := sustainedRunMem(t, func() Store { return f }, Sustained{Window: 30 * time.Second, Target: 20, Workers: 1, Bucket: time.Hour},
+				func() (uint64, error) { return 1 << 30, c.err })
+			if r["stop"] != StopReached || r["mem_cutoff_KiB"] != c.want || r["mem_avail_at_trip_KiB"] != "none" {
+				t.Fatalf("%v", r)
+			}
+		})
 	}
 }

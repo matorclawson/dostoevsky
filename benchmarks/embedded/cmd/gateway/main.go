@@ -116,9 +116,6 @@ func (s store) Close() {
 	}
 }
 
-// pinnedProcs is the explicit GOMAXPROCS of the equal-budget variant (BENCH_GATEWAY_GOMAXPROCS=1), or "" for the HEADLINE
-// control: the gateway exactly as the language cells get it (the serve driver starts it with no GOMAXPROCS), the default,
-// label "gateway". A pinned run is a separate, labelled row ("gateway-pinned1"), only when asked for.
 // checkProcs accepts "", "unpinned" or a positive whole number: anything else would be a label that does not say what ran.
 func checkProcs(v string) error {
 	if v == "" || v == "unpinned" {
@@ -130,6 +127,9 @@ func checkProcs(v string) error {
 	return nil
 }
 
+// pinnedProcs is the explicit GOMAXPROCS of the equal-budget variant (BENCH_GATEWAY_GOMAXPROCS=1), or "" for the HEADLINE
+// control: the gateway exactly as the language cells get it (the serve driver starts it with no GOMAXPROCS), the default,
+// label "gateway". A pinned run is a separate, labelled row ("gateway-pinned1"), only when asked for.
 func pinnedProcs() string {
 	v := os.Getenv("BENCH_GATEWAY_GOMAXPROCS")
 	if v == "unpinned" {

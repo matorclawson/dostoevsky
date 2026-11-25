@@ -43,24 +43,7 @@ public final class Adapters {
     }
 
     static String buildId() {
-        try {
-            Path dir = Path.of(System.getProperty("bench.repo", "."), "clients/java");
-            String sha = git(dir, "rev-parse", "--short=12", "HEAD");
-            String dirty = git(dir, "status", "--porcelain", "--", dir.toString());
-            return sha + (dirty.isEmpty() ? "" : "-dirty");
-        } catch (Exception e) {
-            return "unknown";
-        }
-    }
-
-    private static String git(Path dir, String... args) throws Exception {
-        String[] cmd = new String[args.length + 3];
-        cmd[0] = "git"; cmd[1] = "-C"; cmd[2] = dir.toString();
-        System.arraycopy(args, 0, cmd, 3, args.length);
-        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-        if (!p.waitFor(10, TimeUnit.SECONDS) || p.exitValue() != 0) throw new IllegalStateException("git failed");
-        return out;
+        return Build.id(Path.of(System.getProperty("bench.repo", "."), "clients/java"));
     }
 
     /** An engine's timeout means no answer in time: the message may have been stored. Say so. */

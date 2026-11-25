@@ -219,6 +219,37 @@ public final class CoreTest {
         check(threw, "a sequence that does not fit is refused");
     }
 
+    static void git(Path dir, String... args) throws Exception {
+        List<String> cmd = new ArrayList<>(List.of("git", "-C", dir.toString(), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"));
+        cmd.addAll(List.of(args));
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        p.getInputStream().readAllBytes();
+        check(p.waitFor() == 0, "git " + String.join(" ", args));
+    }
+
+    static void build() throws Exception {
+        Path repo = Files.createTempDirectory("buildid");
+        git(repo, "init", "-q");
+        Files.createDirectories(repo.resolve("clients/java"));
+        Files.writeString(repo.resolve("clients/java/Client.java"), "class Client {}\n");
+        git(repo, "add", ".");
+        git(repo, "commit", "-q", "-m", "one");
+        Path dir = repo.resolve("clients/java"); // a RELATIVE-looking subdirectory: the old code resolved its pathspec twice
+        String clean = Build.id(dir);
+        check(clean.matches("[0-9a-f]{12}"), "a clean tree reports a bare commit, not -dirty: " + clean);
+        Files.writeString(dir.resolve("Client.java"), "class Client { int x; }\n");
+        check(Build.id(dir).equals(clean + "-dirty"), "a modified file is -dirty: " + Build.id(dir));
+        git(repo, "commit", "-q", "-am", "two");
+        check(Build.id(dir).matches("[0-9a-f]{12}") && !Build.id(dir).equals(clean), "committed again: a new clean id");
+        Path none = Files.createTempDirectory("notarepo");
+        PrintStream saved = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        String unknown;
+        try { unknown = Build.id(none); } finally { System.setErr(saved); }
+        check(unknown.equals("unknown") && captured.size() == 0, "outside a repository: unknown, and git's complaint is not echoed");
+    }
+
     public static void main(String[] args) throws Exception {
         String root = args.length > 0 ? args[0] : "../..";
         histogram(root + "/hist_vector.json");
@@ -228,6 +259,7 @@ public final class CoreTest {
         receipts(root + "/receipt_examples_java.txt");
         worker();
         ids();
+        build();
         System.out.println("ok " + checks + " checks");
     }
 }

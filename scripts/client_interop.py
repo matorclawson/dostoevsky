@@ -46,10 +46,11 @@ def check(client, languages):
 
 def refuses_plaintext_off_loopback(token):
     """The gateway must not serve the whole-store token in plaintext beyond loopback."""
-    done = subprocess.run(
-        [os.environ.get("DOSTOEVSKY_TEST_GATEWAY", ".dev/bin/dostoevsky-gateway"), "-listen", "0.0.0.0:0", "-data", tempfile.mkdtemp()],
-        env=dict(os.environ, DOSTOEVSKY_TOKEN=token), capture_output=True, text=True, timeout=20,
-    )
+    with tempfile.TemporaryDirectory() as directory:  # removed when the check ends
+        done = subprocess.run(
+            [os.environ.get("DOSTOEVSKY_TEST_GATEWAY", ".dev/bin/dostoevsky-gateway"), "-listen", "0.0.0.0:0", "-data", directory],
+            env=dict(os.environ, DOSTOEVSKY_TOKEN=token), capture_output=True, text=True, timeout=20,
+        )
     assert done.returncode != 0 and "plaintext" in done.stderr, done
 
 

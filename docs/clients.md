@@ -11,13 +11,13 @@ export DOSTOEVSKY_TOKEN=$(go run ./cmd/dostoevsky-gateway -gen-token)   # 32 ran
 make dev-gateway
 ```
 
-Then, in a second terminal with the same `DOSTOEVSKY_TOKEN` exported, pick your language. Each command publishes a job, reads it back, and saves a checkpoint.
+Then, in a second terminal with the same `DOSTOEVSKY_TOKEN` exported, pick your language. The token is read from the environment, never typed on a command line (arguments are visible to every user of the machine). Each command publishes a job, reads it back, and saves a checkpoint.
 
 **Python** (3.10+)
 ```sh
 make dev-client-python                      # runs examples/clients/python/worker.py
 python3 -m pip install ./clients/python     # use it in your project
-python3 -c "from dostoevsky_client import Client; print(Client('http://127.0.0.1:8787', '$DOSTOEVSKY_TOKEN').publish('jobs', b'hi'))"
+python3 -c "import os; from dostoevsky_client import Client; print(Client('http://127.0.0.1:8787', os.environ['DOSTOEVSKY_TOKEN']).publish('jobs', b'hi'))"
 ```
 ```python
 c = Client(url, token); ack = c.publish("jobs", b"hi", id="once"); rec = c.read("jobs", ack.partition, ack.offset, wait_ms=1000)

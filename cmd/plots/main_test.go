@@ -386,3 +386,63 @@ func TestAReceiptThatMixesPercentileKindsIsRefused(t *testing.T) {
 		t.Fatal("a line without the marker must count as exact")
 	}
 }
+
+// benchmarks/clients/receipt_examples.txt holds the lines the Python and JavaScript workers write
+// (their tests rebuild them byte for byte). Here the parser that draws the charts reads every one:
+// no stray token, the percentile marker present, the numbers parse.
+func TestEveryLanguageWorkerLineParses(t *testing.T) {
+	raw, err := os.ReadFile("../../benchmarks/clients/receipt_examples.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) < 6 {
+		t.Fatalf("%d example lines, want one ok and one failed line for each of three engines", len(lines))
+	}
+	for _, l := range lines {
+		for _, tok := range strings.Fields(l) {
+			if !strings.Contains(tok, "=") {
+				t.Errorf("stray token %q in %.80s", tok, l)
+			}
+		}
+	}
+	path := filepath.Join(t.TempDir(), "r.log")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseTrials(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(lines) {
+		t.Fatalf("parsed %d trials from %d lines", len(got), len(lines))
+	}
+	failed := 0
+	for _, tr := range got {
+		if tr["quantiles"] != "bin-upper-1pct" {
+			t.Errorf("%s: quantiles=%q", tr["engine"], tr["quantiles"])
+		}
+		for _, k := range []string{"records/s", "p50_us", "p99_us", "p99_9_us", "p99_99_us", "client_rss_KiB"} {
+			if v, ok := tr.num(k); !ok || v < 0 {
+				t.Errorf("%s: %s=%q is not a non-negative number", tr["engine"], k, tr[k])
+			}
+		}
+		if tr["result"] != "ok" && tr["result"] != "FAILED" {
+			t.Errorf("%s: result=%q", tr["engine"], tr["result"])
+		}
+		if tr["result"] == "FAILED" {
+			failed++
+			if tr["stop"] != "failed" || tr["detail"] == "" {
+				t.Errorf("%s: a FAILED line must say stop=failed and carry a detail", tr["engine"])
+			}
+		}
+	}
+	if failed < 2 {
+		t.Fatalf("%d FAILED example lines, want at least two", failed)
+	}
+}

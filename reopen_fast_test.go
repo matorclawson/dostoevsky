@@ -152,7 +152,7 @@ func FuzzScanRecord(f *testing.F) {
 
 // ----- replay equivalence: the scanner path and the encoding/json path build the same node -----
 
-func copyJournal(t testing.TB, src string, cut int64) string {
+func copyJournalPrefix(t testing.TB, src string, cut int64) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(src, "journal.v1"))
 	if err != nil {
@@ -271,18 +271,18 @@ func sameReplay(t *testing.T, name string, a, b replayResult) {
 
 func TestFastReplayEqualsJSONReplay(t *testing.T) {
 	dir := buildMixedJournal(t)
-	slow := replayWith(t, copyJournal(t, dir, -1), mixedConfig(), false, 1<<20)
+	slow := replayWith(t, copyJournalPrefix(t, dir, -1), mixedConfig(), false, 1<<20)
 	if slow.err != nil || len(slow.streams) < 2 {
 		t.Fatalf("reference replay: %v, %d streams", slow.err, len(slow.streams))
 	}
 	for _, chunk := range []int{1 << 20, 4 << 20, 1, 7, 64, 4096, 100000} {
-		fast := replayWith(t, copyJournal(t, dir, -1), mixedConfig(), true, chunk)
+		fast := replayWith(t, copyJournalPrefix(t, dir, -1), mixedConfig(), true, chunk)
 		sameReplay(t, fmt.Sprintf("chunk %d", chunk), slow, fast)
 		// the chunked reader with the JSON path alone is also the same node
-		sameReplay(t, fmt.Sprintf("json chunk %d", chunk), slow, replayWith(t, copyJournal(t, dir, -1), mixedConfig(), false, chunk))
+		sameReplay(t, fmt.Sprintf("json chunk %d", chunk), slow, replayWith(t, copyJournalPrefix(t, dir, -1), mixedConfig(), false, chunk))
 	}
 	// Every record reads back through the fast-replayed node.
-	copyDir := copyJournal(t, dir, -1)
+	copyDir := copyJournalPrefix(t, dir, -1)
 	n, err := Open(copyDir, mixedConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -321,9 +321,9 @@ func TestTornTailAtEveryBytePosition(t *testing.T) {
 	}
 	last := starts[len(starts)-1]
 	for cut := last + 1; cut < int64(len(full)); cut++ {
-		slow := replayWith(t, copyJournal(t, dir, cut), config(), false, 1<<20)
-		fast := replayWith(t, copyJournal(t, dir, cut), config(), true, 1<<20)
-		tiny := replayWith(t, copyJournal(t, dir, cut), config(), true, 5)
+		slow := replayWith(t, copyJournalPrefix(t, dir, cut), config(), false, 1<<20)
+		fast := replayWith(t, copyJournalPrefix(t, dir, cut), config(), true, 1<<20)
+		tiny := replayWith(t, copyJournalPrefix(t, dir, cut), config(), true, 5)
 		sameReplay(t, fmt.Sprintf("cut %d", cut), slow, fast)
 		sameReplay(t, fmt.Sprintf("cut %d tiny chunk", cut), slow, tiny)
 		if fast.err != nil || fast.size != last || fast.end != last {

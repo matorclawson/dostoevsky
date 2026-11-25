@@ -154,8 +154,15 @@ export function joinWatcher(consumer, budgetMs, now = () => performance.now()) {
     });
     consumer.on(REBALANCING, (e) => debug.log("rebalancing", e.payload.groupId));
     consumer.on(FETCH_START, () => debug.log("fetch start"));
-    timer = setTimeout(() => { fired = true; reject(lateError()); }, budgetMs);
-  }).finally(() => clearTimeout(timer));
+    timer = setTimeout(() => { fired = true; const err = lateError(); reject(err); rejectExpiry(err); }, budgetMs);
+  });
+  // The timer stays armed until the CALLER says startup AND join have both settled (stop()): a join on time does not end the
+  // budget while run() is still pending. `expiry` rejects at the deadline whatever the join did.
+  let rejectExpiry;
+  joined.expiry = new Promise((_, reject) => { rejectExpiry = reject; });
+  joined.expiry.catch(() => {});
+  joined.catch(() => {});
+  joined.stop = () => clearTimeout(timer);
   // The fence: once the deadline has passed (or the watcher has failed), a startup step that completes late must do nothing more.
   joined.step = async (fn) => {
     if (expired()) throw lateError();
@@ -169,7 +176,9 @@ export function joinWatcher(consumer, budgetMs, now = () => performance.now()) {
 // Runs the startup steps and waits for the join together, so a join failure (a terminal crash or the budget) is handled
 // at once, even while connect/subscribe/run is still pending, and is never an unhandled rejection.
 export function startAndJoin(startup, joined) {
-  return Promise.all([startup(), joined]).then(() => undefined);
+  const both = Promise.all([startup(), joined]).then(() => undefined);
+  const run = joined.expiry ? Promise.race([both, joined.expiry]) : both;
+  return run.finally(() => joined.stop?.());
 }
 
 // @nats-io/transport-node + @nats-io/jetstream (the v3 client).

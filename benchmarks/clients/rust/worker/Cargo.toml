@@ -1,0 +1,22 @@
+[package]
+name = "dostoevsky-bench-worker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Rust worker for the language client benchmarks: Dostoevsky through the gateway against rdkafka, async-nats and redis"
+
+[[bin]]
+name = "worker"
+path = "src/main.rs"
+
+# Exact versions: the newest release at least 14 days old when chosen (25 Nov 2026). Features are the minimum the
+# workload needs (default-features = false); the lockfile is generated once, checked crate by crate, and committed
+# before anything is built. Dependencies exist here only, for benchmarking: the Dostoevsky client has none.
+[dependencies]
+dostoevsky-bench-core = { path = "../core" }
+dostoevsky-client = { path = "../../../../clients/rust" }
+rdkafka = { version = "=0.39.0", default-features = false }
+async-nats = { version = "=0.52.0", default-features = false, features = ["ring"] }
+redis = { version = "=1.8.1", default-features = false }
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "time"] }

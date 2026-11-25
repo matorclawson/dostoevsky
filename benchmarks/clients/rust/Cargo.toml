@@ -1,0 +1,6 @@
+# Its own workspace: nothing here is part of the Dostoevsky library, which has no dependencies. `core` is
+# standard-library only and is tested offline; `worker` carries the client libraries and is built only after
+# its lockfile has been checked (see README.md).
+[workspace]
+members = ["core", "worker"]
+resolver = "2"

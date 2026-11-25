@@ -1,12 +1,22 @@
 """Integration test: seed binary data, run each client, restart, verify and replay."""
 import os
 import secrets
+import select
 import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
 
 from dostoevsky_client import Client, ClientError
+
+
+def startup_line(proc, timeout=30.0):
+    """The gateway's first output line, or TimeoutError after `timeout` seconds. A gateway that never
+    prints (stuck before it listens) must fail the run, not hang it."""
+    ready, _, _ = select.select([proc.stdout], [], [], timeout)
+    if not ready:
+        raise TimeoutError("the gateway printed nothing within %g s" % timeout)
+    return proc.stdout.readline().strip()
 
 
 @contextmanager
@@ -17,7 +27,7 @@ def gateway(directory, token):
         stdout=subprocess.PIPE, text=True, env=env,
     ) as proc:
         try:
-            line = proc.stdout.readline().strip()
+            line = startup_line(proc)
             if not line.startswith("listening "):
                 raise RuntimeError("gateway failed to start: " + line)
             url = "http://" + line.split()[1]

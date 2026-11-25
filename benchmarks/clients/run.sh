@@ -23,12 +23,23 @@ rounds=${BENCH_ROUNDS:-5}
 serve=${SERVE_BIN:-.dev/clients/serve}
 failed=0
 umask 077
-# Every number that bounds a wait must be a whole number, or the script refuses to start: a value like "ten" would
-# otherwise turn a deadline into no deadline.
-for v in BENCH_WINDOW:"$window" WORKER_MAX:"${WORKER_MAX:-1}" STOP_WAIT:"${STOP_WAIT:-1}" READY_WAIT:"${READY_WAIT:-1}"; do
-  case "${v#*:}" in ""|*[!0-9]*) echo "${v%%:*} must be a whole number of seconds (READY_WAIT: tenths of a second), not '${v#*:}'" >&2; exit 2 ;; esac
-done
-case "${WORKER_MAX:-1}" in 0) echo "WORKER_MAX must be at least 1" >&2; exit 2 ;; esac
+# Every number that bounds a wait must be a CANONICAL whole number of at most seven digits (no sign, no leading zero,
+# no decimal point, no letters, nothing past the shell's integer range), or the script refuses to start: a value like
+# "ten" would otherwise turn a deadline into no deadline, "08" is read as an invalid octal number inside $(( )), and a
+# 25-digit number overflows the arithmetic the deadline test uses. Only BENCH_WINDOW may be 0 (no window).
+canonical_seconds() { # name value allow_zero
+  case "$2" in
+    0) [ "$3" = yes ] && return 0 ;;
+    [1-9]) return 0 ;;
+    [1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]|[1-9][0-9][0-9][0-9][0-9]|[1-9][0-9][0-9][0-9][0-9][0-9]|[1-9][0-9][0-9][0-9][0-9][0-9][0-9]) return 0 ;;
+  esac
+  echo "$1 must be a whole number from $([ "$3" = yes ] && echo 0 || echo 1) to 9999999 without a sign or leading zeros, not '$2'" >&2
+  exit 2
+}
+canonical_seconds BENCH_WINDOW "$window" yes
+[ -z "${WORKER_MAX+x}" ] || canonical_seconds WORKER_MAX "$WORKER_MAX" no
+[ -z "${STOP_WAIT+x}" ] || canonical_seconds STOP_WAIT "$STOP_WAIT" no
+[ -z "${READY_WAIT+x}" ] || canonical_seconds READY_WAIT "$READY_WAIT" no
 
 serve_engine() { # receipt engine -> the name serve knows it by
   case "$1" in dostoevsky) echo gateway ;; *) echo "$1" ;; esac

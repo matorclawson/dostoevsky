@@ -128,9 +128,9 @@ check "the wrappers saw the children run" "[ \$(wc -l < $t/children.log) -gt 20 
 check "the token is in no child's argv (sed, head, grep, ... all logged)" "! grep -q $SECRET $t/children.log"
 check "the diagnostic is still masked after moving the masking into the shell" "grep -q 'FAILED worker_exit_3:boom_with_the_token__token_' $t/out"
 
-for bad in WORKER_MAX=ten WORKER_MAX=0 STOP_WAIT=-5 READY_WAIT=1.5 BENCH_WINDOW=abc; do
+for bad in WORKER_MAX=ten WORKER_MAX=0 STOP_WAIT=-5 READY_WAIT=1.5 BENCH_WINDOW=abc WORKER_MAX=08 STOP_WAIT=007 READY_WAIT=99999999999999999999999999 BENCH_WINDOW=12345678 BENCH_WINDOW=+5 WORKER_MAX=; do
   run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 "$bad" CLIENT_ENGINES=dostoevsky
-  check "an invalid $bad is refused before anything starts (exit 2, no trial line)" "[ $code -eq 2 ] && [ \$(grep -c '^trial=' $t/out) -eq 0 ] && grep -q 'must be' $t/err"
+  check "an invalid '$bad' is refused before anything starts (exit 2, no trial line)" "[ $code -eq 2 ] && [ \$(grep -c '^trial=' $t/out) -eq 0 ] && grep -q 'must be' $t/err"
 done
 
 # The Python worker must be started with the client on its path (a rehearsal failed without it).

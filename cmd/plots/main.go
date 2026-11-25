@@ -24,6 +24,18 @@ func (t trial) num(key string) (float64, bool) {
 	return v, err == nil
 }
 
+// numAny reads the first of several alternative keys, written "a|b", that holds a
+// number: the memory chart uses total_rss_KiB when a line has it (a server engine) and
+// peakRSS_KiB otherwise.
+func (t trial) numAny(keys string) (float64, bool) {
+	for _, k := range strings.Split(keys, "|") {
+		if v, ok := t.num(k); ok {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
 // parseTrials reads the key=value lines of one receipt. With a section name it
 // keeps only the lines under that "# section" header (up to the next header) that
 // start with trial=; with an empty name it keeps every line that has key=value pairs.
@@ -55,6 +67,12 @@ func parseTrials(path, section string) ([]trial, error) {
 		}
 		t := trial{}
 		for _, field := range strings.Fields(line) {
+			if field == "FAILED" {
+				// A failed trial counts and is never dropped, but nothing after the marker is
+				// read: the rest is a diagnostic, and may look like key=value pairs.
+				t["failed"] = "1"
+				break
+			}
 			if k, v, ok := strings.Cut(field, "="); ok {
 				t[k] = v
 			}
@@ -104,8 +122,8 @@ func collect(trials []trial, key string, scale float64) []series {
 	byEngine := map[string]*series{}
 	for _, t := range trials {
 		w, err := strconv.Atoi(t["workers"])
-		v, ok := t.num(key)
-		if t["engine"] == "" || err != nil || !ok {
+		v, ok := t.numAny(key)
+		if t["failed"] == "1" || t["engine"] == "" || err != nil || !ok {
 			continue
 		}
 		s := byEngine[t["engine"]]
@@ -119,18 +137,50 @@ func collect(trials []trial, key string, scale float64) []series {
 	for _, s := range byEngine {
 		out = append(out, *s)
 	}
-	// Dostoevsky first so it always takes the first palette slot.
+	// A fixed order, Dostoevsky first, so an engine keeps its palette slot across charts.
 	sort.Slice(out, func(i, j int) bool {
-		if (out[i].engine == "dostoevsky") != (out[j].engine == "dostoevsky") {
-			return out[i].engine == "dostoevsky"
+		a, b := engineRank(out[i].engine), engineRank(out[j].engine)
+		if a != b {
+			return a < b
 		}
 		return out[i].engine < out[j].engine
 	})
 	return out
 }
 
+// engineOrder fixes the series order and with it each engine's color.
+var engineOrder = []string{"dostoevsky", "jetstream", "sqlite", "redis", "valkey", "kafka", "rabbitmq"}
+
+func engineRank(e string) int {
+	for i, x := range engineOrder {
+		if x == e {
+			return i
+		}
+	}
+	return len(engineOrder)
+}
+
+// engineLabels and engineArch come from the receipt's meta file (label.<engine> and
+// arch.<engine>) and say what a bar is and where it ran.
+var (
+	engineLabels = map[string]string{}
+	engineArch   = map[string]string{}
+)
+
+// failedTrials counts FAILED trial lines per engine and producer count; the charts
+// show them and never drop them. allowFailures lets a receipt with failures plot.
+var (
+	failedTrials   = map[string]map[int]int{}
+	allowFailures  bool
+	ignoredEngines []string
+	// notShown lists the engines that are in the receipt but deliberately left out of the
+	// charts with -ignore-engines; the footer and the description name them.
+	notShown []string
+)
+
 type chart struct {
 	file, title, unit, alt, note, explain string
+	multiTitle                            string // title when more than two engines are charted
 	lower                                 bool
 	key                                   string
 	scale                                 float64
@@ -141,7 +191,7 @@ var gateCharts = []chart{
 	{file: "throughput.svg", title: "Synchronous publish throughput", unit: "messages per second", key: "records/s", scale: 1, decimals: 0,
 		alt:  "Grouped bars of median messages per second at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot.",
 		note: "Higher is better."},
-	{file: "memory.svg", title: "Peak process memory", unit: "MiB peak RSS", key: "peakRSS_KiB", scale: 1.0 / 1024, decimals: 1, lower: true,
+	{file: "memory.svg", title: "Peak process memory", multiTitle: "Peak memory, client plus server processes", unit: "MiB peak RSS", key: "total_rss_KiB|peakRSS_KiB", scale: 1.0 / 1024, decimals: 1, lower: true,
 		alt:  "Grouped bars of median peak resident memory in MiB at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot.",
 		note: "Lower is better."},
 	{file: "p99-latency.svg", title: "p99 publish latency", unit: "milliseconds", key: "p99_us", scale: 1.0 / 1000, decimals: 2, lower: true,
@@ -164,6 +214,9 @@ func main() {
 	section := flag.String("section", "gate", `receipt section to chart; "*" charts every trial= line of a raw log`)
 	trialsPerPoint := flag.Int("trials", 5, "required trials per engine and producer count (0 disables the check)")
 	flag.BoolVar(&writeArchitecture, "architecture", true, "also write architecture.svg")
+	chartEngines := flag.String("engines", "dostoevsky,jetstream", "engines every chart must have, comma separated")
+	ignore := flag.String("ignore-engines", "", "engines present in the receipt that are deliberately left out of the charts, comma separated")
+	flag.BoolVar(&allowFailures, "allow-failures", false, "chart a receipt that has FAILED trials, showing them, instead of refusing it")
 	summary := flag.Bool("summary", false, "print validated medians of a comparison log (-receipt) instead of drawing charts")
 	producers := flag.String("expect-producers", "1,8,32", "producer counts every engine must have in -summary mode")
 	engineList := flag.String("expect-engines", "", "engines that must each appear in -summary mode, comma separated (required)")
@@ -184,6 +237,20 @@ func main() {
 		}
 		return
 	}
+	if engines, err := parseEngines(*chartEngines); err != nil {
+		fmt.Fprintln(os.Stderr, "plots:", err)
+		os.Exit(1)
+	} else {
+		expectedEngines = engines
+	}
+	if *ignore != "" {
+		ignored, err := parseEngines(*ignore)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plots:", err)
+			os.Exit(1)
+		}
+		ignoredEngines = ignored
+	}
 	if err := run(*receipt, *section, *metaPath, *sketchPath, *out, *trialsPerPoint); err != nil {
 		fmt.Fprintln(os.Stderr, "plots:", err)
 		os.Exit(1)
@@ -202,6 +269,40 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
+	if !allowFailures {
+		if n := countFailedLines(trials); n > 0 {
+			return fmt.Errorf("%s has %d FAILED trial lines; every failure must be shown, so plot it with -allow-failures or fix the run", receipt, n)
+		}
+	}
+	// The engines checked are the ones in the receipt, not whatever -engines says: every engine
+	// that appears must be expected or explicitly ignored, and every expected engine must appear.
+	if err := checkEngineSet(trials, expectedEngines, ignoredEngines); err != nil {
+		return fmt.Errorf("%s: %w", receipt, err)
+	}
+	if comparisonMode(expectedEngines) {
+		if err := requireComparisonMeta(expectedEngines, meta); err != nil {
+			return fmt.Errorf("%s: %w", metaPath, err)
+		}
+	}
+	notShown = leftOut(trials, expectedEngines, ignoredEngines)
+	engineLabels, engineArch = map[string]string{}, map[string]string{}
+	for k, v := range meta {
+		if e, ok := strings.CutPrefix(k, "label."); ok {
+			engineLabels[e] = v
+		}
+		if e, ok := strings.CutPrefix(k, "arch."); ok {
+			engineArch[e] = v
+		}
+	}
+	failedTrials = map[string]map[int]int{}
+	for _, t := range trials {
+		if w, err := strconv.Atoi(t["workers"]); err == nil && t["failed"] == "1" && inEngines(t["engine"], expectedEngines) {
+			if failedTrials[t["engine"]] == nil {
+				failedTrials[t["engine"]] = map[int]int{}
+			}
+			failedTrials[t["engine"]][w]++
+		}
+	}
 	if want > 0 {
 		if err := checkGroups(trials, want); err != nil {
 			return fmt.Errorf("%s: %w", receipt, err)
@@ -215,8 +316,11 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 		}
 	}
 	footer := footerLines(meta, receipt)
+	if len(notShown) > 0 {
+		footer = append(footer, notShownLine())
+	}
 	for _, c := range gateCharts {
-		data := collect(trials, c.key, c.scale)
+		data := onlyEngines(collect(trials, c.key, c.scale), expectedEngines)
 		if len(data) == 0 {
 			return fmt.Errorf("%s: no %q values in the gate section of %s", c.file, c.key, receipt)
 		}
@@ -240,11 +344,29 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 }
 
 func footerLines(meta map[string]string, receipt string) []string {
-	return []string{
-		fmt.Sprintf("%s; %s; Go %s; GOMAXPROCS=%s; CGO_ENABLED=%s", meta["machine"], meta["os"], meta["go"], meta["gomaxprocs"], meta["cgo"]),
-		fmt.Sprintf("Payload %s bytes; %s records per trial; %s; one topic, one replica; JetStream %s", meta["payload_bytes"], meta["records"], meta["sync"], meta["jetstream"]),
-		fmt.Sprintf("Receipt: %s. Command: %s", receipt, meta["command"]),
+	var lines []string
+	// A multi-engine receipt describes its own setup in footer.1, footer.2, ...
+	for i := 1; ; i++ {
+		l, ok := meta[fmt.Sprintf("footer.%d", i)]
+		if !ok {
+			break
+		}
+		lines = append(lines, l)
 	}
+	if len(lines) == 0 {
+		lines = []string{
+			fmt.Sprintf("%s; %s; Go %s; GOMAXPROCS=%s; CGO_ENABLED=%s", meta["machine"], meta["os"], meta["go"], meta["gomaxprocs"], meta["cgo"]),
+			fmt.Sprintf("Payload %s bytes; %s records per trial; %s; one topic, one replica; JetStream %s", meta["payload_bytes"], meta["records"], meta["sync"], meta["jetstream"]),
+		}
+	}
+	for i := 1; ; i++ { // note.1, note.2, ...: durability and provenance labels
+		l, ok := meta[fmt.Sprintf("note.%d", i)]
+		if !ok {
+			break
+		}
+		lines = append(lines, l)
+	}
+	return append(lines, fmt.Sprintf("Receipt: %s. Command: %s", receipt, meta["command"]))
 }
 
 const (
@@ -306,6 +428,9 @@ func commas(s string) string {
 }
 
 func label(engine string) string {
+	if l, ok := engineLabels[engine]; ok {
+		return l
+	}
 	switch engine {
 	case "dostoevsky":
 		return "Dostoevsky"
@@ -316,6 +441,11 @@ func label(engine string) string {
 }
 
 func renderBars(c chart, data []series, footer []string) string {
+	// Comparison rendering follows the declared engines, not how many have data: any engine
+	// beyond dostoevsky and jetstream, at any count, means comparison mode.
+	if len(data) > 2 || comparisonMode(expectedEngines) {
+		return renderMulti(c, data, footer)
+	}
 	producers := map[int]bool{}
 	maxV := 0.0
 	for _, s := range data {
@@ -326,6 +456,11 @@ func renderBars(c chart, data []series, footer []string) string {
 					maxV = v
 				}
 			}
+		}
+	}
+	for _, byWorkers := range failedTrials { // a count where every trial failed still has its place
+		for w := range byWorkers {
+			producers[w] = true
 		}
 	}
 	var ws []int
@@ -341,9 +476,11 @@ func renderBars(c chart, data []series, footer []string) string {
 	verdict := winners(data, c.lower)
 	var b strings.Builder
 	footer = wrap(footer, 112)
-	h := base + 74 + 15*len(footer) + 10
+	groupW := plotW / float64(len(ws))
+	shift := 12 * failureRows(data, ws, groupW) // zero without failures, so those charts do not change
+	h := base + 74 + shift + 15*len(footer) + 10
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
-	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict), style)
+	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict+notShownSentence()), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
 	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", c.note + " " + verdict}
 	if c.explain != "" && losing(data, c.lower) {
@@ -357,11 +494,13 @@ func renderBars(c chart, data []series, footer []string) string {
 		fmt.Fprintf(&b, `<line class="g" x1="%d" x2="%d" y1="%.1f" y2="%.1f"/><text class="m" x="%d" y="%.1f" font-size="11" text-anchor="end">%s</text>`+"\n",
 			left, width-right, y(v), y(v), left-8, y(v)+4, format(v, stepDecimals(step)))
 	}
-	groupW := plotW / float64(len(ws))
 	barW := groupW * 0.3
 	for gi, w := range ws {
 		gx := float64(left) + groupW*float64(gi)
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="13" text-anchor="middle">%d producer%s</text>`+"\n", gx+groupW/2, base+22, w, plural(w))
+		for i, line := range failureLines(data, w, groupW) {
+			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" class="f">%s</text>`+"\n", gx+6, base+34+i*12, html.EscapeString(line))
+		}
 		for si, s := range data {
 			vs := s.values[w]
 			if len(vs) == 0 {
@@ -382,10 +521,10 @@ func renderBars(c chart, data []series, footer []string) string {
 	}
 	for si, s := range data {
 		lx := left + si*190
-		fmt.Fprintf(&b, `<rect class="s%d" x="%d" y="%d" width="12" height="12"/><text x="%d" y="%d" font-size="12">%s</text>`+"\n", si, lx, base+40, lx+18, base+50, label(s.engine))
+		fmt.Fprintf(&b, `<rect class="s%d" x="%d" y="%d" width="12" height="12"/><text x="%d" y="%d" font-size="12">%s</text>`+"\n", si, lx, base+40+shift, lx+18, base+50+shift, label(s.engine))
 	}
 	for i, line := range footer {
-		fmt.Fprintf(&b, `<text class="m" x="%d" y="%d" font-size="10.5">%s</text>`+"\n", left, base+74+i*15, html.EscapeString(line))
+		fmt.Fprintf(&b, `<text class="m" x="%d" y="%d" font-size="10.5">%s</text>`+"\n", left, base+74+shift+i*15, html.EscapeString(line))
 	}
 	b.WriteString("</svg>\n")
 	return withBackground(b.String())
@@ -610,20 +749,55 @@ func checkMetric(trials []trial, key string, want int) error {
 		workers int
 	}
 	usable := map[group]int{}
+	failed := map[group]int{}
 	for _, t := range trials {
 		w, err := strconv.Atoi(t["workers"])
-		v, ok := t.num(key)
-		if err != nil || !ok || math.IsNaN(v) || math.IsInf(v, 0) {
+		if err != nil {
+			continue
+		}
+		if t["failed"] == "1" {
+			failed[group{t["engine"], w}]++
+			continue
+		}
+		v, ok := t.numAny(key)
+		if !ok || math.IsNaN(v) || math.IsInf(v, 0) {
 			continue
 		}
 		usable[group{t["engine"], w}]++
 	}
 	for _, e := range expectedEngines {
 		for _, w := range expectedProducers {
-			if n := usable[group{e, w}]; n != want {
-				return fmt.Errorf("%s at %d producers has %d usable %q values, want %d", e, w, n, key, want)
+			g := group{e, w}
+			n, f := usable[g], failed[g]
+			if n == want || (allowFailures && n+f == want) {
+				continue
 			}
+			if f > 0 {
+				return fmt.Errorf("%s at %d producers has %d usable %q values and %d failed trials, want %d usable", e, w, n, key, f, want)
+			}
+			return fmt.Errorf("%s at %d producers has %d usable %q values, want %d", e, w, n, key, want)
 		}
 	}
 	return nil
+}
+
+func inEngines(e string, list []string) bool {
+	for _, x := range list {
+		if x == e {
+			return true
+		}
+	}
+	return false
+}
+
+// onlyEngines keeps the series of the charted engines: engines left out with
+// -ignore-engines are not drawn.
+func onlyEngines(data []series, charted []string) []series {
+	var out []series
+	for _, s := range data {
+		if inEngines(s.engine, charted) {
+			out = append(out, s)
+		}
+	}
+	return out
 }

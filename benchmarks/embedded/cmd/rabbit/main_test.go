@@ -14,6 +14,7 @@ func TestNodeIsPrivateToTheTrial(t *testing.T) {
 	env := strings.Join(serverEnv("/data/trial-1", "bench42@localhost", 35672, 35673, 34369), "\n")
 	for _, want := range []string{
 		"RABBITMQ_NODENAME=bench42@localhost",
+		"RABBITMQ_USE_LONGNAME=false",
 		"RABBITMQ_NODE_IP_ADDRESS=127.0.0.1",
 		"RABBITMQ_NODE_PORT=35672",
 		"RABBITMQ_DIST_PORT=35673",
@@ -31,9 +32,29 @@ func TestNodeIsPrivateToTheTrial(t *testing.T) {
 	}
 }
 
-func TestMemoryIsBounded(t *testing.T) {
-	if !strings.Contains(config, "vm_memory_high_watermark.absolute = 1GiB") {
-		t.Fatal("the 1 GiB watermark is missing from the broker config")
+func TestBrokerConfigBoundsMemoryAndNamesTheCluster(t *testing.T) {
+	conf := brokerConfig("bench42@localhost")
+	for _, want := range []string{"vm_memory_high_watermark.absolute = 1GiB\n", "cluster_name = bench42@localhost\n"} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("broker config lacks %q:\n%s", want, conf)
+		}
+	}
+}
+
+func TestIdentityCheckIsStrict(t *testing.T) {
+	if err := checkIdentity(amqp.Table{"cluster_name": "bench42@localhost"}, "bench42@localhost"); err != nil {
+		t.Fatal(err)
+	}
+	for _, props := range []amqp.Table{
+		{"cluster_name": "bench42@zeo-internal-production-03"}, // the run 2 smoke finding
+		{"cluster_name": "bench43@localhost"},
+		{"cluster_name": 7},
+		{},
+		nil,
+	} {
+		if err := checkIdentity(props, "bench42@localhost"); err == nil {
+			t.Errorf("identity %v was accepted", props)
+		}
 	}
 }
 

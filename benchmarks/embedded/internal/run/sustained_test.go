@@ -68,6 +68,9 @@ func countPrefix(lines []string, p string) (n int) {
 func TestSustainedReachesTheTarget(t *testing.T) {
 	f := newFake()
 	lines, r := sustainedRun(t, func() Store { return f }, Sustained{Window: 30 * time.Second, Target: 600, Workers: 4, Bucket: time.Hour})
+	if r["quantiles"] != "bin-upper-1pct" {
+		t.Fatalf("the result line lacks the quantiles label: %v", r)
+	}
 	if r["stop"] != StopReached || r["acked"] != "600" || !strings.Contains(r["reason"], "reached 600") {
 		t.Fatalf("%v", r)
 	}
@@ -256,6 +259,9 @@ func TestSustainedBucketsReportRateAndP99(t *testing.T) {
 	first := fields(lines[0])
 	rate, _ := strconv.ParseFloat(first["msgs_per_s"], 64)
 	p99, _ := strconv.ParseFloat(first["p99_us"], 64)
+	if first["quantiles"] != "bin-upper-1pct" {
+		t.Fatalf("the bucket line lacks the quantiles label: %q", lines[0])
+	}
 	if dot := strings.IndexByte(first["p99_us"], '.'); dot < 0 || len(first["p99_us"])-dot-1 != 3 {
 		t.Fatalf("p99_us must carry three decimals: %q", first["p99_us"])
 	}

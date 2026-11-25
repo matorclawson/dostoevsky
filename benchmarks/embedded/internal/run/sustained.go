@@ -280,8 +280,8 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		cur           = new(latHist) // the bucket's histogram; histMu makes a rotation wait for writers of the old one
 		histMu        sync.RWMutex
 		total         = new(latHist)
-		reopens       int
-		finalReopenMS = "none"
+		reopens       atomic.Int64 // written by a reopen (under the gate), read by the final line without it: atomic snapshots
+		finalReopenMS atomic.Pointer[string]
 		sampMu        sync.Mutex
 		strided       []pair
 		ring          [1000]pair
@@ -489,9 +489,10 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		used, _ := diskText()
 		fmt.Fprintf(out, "reopen engine=%s at_acked=%d ms=%.2f verified=%d harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s\n", engine, acked.Load(), ms, n, maxRSSKiB(), serverPeak(), used)
 		if final {
-			finalReopenMS = fmt.Sprintf("%.2f", ms)
+			txt := fmt.Sprintf("%.2f", ms)
+			finalReopenMS.Store(&txt)
 		} else {
-			reopens++
+			reopens.Add(1)
 		}
 		return nil
 	}
@@ -582,7 +583,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 					gate.RLock() // the store is replaced only under the write lock
 					sp := serverPeak()
 					gate.RUnlock()
-					fmt.Fprintf(out, "bucket engine=%s n=%d t_s=%.0f acked=%d msgs_per_s=%.0f p99_us=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s\n",
+					fmt.Fprintf(out, "bucket engine=%s n=%d t_s=%.0f acked=%d msgs_per_s=%.0f p99_us=%s quantiles=bin-upper-1pct harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s\n",
 						engine, n, now.Sub(start).Seconds(), a, float64(a-prevAcked)/now.Sub(prevAt).Seconds(), us3(h.quantile(0.99)), maxRSSKiB(), sp, used, availMemText(), free)
 				}()
 			}
@@ -688,7 +689,11 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		cut = strconv.FormatUint(k, 10)
 	}
 	// The final line and the shut-off of the writer are ONE step: nothing can print after the receipt.
-	lw.finish(fmt.Sprintf("sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%s reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s mem_cutoff_KiB=%s reason=%q\n",
-		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens, finalReopenMS, harness, server, used, availMemText(), free, cut, st.text))
+	finalMS := "none"
+	if p := finalReopenMS.Load(); p != nil {
+		finalMS = *p
+	}
+	lw.finish(fmt.Sprintf("sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%s quantiles=bin-upper-1pct reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s mem_cutoff_KiB=%s reason=%q\n",
+		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens.Load(), finalMS, harness, server, used, availMemText(), free, cut, st.text))
 	return nil
 }

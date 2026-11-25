@@ -93,6 +93,59 @@ func clientOptions(sock string) *redis.Options {
 	return &redis.Options{Network: "unix", Addr: sock, PoolSize: 64, MaxRetries: -1}
 }
 
+// loadingFlag reads loading from INFO persistence.
+func loadingFlag(info string) (bool, error) {
+	for _, line := range strings.Split(info, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "loading:"); ok {
+			switch v {
+			case "0":
+				return false, nil
+			case "1":
+				return true, nil
+			}
+			return false, fmt.Errorf("INFO persistence: unexpected loading value %q", v)
+		}
+	}
+	return false, fmt.Errorf("INFO persistence: no loading field")
+}
+
+// isLoadingErr reports a LOADING reply, which means "not ready yet" during readiness.
+func isLoadingErr(err error) bool { return err != nil && strings.HasPrefix(err.Error(), "LOADING") }
+
+// waitLoaded polls INFO persistence until the dataset has finished loading. A
+// LOADING error counts as not ready; any other error, the trial context ending or
+// the bound passing is a failure.
+func waitLoaded(ctx context.Context, info func(context.Context, string) (string, error), every, bound time.Duration) error {
+	deadline := time.Now().Add(bound)
+	for {
+		c, cancel := context.WithTimeout(ctx, 5*time.Second)
+		text, err := info(c, "persistence")
+		cancel()
+		switch {
+		case err == nil:
+			loading, perr := loadingFlag(text)
+			if perr != nil {
+				return perr
+			}
+			if !loading {
+				return nil
+			}
+		case isLoadingErr(err):
+			// still loading
+		default:
+			return fmt.Errorf("INFO persistence: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the dataset was still loading after %v", bound)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("readiness stopped: %w", ctx.Err())
+		case <-time.After(every):
+		}
+	}
+}
+
 // serverPid reads process_id from INFO server.
 func serverPid(info string) (int, error) {
 	for _, line := range strings.Split(info, "\n") {
@@ -127,25 +180,40 @@ func main() {
 			return nil, err
 		}
 		client := redis.NewClient(clientOptions(sock))
-		ctx := context.Background()
-		if err = client.Ping(ctx).Err(); err != nil {
+		fail := func(err error) (run.Store, error) {
 			client.Close()
 			proc.Stop(5 * time.Second)
 			return nil, err
 		}
+		ctx := run.Context()
+		info := func(c context.Context, section string) (string, error) { return client.Info(c, section).Result() }
 		// The socket lives in this trial's private directory, but readiness is also
-		// tied to the launched child: the answering process must be our own.
-		info, err := client.Info(ctx, "server").Result()
+		// tied to the launched child: the answering process must be our own. INFO is
+		// answered while the dataset is still loading, so this comes first.
+		srv, err := info(ctx, "server")
 		if err == nil {
 			var pid int
-			if pid, err = serverPid(info); err == nil && pid != proc.Pid() {
+			if pid, err = serverPid(srv); err == nil && pid != proc.Pid() {
 				err = fmt.Errorf("process %d answered, not the launched server %d", pid, proc.Pid())
 			}
 		}
 		if err != nil {
-			client.Close()
-			proc.Stop(5 * time.Second)
-			return nil, err
+			return fail(err)
+		}
+		// After a restart the server replays its append-only file; until INFO reports
+		// loading:0 every data command is answered LOADING. Waiting here, under the trial
+		// context and a bound, is readiness. A LOADING reply anywhere else (publish,
+		// verification) is still a failure.
+		if err = waitLoaded(ctx, info, 50*time.Millisecond, 180*time.Second); err != nil {
+			return fail(err)
+		}
+		// The first successful data command ends the timed restart: reopen_ms is the
+		// restart until loading:0 plus this read ("restart-to-ready including AOF replay").
+		if err = client.Ping(ctx).Err(); err != nil {
+			return fail(err)
+		}
+		if err = client.XLen(ctx, stream).Err(); err != nil {
+			return fail(err)
 		}
 		return store{client, proc}, nil
 	})

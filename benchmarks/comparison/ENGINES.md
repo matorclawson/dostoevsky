@@ -44,6 +44,8 @@ Host: production-03, Ubuntu 26.04.1 (codename resolute) arm64, 2 Neoverse-N1 vCP
 
 ## Trial hygiene
 
+- Redis and Valkey replay their append-only file after a restart and answer every data command LOADING until `INFO persistence` reports `loading:0`. The harness waits for `loading:0` (under the trial context and a bound) and then does one successful read; their `reopen_ms` is therefore **restart-to-ready including AOF replay**. A LOADING reply anywhere else, during publishing or verification, is a failure.
+
 - Verification is sequential: Dostoevsky, SQLite and Redis read each acknowledged record back by its offset or ID after the restart; Kafka consumes the partition from the start; RabbitMQ fetches the queue one message at a time. The memory guard is checked between reads.
 - Kafka's topic (one partition, replication factor one) is created, and its leader confirmed, before the timed span; auto-creation is off. RabbitMQ's EPMD is started by the harness on the trial's private port, stopped with the trial and included in the memory total; messages are published `mandatory`, and a returned message is a failure.
 - `make result LOG=comparison.log` (the plotter's `-summary` mode) is the one validator for comparison logs: it refuses empty input, a stray token, a repeated or non-canonical number, a FAILED trial, a missing engine and producer group or the wrong trial count, and prints medians only. `-allow-incomplete` lists the problems first and still prints the medians of the valid trials.

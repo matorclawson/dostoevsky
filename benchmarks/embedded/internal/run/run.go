@@ -11,13 +11,14 @@ import (
 	"io"
 	"os"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/hist"
 )
 
 type Store interface {
@@ -345,8 +346,17 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		}
 	}
 	readElapsed := time.Since(readStart)
-	sort.Slice(delays, func(i, j int) bool { return delays[i] < delays[j] })
-	line := fmt.Sprintf("engine=%s workers=%d verified=%d records/s=%.0f p95_us=%d p99_us=%d liveHeap_KiB=%d peakRSS_KiB=%d reopen_ms=%.2f verified_reads_per_s=%.0f", engine, workers, count, float64(count)/elapsed.Seconds(), delays[(95*len(delays)-1)/100].Microseconds(), delays[(99*len(delays)-1)/100].Microseconds(), mem.HeapAlloc/1024, usage.Maxrss, float64(reopen)/1e6, float64(count)/readElapsed.Seconds())
+	// Percentiles come from the shared 1% histogram (internal/hist), the same bins and rule the Python
+	// and JavaScript workers use, so a p99 means the same thing in every language: the upper edge of
+	// the bin holding it, accurate to 1%, never below the true value.
+	var lat hist.H
+	for _, d := range delays {
+		lat.Add(d)
+	}
+	// Microseconds with three decimals (the histogram holds nanoseconds): a short sample is not rounded
+	// down to a whole microsecond, so "never below the true value, within 1%" holds for it too.
+	us := func(q float64) string { return fmt.Sprintf("%.3f", float64(lat.Quantile(q))/1e3) }
+	line := fmt.Sprintf("engine=%s workers=%d verified=%d records/s=%.0f p50_us=%s p95_us=%s p99_us=%s p99_9_us=%s p99_99_us=%s quantiles=bin-upper-1pct liveHeap_KiB=%d peakRSS_KiB=%d reopen_ms=%.2f verified_reads_per_s=%.0f", engine, workers, count, float64(count)/elapsed.Seconds(), us(0.50), us(0.95), us(0.99), us(0.999), us(0.9999), mem.HeapAlloc/1024, usage.Maxrss, float64(reopen)/1e6, float64(count)/readElapsed.Seconds())
 	if measured {
 		// peakRSS_KiB stays the harness process alone. total_rss_KiB adds the server
 		// tree: a sum of sampled per-process peaks that can occur at different times

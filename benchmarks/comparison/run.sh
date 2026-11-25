@@ -2,6 +2,8 @@
 # Compare engines on the publisher gate's workload, one trial at a time.
 # Run from the project root on the benchmark host with TMPDIR on the data disk.
 #   BENCH_ENGINES="dostoevsky jetstream sqlite redis valkey" \
+# (gateway: the control for the language client benchmarks. Chart label to use in the plots meta:
+#  label.gateway=gateway end to end (HTTP, process boundary); harness and gateway each run GOMAXPROCS=1)
 #   REDIS_BIN=/opt/bench/redis-8.12.0/src/redis-server \
 #   VALKEY_BIN=/opt/bench/valkey-9.2.0/bin/valkey-server \
 #   KAFKA_HOME=/opt/bench/kafka_2.13-4.4.0 JAVA_HOME=/opt/bench/jdk-21 \
@@ -17,6 +19,22 @@ rounds=${BENCH_ROUNDS:-5}
 # -mod=readonly: the build may not change go.mod or go.sum. It does write to the Go
 # module and build caches (GOMODCACHE, GOCACHE) and the binaries to .dev/embedded.
 (cd benchmarks/embedded && CGO_ENABLED=0 "${GO:-go}" build -mod=readonly -buildvcs=false -o ../../.dev/embedded/ ./cmd/...) || exit 2
+# The gateway control engine needs the gateway binary, built from the same checkout.
+case " $engines " in
+ *" gateway "*)
+  if [ -z "${GATEWAY_BIN:-}" ]; then
+   (CGO_ENABLED=0 "${GO:-go}" build -mod=readonly -buildvcs=false -o .dev/embedded/dostoevsky-gateway ./cmd/dostoevsky-gateway) || exit 2
+  fi
+  # The gateway binary's identity goes on record whether it was built here or overridden.
+  gw="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}"
+  if command -v sha256sum >/dev/null 2>&1; then gwsum=$(sha256sum "$gw" | cut -d' ' -f1); else gwsum=$(shasum -a 256 "$gw" | cut -d' ' -f1); fi
+  # A digest that could not be computed must stop the run, never print an empty one.
+  case "$gwsum" in
+   [0-9a-f]????????????????????????????????????????????????????????????????) ;;
+   *) echo "cannot compute the sha256 of $gw" >&2; exit 2 ;;
+  esac
+  printf 'gateway_bin=%s sha256=%s\n' "$gw" "$gwsum" | tee .dev/embedded/gateway.sha256 >&2 ;;
+esac
 export GOMAXPROCS="${GOMAXPROCS:-2}"
 failed=0
 
@@ -24,6 +42,7 @@ run_engine() { # engine workers
  case "$1" in
   dostoevsky) .dev/embedded/dost -workers "$2" -count "$count" ;;
   jetstream) .dev/embedded/jet -workers "$2" -count "$count" ;;
+  gateway) GOMAXPROCS=1 BENCH_GATEWAY_GOMAXPROCS=1 BENCH_SERVER_BIN="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}" .dev/embedded/gateway -workers "$2" -count "$count" ;;
   sqlite) .dev/embedded/sqlite -workers "$2" -count "$count" ;;
   redis) BENCH_ENGINE_LABEL=redis BENCH_SERVER_BIN="${REDIS_BIN:?set REDIS_BIN}" .dev/embedded/redis -workers "$2" -count "$count" ;;
   valkey) BENCH_ENGINE_LABEL=valkey BENCH_SERVER_BIN="${VALKEY_BIN:?set VALKEY_BIN}" .dev/embedded/redis -workers "$2" -count "$count" ;;

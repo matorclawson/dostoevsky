@@ -6,26 +6,40 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-func TestSamplesATreeAndStops(t *testing.T) {
-	if _, err := os.Stat("/proc/self/status"); err != nil {
-		t.Skip("needs /proc")
+// livePids lists the running members of the tree below root, measured the way this host
+// measures memory (procfs on Linux, ps elsewhere).
+func livePids(t *testing.T, root int) []int {
+	t.Helper()
+	m, err := snapshotTree(root, Source())
+	if err != nil {
+		t.Fatal(err)
 	}
+	var out []int
+	for pid := range m {
+		out = append(out, pid)
+	}
+	return out
+}
+
+func TestSamplesATreeAndStops(t *testing.T) {
 	// sh is the server; its child sleep is a descendant that must be counted.
 	p, err := Start("sh", []string{"-c", "sleep 30 & wait"}, nil, filepath.Join(t.TempDir(), "log"), 10*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for len(tree(p.cmd.Process.Pid)) < 2 && time.Now().Before(deadline) {
+	for len(livePids(t, p.cmd.Process.Pid)) < 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if n := len(tree(p.cmd.Process.Pid)); n < 2 {
+	if n := len(livePids(t, p.cmd.Process.Pid)); n < 2 {
 		t.Fatalf("process tree has %d processes, want the shell and its child", n)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -35,15 +49,12 @@ func TestSamplesATreeAndStops(t *testing.T) {
 	if err := p.Stop(5 * time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if pids := tree(p.cmd.Process.Pid); len(pids) > 1 {
+	if pids := livePids(t, p.cmd.Process.Pid); len(pids) > 1 {
 		t.Fatalf("children survived Stop: %v", pids)
 	}
 }
 
 func TestWaitReadyReportsAnExitedServer(t *testing.T) {
-	if _, ok := vmHWM(os.Getpid()); !ok {
-		t.Skip("needs procfs (Linux); run on the Linux gate host")
-	}
 	p, err := Start("sh", []string{"-c", "exit 3"}, nil, filepath.Join(t.TempDir(), "log"), 10*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -66,10 +77,11 @@ func TestPeakIsAnErrorWhenTheServerWasNeverMeasured(t *testing.T) {
 	}
 }
 
+// needProcfs is kept as a guard that FAILS, never skips, when the host cannot measure memory.
 func needProcfs(t *testing.T) {
 	t.Helper()
-	if _, ok := vmHWM(os.Getpid()); !ok {
-		t.Skip("needs procfs (Linux); run on the Linux gate host")
+	if err := checkMeasurable(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -211,12 +223,70 @@ func TestStopCleansUpGroupMembersThatOutliveTheLeader(t *testing.T) {
 		// A killed child can linger as a zombie until init reaps it; ESRCH or a zombie both mean it is dead.
 		if err := syscall.Kill(child, 0); err != nil {
 			gone = true
-		} else if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", child)); err != nil || strings.Contains(string(b), ") Z ") {
+		} else if out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(child)).Output(); err != nil || strings.HasPrefix(strings.TrimSpace(string(out)), "Z") {
+			// ps works on Linux and macOS alike: no such process, or a zombie, both mean dead.
 			gone = true
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	if !gone {
 		t.Fatal("a group member that outlived the leader survived Stop")
+	}
+}
+
+func TestPSOutputIsParsedAndTheTreeWalked(t *testing.T) {
+	out := "  1     0  100\n 10     1  2000\n 11    10  3000\n 12    11  40\n 99     1  7\n"
+	parent, rss, err := parsePS(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := descendants(parent, 10)
+	if len(got) != 3 {
+		t.Fatalf("tree of 10 = %v, want 10, 11, 12", got)
+	}
+	for _, pid := range got {
+		if pid == 99 || pid == 1 {
+			t.Fatalf("unrelated process %d in the tree", pid)
+		}
+	}
+	if rss[11] != 3000 {
+		t.Fatalf("rss of 11 = %d", rss[11])
+	}
+	for _, bad := range []string{"", "1 2\n", "1 2 x\n", "a b c\n"} {
+		if _, _, err := parsePS(bad); err == nil {
+			t.Errorf("ps output %q was accepted", bad)
+		}
+	}
+}
+
+func TestVmHWMIsParsedFromAStatusFile(t *testing.T) {
+	status := "Name:\tserver\nVmPeak:\t  9999 kB\nVmHWM:\t  12345 kB\nVmRSS:\t  100 kB\n"
+	if kib, ok := parseVmHWM(status); !ok || kib != 12345 {
+		t.Fatalf("VmHWM = %d, %v", kib, ok)
+	}
+	if _, ok := parseVmHWM("Name:\tx\n"); ok {
+		t.Fatal("a status without VmHWM was accepted")
+	}
+}
+
+// Both sources are exercised on every host: the real ps, and (where it exists) procfs.
+func TestEachSourceMeasuresThisProcess(t *testing.T) {
+	self := os.Getpid()
+	m, err := snapshotTree(self, SourcePSSampled)
+	if err != nil || m[self] == 0 {
+		t.Fatalf("ps-sampled reading of this process: %v, %v", m, err)
+	}
+	if runtime.GOOS == "linux" {
+		m, err := snapshotTree(self, SourceVmHWM)
+		if err != nil || m[self] == 0 {
+			t.Fatalf("VmHWM reading of this process: %v, %v", m, err)
+		}
+	}
+	want := SourcePSSampled
+	if runtime.GOOS == "linux" {
+		want = SourceVmHWM
+	}
+	if Source() != want {
+		t.Fatalf("Source() = %s on %s", Source(), runtime.GOOS)
 	}
 }

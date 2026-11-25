@@ -36,6 +36,47 @@ func (t trial) numAny(keys string) (float64, bool) {
 	return 0, false
 }
 
+// quantileKind says how a receipt line's percentiles were computed: "bin-upper-1pct" (the
+// shared 1% histogram, an upper bound at most 1% above the true value) or "exact" (the sample
+// itself, which every receipt written before the histogram is, and which carries no marker).
+func quantileKind(t trial) string {
+	if k := t["quantiles"]; k != "" {
+		return k
+	}
+	return "exact"
+}
+
+// carriesPercentiles says whether a row has percentiles at all. A FAILED row (the driver's marker, or a
+// worker's result=FAILED) and anything else without p50/p95/p99 has none, so it says nothing about how
+// percentiles were computed and must not take part in the kind check.
+func carriesPercentiles(t trial) bool {
+	if t["failed"] == "1" {
+		return false
+	}
+	for _, k := range []string{"p50_us", "p95_us", "p99_us"} {
+		if _, ok := t[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// oneQuantileKind refuses a set of trials whose percentiles mean different things: a chart that
+// mixed exact values with bin upper edges would compare numbers that are not the same quantity.
+// Only rows that carry percentiles are looked at, so a run with a failed trial is not "mixed".
+func oneQuantileKind(trials []trial) error {
+	kinds := map[string]bool{}
+	for _, t := range trials {
+		if carriesPercentiles(t) {
+			kinds[quantileKind(t)] = true
+		}
+	}
+	if len(kinds) > 1 {
+		return fmt.Errorf("the receipt mixes percentile kinds (quantiles=exact and quantiles=bin-upper-1pct); draw them as separate charts")
+	}
+	return nil
+}
+
 // parseTrials reads the key=value lines of one receipt. With a section name it
 // keeps only the lines under that "# section" header (up to the next header) that
 // start with trial=; with an empty name it keeps every line that has key=value pairs.
@@ -75,13 +116,22 @@ func parseTrials(path, section string) ([]trial, error) {
 			}
 			if k, v, ok := strings.Cut(field, "="); ok {
 				t[k] = v
+				if k == "result" && v == "FAILED" {
+					t["failed"] = "1" // a language worker's own verdict counts exactly like the driver's FAILED marker
+				}
 			}
 		}
 		if len(t) > 0 {
 			out = append(out, t)
 		}
 	}
-	return out, sc.Err()
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if err := oneQuantileKind(out); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return out, nil
 }
 
 func parseMeta(path string) (map[string]string, error) {

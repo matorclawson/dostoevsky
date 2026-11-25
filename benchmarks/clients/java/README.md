@@ -16,3 +16,5 @@ Engines: `dostoevsky` (our client through the gateway, JDK HttpClient keep-alive
 Client memory is the JVM's kernel peak (`VmHWM`) on Linux and the largest `ps` sample (`ps-sampled`) elsewhere; a JVM's resident size depends on its heap settings, so the run script fixes `-Xmx`.
 
 Tests need only a JDK, no jars and no engine: `sh benchmarks/clients/java/test.sh` (it reads `benchmarks/clients/hist_vector.json` and `receipt_examples_java.txt`; the Go test in `cmd/plots` parses the same lines).
+
+Licenses of the three jars whose POMs omit one are in `licenses/`: slf4j-api (MIT, from the project's tag v_1.7.36), commons-pool2 (Apache-2.0 and its NOTICE, from the jar's META-INF) and bcprov-lts8on (the Bouncy Castle licence, read from `org/bouncycastle/LICENSE.class` in the jar). Results that include Jedis say that it pulls redis-authx-core 0.1.1-beta2, Redis's own beta package, the way kafkajs is marked unmaintained.

@@ -377,8 +377,15 @@ func TestSegLogWriteAndReopen(t *testing.T) {
 	if acked != len(steps) {
 		t.Fatalf("%d of %d steps acknowledged", acked, len(steps))
 	}
-	if got := dirNames(t, fs); len(got) != 3 || got[0] != segName(1) || got[2] != segName(3) {
-		t.Fatalf("segments: %v", got)
+	got := dirNames(t, fs)
+	var logs []string
+	for _, n := range got {
+		if strings.HasSuffix(n, ".log") {
+			logs = append(logs, n)
+		}
+	}
+	if len(logs) != 3 || logs[0] != segName(1) || logs[2] != segName(3) || !slices.Contains(got, idxName(1)) || !slices.Contains(got, idxName(2)) || slices.Contains(got, idxName(3)) {
+		t.Fatalf("files: %v (want three segments, and idx files for the two sealed ones)", got)
 	}
 	l.close()
 	// reopen from what a crash right now would leave: everything was synced, so even the strictest image has it all
@@ -477,34 +484,29 @@ func TestSegLogCrashAtEveryOperation(t *testing.T) {
 
 func TestSegLogFailedRollFencesTheLog(t *testing.T) {
 	steps, _ := buildScenario(t)
-	// find the operation that is the directory sync of the first roll: the last step before roll 1 completes
-	var syncDirOp int
 	probe := newMemFS()
-	l, _ := openSegLog(probe, testDir)
-	for _, s := range steps {
-		if err := s.run(l); err != nil {
-			t.Fatal(err)
+	runSteps(t, probe, steps)
+	// Find the crash point that is the directory sync of the first roll: the only one where the
+	// first four steps were acknowledged and the log is then fenced as "uncertain".
+	found := false
+	for failAt := 1; failAt <= probe.ops && !found; failAt++ {
+		fs := newMemFS()
+		fs.failAt = failAt
+		acked, l := runSteps(t, fs, steps)
+		if acked != 4 || !errors.Is(l.failed, errSegUncertain) {
+			continue
 		}
-		if s.name == "roll 1" {
-			syncDirOp = probe.ops // the last file operation of the roll is the directory sync
-			break
+		found = true
+		rec, _ := appendRecord3(nil, record3{Partition: 0, Offset: 3})
+		if err := l.append(rec); err == nil {
+			t.Fatal("a fenced log accepted a write")
+		}
+		if err := l.roll(checkpoint3{}); err == nil {
+			t.Fatal("a fenced log accepted a roll")
 		}
 	}
-	fs := newMemFS()
-	fs.failAt = syncDirOp
-	acked, l := runSteps(t, fs, steps)
-	if acked != 4 { // start, three records; the roll was not acknowledged
-		t.Fatalf("acked %d", acked)
-	}
-	if !errors.Is(l.failed, errSegUncertain) && !errors.Is(l.failed, errCrash) {
-		t.Fatalf("a failed roll did not fence the log: %v", l.failed)
-	}
-	rec, _ := appendRecord3(nil, record3{Partition: 0, Offset: 3})
-	if err := l.append(rec); err == nil {
-		t.Fatal("a fenced log accepted a write")
-	}
-	if err := l.roll(checkpoint3{}); err == nil {
-		t.Fatal("a fenced log accepted a roll")
+	if !found {
+		t.Fatal("no crash point produced an uncertain roll")
 	}
 }
 
@@ -761,7 +763,7 @@ func TestOSFileSystemWorksEndToEnd(t *testing.T) {
 	if err = l2.state.equal(states[len(states)-1]); err != nil {
 		t.Fatal(err)
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 3 {
+	if entries, _ := os.ReadDir(dir); len(entries) != 5 { // three segments and two idx files
 		t.Fatalf("%d files on disk", len(entries))
 	}
 }

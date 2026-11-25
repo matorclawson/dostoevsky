@@ -1,6 +1,7 @@
 package dostoevsky
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
+	"sync"
 )
 
 // The segment file layer of the segmented log (design v1.1 and v1.2, change (b1)): a directory
@@ -158,9 +161,32 @@ func checkSegHeader(h []byte) error {
 }
 
 type segment struct {
-	f   fsFile
-	id  uint64
-	end int64 // the logical end: where the next append goes
+	f       fsFile
+	id      uint64
+	end     int64 // the logical end: where the next append goes
+	lastPos int64 // position of the last frame, and the body check it carries (what an idx file records)
+	lastCRC uint32
+}
+
+// lastFrameOf finds the last frame in frames, which are laid out back to back starting at file
+// position base, by their (already verified) lengths.
+func lastFrameOf(frames []byte, base int64) (pos int64, crc uint32, err error) {
+	at := 0
+	for at < len(frames) {
+		if len(frames)-at < frame3Header {
+			return 0, 0, errFrame3Short
+		}
+		n := int(binary.LittleEndian.Uint32(frames[at:]))
+		if n > frame3Max || at+frame3Header+n > len(frames) {
+			return 0, 0, errFrame3Short
+		}
+		pos, crc = base+int64(at), binary.LittleEndian.Uint32(frames[at+10:])
+		at += frame3Header + n
+	}
+	if at == 0 {
+		return 0, 0, errFrame3Short
+	}
+	return pos, crc, nil
 }
 
 // createSegment publishes a new segment whose content is the header and the checkpoint cp
@@ -201,12 +227,21 @@ func createSegment(fs fsys, dir string, id uint64, cp checkpoint3) (*segment, er
 		f.Close()
 		return nil, fmt.Errorf("%w: %v", errSegUncertain, err)
 	}
-	return &segment{f: f, id: id, end: int64(len(data))}, nil
+	lastPos, lastCRC, err := lastFrameOf(data[segHeaderSize:], segHeaderSize)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &segment{f: f, id: id, end: int64(len(data)), lastPos: lastPos, lastCRC: lastCRC}, nil
 }
 
 // append writes frames at the end and syncs. On any error the caller fences the log: a partial
 // write may exist past s.end and the durability of the sync is unknown.
 func (s *segment) append(frames []byte) error {
+	lastPos, lastCRC, err := lastFrameOf(frames, s.end)
+	if err != nil {
+		return fmt.Errorf("segment write: %w", err)
+	}
 	n, err := s.f.WriteAt(frames, s.end)
 	if err == nil && n != len(frames) {
 		err = io.ErrShortWrite
@@ -218,6 +253,7 @@ func (s *segment) append(frames []byte) error {
 		return fmt.Errorf("segment write: %w", err)
 	}
 	s.end += int64(len(frames))
+	s.lastPos, s.lastCRC = lastPos, lastCRC
 	return nil
 }
 
@@ -270,7 +306,12 @@ func corrupt(id uint64, at int64, format string, a ...any) error {
 	return fmt.Errorf("%w: segment %d at offset %d: %s", ErrCorruptLog, id, at, fmt.Sprintf(format, a...))
 }
 
-// scanSegment opens segment id, validates its header and start checkpoint, replays every frame
+// scanSegment is scanSegmentCore for the active segment: it may truncate a torn tail.
+func scanSegment(fs fsys, dir string, id uint64, onRecord func(rec record3, at int64, size int) error) (*segment, *logState, error) {
+	return scanSegmentCore(fs, dir, id, true, onRecord, nil)
+}
+
+// scanSegmentCore opens segment id, validates its header and start checkpoint, replays every frame
 // after it into the state the checkpoint described, and returns the segment ready for appending
 // together with that state.
 //
@@ -279,11 +320,17 @@ func corrupt(id uint64, at int64, format string, a ...any) error {
 // verifies) is a torn append and the file is truncated at that frame's start; a retention
 // checkpoint that is incomplete at the end is truncated at its first frame; anything else that
 // does not validate (a header or checksum failure, a frame that does not follow the state, an
-// unreadable start checkpoint) is ErrCorruptLog, and nothing is changed. onRecord, when set, is
-// called for every record after the start checkpoint with the frame's position and size, in
-// order; its slices alias a buffer that is reused.
-func scanSegment(fs fsys, dir string, id uint64, onRecord func(rec record3, at int64, size int) error) (*segment, *logState, error) {
-	f, err := fs.OpenFile(filepath.Join(dir, segName(id)), os.O_RDWR, 0)
+// unreadable start checkpoint) is ErrCorruptLog, and nothing is changed. A sealed segment is
+// complete, so with mayTruncate false any torn tail is ErrCorruptLog too and the file is never
+// written. onStart, when set, is called once, right after the start checkpoint is adopted, with
+// the state it describes; onRecord, when set, is called for every record after it with the
+// frame's position and size, in order. Their slices alias a buffer that is reused.
+func scanSegmentCore(fs fsys, dir string, id uint64, mayTruncate bool, onRecord func(rec record3, at int64, size int) error, onStart func(st *logState)) (*segment, *logState, error) {
+	flag := os.O_RDWR
+	if !mayTruncate {
+		flag = os.O_RDONLY
+	}
+	f, err := fs.OpenFile(filepath.Join(dir, segName(id)), flag, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -312,6 +359,9 @@ func scanSegment(fs fsys, dir string, id uint64, onRecord func(rec record3, at i
 		}
 		fr := &frameReader{f: f, size: size}
 		at, cpStart, torn := int64(segHeaderSize), int64(-1), false
+		var lastPos, beforeCpPos int64
+		var lastCRC, beforeCpCRC uint32
+		started := false
 		for at < size {
 			typ, body, n, err := fr.next(at)
 			if err != nil {
@@ -325,24 +375,34 @@ func scanSegment(fs fsys, dir string, id uint64, onRecord func(rec record3, at i
 				return nil, nil, corrupt(id, at, "the first frame is type %d, not the start checkpoint", typ)
 			}
 			if typ == f3CpBegin && !r.InCheckpoint() {
-				cpStart = at
+				cpStart, beforeCpPos, beforeCpCRC = at, lastPos, lastCRC
 			}
 			curAt, curSize = at, n
 			if err = r.Frame(typ, body); err != nil {
 				return nil, nil, corrupt(id, at, "%v", err)
 			}
+			lastPos, lastCRC = at, binary.LittleEndian.Uint32(fr.buf[at-fr.bufAt+10:])
 			at += int64(n)
+			if !started && r.Checkpoints == 1 {
+				started = true
+				if onStart != nil {
+					onStart(st)
+				}
+			}
 		}
 		if r.InCheckpoint() {
 			if r.Checkpoints == 0 {
 				return nil, nil, corrupt(id, cpStart, "the start checkpoint is incomplete")
 			}
-			at, torn = cpStart, true // an incomplete retention checkpoint: truncate at its first frame
+			at, torn, lastPos, lastCRC = cpStart, true, beforeCpPos, beforeCpCRC // an incomplete retention checkpoint
 		}
 		if r.Checkpoints == 0 {
 			return nil, nil, corrupt(id, segHeaderSize, "no start checkpoint")
 		}
 		if torn || at < size {
+			if !mayTruncate {
+				return nil, nil, corrupt(id, at, "a sealed segment has a torn or partial tail")
+			}
 			if err = f.Truncate(at); err != nil {
 				return nil, nil, err
 			}
@@ -350,7 +410,7 @@ func scanSegment(fs fsys, dir string, id uint64, onRecord func(rec record3, at i
 				return nil, nil, err
 			}
 		}
-		return &segment{f: f, id: id, end: at}, st, nil
+		return &segment{f: f, id: id, end: at, lastPos: lastPos, lastCRC: lastCRC}, st, nil
 	}()
 	if err != nil {
 		f.Close()
@@ -361,18 +421,79 @@ func scanSegment(fs fsys, dir string, id uint64, onRecord func(rec record3, at i
 
 // ----- the directory of segments -----
 
+// segPins counts the readers (and backups) holding a sealed segment, so retention can retire a
+// segment while it is in use and have it unlinked by whoever lets go last. Callers hold segLog.mu.
+type segPins struct {
+	n    map[uint64]int
+	dead map[uint64]bool
+}
+
+func (p *segPins) acquire(id uint64) bool {
+	if p.dead[id] {
+		return false
+	}
+	if p.n == nil {
+		p.n = map[uint64]int{}
+	}
+	p.n[id]++
+	return true
+}
+
+// release lets go; it reports whether the segment was retired and this was the last holder.
+func (p *segPins) release(id uint64) bool {
+	if p.n[id]--; p.n[id] <= 0 {
+		delete(p.n, id)
+		if p.dead[id] {
+			delete(p.dead, id)
+			return true
+		}
+	}
+	return false
+}
+
+// retire marks a segment dead; it reports whether nobody holds it (so it can go at once).
+func (p *segPins) retire(id uint64) bool {
+	if p.n[id] > 0 {
+		if p.dead == nil {
+			p.dead = map[uint64]bool{}
+		}
+		p.dead[id] = true
+		return false
+	}
+	return true
+}
+
+var (
+	errSegNotFound = errors.New("segment log: no such record")
+	errSegGone     = errors.New("segment log: the segment was retired")
+)
+
+const idxCacheSize = 32
+
 type segLog struct {
 	fs     fsys
 	dir    string
-	ids    []uint64 // sealed segment ids, ascending (the active segment is not in it)
+	mu     sync.Mutex // guards ids, cache and pins
+	ids    []uint64   // sealed segment ids, ascending (the active segment is not in it)
 	active *segment
 	state  *logState // as of Open: the state the active segment replays to
+	idx    *segIndex // the active segment's index: built by the scan, extended by observe
 	failed error     // set by a failed write or roll: the log refuses further writes until reopened
+
+	cache      map[uint64]*segIndex // sealed segments' indexes, verified; a small bounded cache
+	cacheOrder []uint64
+	pins       segPins
+
+	sealAsync bool // write a sealed segment's idx file in the background (the engine sets it); tests run it inline
+	wg        sync.WaitGroup
+	rebuilds  int   // indexes rebuilt by scanning a segment because the idx file was missing or wrong
+	idxErr    error // the last failure to write an idx file (a hint: never fatal)
 }
 
 // openSegLog lists the directory, removes staging files, checks that the segment ids are
-// contiguous, and scans the highest segment. A directory with no segment opens as an empty log
-// the caller starts with start. Anything wrong with a committed segment is ErrCorruptLog.
+// contiguous, and scans the highest segment, building its index. A directory with no segment opens
+// as an empty log the caller starts with start. Anything wrong with a committed segment is
+// ErrCorruptLog.
 func openSegLog(fs fsys, dir string) (*segLog, error) {
 	if err := fs.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -384,7 +505,7 @@ func openSegLog(fs fsys, dir string) (*segLog, error) {
 	var ids []uint64
 	for _, name := range names {
 		if strings.HasPrefix(name, "seg-") && strings.HasSuffix(name, ".tmp") {
-			// a staged segment that was never published: nothing acknowledged is in it
+			// a staged segment or idx that was never published: nothing acknowledged is in it
 			if err = fs.Remove(filepath.Join(dir, name)); err != nil {
 				return nil, err
 			}
@@ -400,15 +521,20 @@ func openSegLog(fs fsys, dir string) (*segLog, error) {
 			return nil, fmt.Errorf("%w: segment %d is missing (segments %d and %d are present)", ErrCorruptLog, ids[i-1]+1, ids[i-1], ids[i])
 		}
 	}
-	l := &segLog{fs: fs, dir: dir}
+	l := &segLog{fs: fs, dir: dir, cache: map[uint64]*segIndex{}}
 	if len(ids) == 0 {
 		l.state = newLogState()
 		return l, nil
 	}
 	top := ids[len(ids)-1]
-	if l.active, l.state, err = scanSegment(fs, dir, top, nil); err != nil {
+	idx := newSegIndex(nil)
+	l.active, l.state, err = scanSegmentCore(fs, dir, top, true,
+		func(rec record3, at int64, _ int) error { idx.observe(rec, at); return nil },
+		func(st *logState) { idx.startNext = startNextOf(st) })
+	if err != nil {
 		return nil, err
 	}
+	l.idx = idx
 	l.ids = ids[:len(ids)-1]
 	return l, nil
 }
@@ -418,20 +544,22 @@ func (l *segLog) start(cp checkpoint3) error {
 	if l.active != nil || len(l.ids) != 0 {
 		return errors.New("segment log already started")
 	}
+	st := newLogState()
+	if err := st.load(cp); err != nil {
+		return err
+	}
 	seg, err := createSegment(l.fs, l.dir, 1, cp)
 	if err != nil {
 		l.failed = err
 		return err
 	}
-	l.active = seg
-	st := newLogState()
-	if err = st.load(cp); err != nil {
-		l.failed = err
-		return err
-	}
-	l.state = st
+	l.active, l.state, l.idx = seg, st, newSegIndex(startNextOf(st))
 	return nil
 }
+
+// observe records, in the active segment's index, a record frame that append has just made durable
+// at pos. The engine calls it after a successful append, as it updates the rest of its state.
+func (l *segLog) observe(rec record3, pos int64) { l.idx.observe(rec, pos) }
 
 func (l *segLog) append(frames []byte) error {
 	if l.failed != nil {
@@ -448,7 +576,8 @@ func (l *segLog) append(frames []byte) error {
 }
 
 // roll publishes the next segment, whose start checkpoint is cp, and makes it the active one. Any
-// failure fences the log (the staging file is removed if the rename did not happen).
+// failure fences the log (the staging file is removed if the rename did not happen). The segment
+// that was active is sealed: its index is kept in the cache and written beside it as an idx file.
 func (l *segLog) roll(cp checkpoint3) error {
 	if l.failed != nil {
 		return l.failed
@@ -456,20 +585,328 @@ func (l *segLog) roll(cp checkpoint3) error {
 	if l.active == nil {
 		return errors.New("segment log not started")
 	}
+	st := newLogState()
+	if err := st.load(cp); err != nil {
+		return err
+	}
 	seg, err := createSegment(l.fs, l.dir, l.active.id+1, cp)
 	if err != nil {
 		l.failed = err
 		return err
 	}
-	l.ids = append(l.ids, l.active.id)
-	l.active.f.Close()
-	l.active = seg
+	old, oldIdx := l.active, l.idx
+	info := idxFooterInfo{segment: old.id, size: uint64(old.end), lastPos: uint64(old.lastPos), lastCRC: old.lastCRC}
+	l.mu.Lock()
+	l.ids = append(l.ids, old.id)
+	l.cachePut(old.id, oldIdx)
+	l.mu.Unlock()
+	old.f.Close()
+	l.active, l.idx = seg, newSegIndex(startNextOf(st))
+	write := func() {
+		if err := l.writeIdxFile(old.id, encodeSegIndex(oldIdx, info)); err != nil {
+			l.mu.Lock()
+			l.idxErr = err
+			l.mu.Unlock()
+		}
+	}
+	if l.sealAsync {
+		l.wg.Add(1)
+		go func() { defer l.wg.Done(); write() }()
+	} else {
+		write()
+	}
 	return nil
 }
 
 func (l *segLog) close() error {
+	l.wg.Wait()
 	if l.active == nil {
 		return nil
 	}
 	return l.active.f.Close()
+}
+
+// ----- idx files and the index cache -----
+
+// writeIdxFile publishes seg-<id>.idx the way a segment is published: stage, write, fsync, rename,
+// fsync the directory. A failure leaves no idx file, which only costs a rebuild later.
+func (l *segLog) writeIdxFile(id uint64, data []byte) error {
+	tmp, final := filepath.Join(l.dir, idxTmpName(id)), filepath.Join(l.dir, idxName(id))
+	l.fs.Remove(tmp) // a leftover from a crashed attempt
+	f, err := l.fs.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	abandon := func(err error) error {
+		f.Close()
+		l.fs.Remove(tmp)
+		return err
+	}
+	if n, err := f.WriteAt(data, 0); err != nil || n != len(data) {
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		return abandon(err)
+	}
+	if err = f.Sync(); err != nil {
+		return abandon(err)
+	}
+	if err = l.fs.Rename(tmp, final); err != nil {
+		return abandon(err)
+	}
+	f.Close()
+	return l.fs.SyncDir(l.dir)
+}
+
+// cachePut stores a verified index, evicting the oldest when the cache is full. Callers hold l.mu.
+func (l *segLog) cachePut(id uint64, x *segIndex) {
+	if _, ok := l.cache[id]; !ok {
+		l.cacheOrder = append(l.cacheOrder, id)
+	}
+	l.cache[id] = x
+	for len(l.cacheOrder) > idxCacheSize {
+		delete(l.cache, l.cacheOrder[0])
+		l.cacheOrder = l.cacheOrder[1:]
+	}
+}
+
+// loadIdxFile reads seg-<id>.idx, validates it as a whole and checks it against the segment it
+// claims to describe: the segment id, the segment's size, and the last frame (found at the recorded
+// position, whole and valid, ending exactly at the segment's end, carrying the recorded check).
+func (l *segLog) loadIdxFile(id uint64) (*segIndex, error) {
+	f, err := l.fs.OpenFile(filepath.Join(l.dir, idxName(id)), os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	size, err := f.Size()
+	if err != nil {
+		return nil, err
+	}
+	if size > 1<<30 {
+		return nil, fmt.Errorf("%w: %d bytes", errIdxInvalid, size)
+	}
+	b := make([]byte, size)
+	if _, err = f.ReadAt(b, 0); err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	x, info, err := decodeSegIndex(b)
+	if err != nil {
+		return nil, err
+	}
+	seg, err := l.fs.OpenFile(filepath.Join(l.dir, segName(id)), os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer seg.Close()
+	segSize, err := seg.Size()
+	if err != nil {
+		return nil, err
+	}
+	if info.segment != id || info.size != uint64(segSize) || info.lastPos < segHeaderSize || info.lastPos >= info.size {
+		return nil, fmt.Errorf("%w: it describes segment %d of %d bytes, not segment %d of %d", errIdxInvalid, info.segment, info.size, id, segSize)
+	}
+	fr := &frameReader{f: seg, size: segSize}
+	_, _, n, err := fr.next(int64(info.lastPos))
+	if err != nil || int64(info.lastPos)+int64(n) != segSize || binary.LittleEndian.Uint32(fr.buf[int64(info.lastPos)-fr.bufAt+10:]) != info.lastCRC {
+		return nil, fmt.Errorf("%w: the last frame does not match the segment", errIdxInvalid)
+	}
+	return x, nil
+}
+
+// rebuildIdx scans one sealed segment (read-only) and builds its index, then tries to write it back.
+func (l *segLog) rebuildIdx(id uint64) (*segIndex, error) {
+	idx := newSegIndex(nil)
+	seg, _, err := scanSegmentCore(l.fs, l.dir, id, false,
+		func(rec record3, at int64, _ int) error { idx.observe(rec, at); return nil },
+		func(st *logState) { idx.startNext = startNextOf(st) })
+	if err != nil {
+		return nil, err
+	}
+	seg.f.Close()
+	l.mu.Lock()
+	l.rebuilds++
+	l.mu.Unlock()
+	info := idxFooterInfo{segment: id, size: uint64(seg.end), lastPos: uint64(seg.lastPos), lastCRC: seg.lastCRC}
+	if err := l.writeIdxFile(id, encodeSegIndex(idx, info)); err != nil {
+		l.mu.Lock()
+		l.idxErr = err
+		l.mu.Unlock()
+	}
+	return idx, nil
+}
+
+// sealedIndex returns a sealed segment's verified index: from the cache, else from its idx file,
+// else rebuilt by scanning the segment. The idx file is a hint; the segment decides.
+func (l *segLog) sealedIndex(id uint64) (*segIndex, error) {
+	l.mu.Lock()
+	if x, ok := l.cache[id]; ok {
+		l.mu.Unlock()
+		return x, nil
+	}
+	l.mu.Unlock()
+	x, err := l.loadIdxFile(id)
+	if err != nil {
+		if x, err = l.rebuildIdx(id); err != nil {
+			return nil, err
+		}
+	}
+	l.mu.Lock()
+	l.cachePut(id, x)
+	l.mu.Unlock()
+	return x, nil
+}
+
+// ----- finding and reading records -----
+
+// locate finds the segment that holds record off of partition pid and a position at or before it.
+// The active segment is answered from memory; for older data the sealed segments are binary-searched
+// by the partition's first offset in each (which never decreases from one segment to the next).
+func (l *segLog) locate(pid uint32, off uint64) (id uint64, pos int64, err error) {
+	if l.idx != nil && off >= l.idx.first(pid) {
+		if p, ok := l.idx.find(pid, off); ok {
+			return l.active.id, p, nil
+		}
+		return 0, 0, errSegNotFound
+	}
+	l.mu.Lock()
+	ids := slices.Clone(l.ids)
+	l.mu.Unlock()
+	var searchErr error
+	i := sort.Search(len(ids), func(i int) bool {
+		x, e := l.sealedIndex(ids[i])
+		if e != nil {
+			searchErr = e
+			return true
+		}
+		return x.first(pid) > off
+	}) - 1
+	if searchErr != nil {
+		return 0, 0, searchErr
+	}
+	if i < 0 {
+		return 0, 0, errSegNotFound
+	}
+	x, err := l.sealedIndex(ids[i])
+	if err != nil {
+		return 0, 0, err
+	}
+	p, ok := x.find(pid, off)
+	if !ok {
+		return 0, 0, errSegNotFound
+	}
+	return ids[i], p, nil
+}
+
+func (l *segLog) pin(id uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.pins.acquire(id)
+}
+
+func (l *segLog) unpin(id uint64) {
+	l.mu.Lock()
+	gone := l.pins.release(id)
+	l.mu.Unlock()
+	if gone {
+		l.removeSegmentFiles(id)
+	}
+}
+
+func (l *segLog) removeSegmentFiles(id uint64) {
+	l.fs.Remove(filepath.Join(l.dir, segName(id)))
+	l.fs.Remove(filepath.Join(l.dir, idxName(id)))
+}
+
+// retire takes a sealed segment out of the log (retention): it is no longer found, and its files
+// are removed now, or by the last reader or backup that holds it.
+func (l *segLog) retire(id uint64) {
+	l.mu.Lock()
+	if i := slices.Index(l.ids, id); i >= 0 {
+		l.ids = slices.Delete(l.ids, i, i+1)
+	}
+	delete(l.cache, id)
+	l.cacheOrder = slices.DeleteFunc(l.cacheOrder, func(x uint64) bool { return x == id })
+	now := l.pins.retire(id)
+	l.mu.Unlock()
+	if now {
+		l.removeSegmentFiles(id)
+	}
+}
+
+// readRecord returns record off of partition pid, copied out of the file buffer.
+func (l *segLog) readRecord(pid uint32, off uint64) (record3, error) {
+	id, pos, err := l.locate(pid, off)
+	if err != nil {
+		return record3{}, err
+	}
+	var f fsFile
+	var size int64
+	if l.active != nil && id == l.active.id {
+		f, size = l.active.f, l.active.end
+	} else {
+		if !l.pin(id) {
+			return record3{}, errSegGone
+		}
+		defer l.unpin(id)
+		if f, err = l.fs.OpenFile(filepath.Join(l.dir, segName(id)), os.O_RDONLY, 0); err != nil {
+			return record3{}, err
+		}
+		defer f.Close()
+		if size, err = f.Size(); err != nil {
+			return record3{}, err
+		}
+	}
+	fr := &frameReader{f: f, size: size}
+	for at := pos; at < size; {
+		typ, body, n, err := fr.next(at)
+		if err != nil {
+			return record3{}, fmt.Errorf("%w: segment %d at offset %d: %v", ErrCorruptLog, id, at, err)
+		}
+		if typ == f3Record {
+			rec, err := parseRecord3(body)
+			if err != nil {
+				return record3{}, fmt.Errorf("%w: segment %d at offset %d: %v", ErrCorruptLog, id, at, err)
+			}
+			if rec.Partition == pid {
+				if rec.Offset == off {
+					rec.Key, rec.ID, rec.Value = bytes.Clone(rec.Key), bytes.Clone(rec.ID), bytes.Clone(rec.Value)
+					return rec, nil
+				}
+				if rec.Offset > off {
+					break
+				}
+			}
+		}
+		at += int64(n)
+	}
+	return record3{}, errSegNotFound
+}
+
+// findIDs visits every recorded offset whose hash matches (pid, id) in the active segment and then
+// in the previous window sealed segments, newest first, until visit returns true. A match is only a
+// candidate: the caller confirms it against the log (compare the frame's ID, key and value).
+func (l *segLog) findIDs(pid uint32, id []byte, window int, visit func(seg, off uint64) bool) error {
+	h := idHash(pid, id)
+	stop := false
+	if l.idx != nil {
+		l.idx.ids.lookup(h, func(off uint64) bool { stop = visit(l.active.id, off); return stop })
+		if stop {
+			return nil
+		}
+	}
+	l.mu.Lock()
+	ids := slices.Clone(l.ids)
+	l.mu.Unlock()
+	for k := len(ids) - 1; k >= 0 && k >= len(ids)-window; k-- {
+		x, err := l.sealedIndex(ids[k])
+		if err != nil {
+			return err
+		}
+		x.ids.lookup(h, func(off uint64) bool { stop = visit(ids[k], off); return stop })
+		if stop {
+			return nil
+		}
+	}
+	return nil
 }

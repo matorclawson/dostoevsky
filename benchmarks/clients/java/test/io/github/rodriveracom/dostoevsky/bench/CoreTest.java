@@ -197,12 +197,14 @@ public final class CoreTest {
         check(r[0].equals("0") && r[1].contains("stop=failed") && r[1].contains("result=FAILED") && r[1].contains("acked=10 verified=10"), r[1]);
         r = run(new String[] {"--engine", "memory", "--addr", "x:1", "--target", "20"}, new Memory(-1, true), Map.of());
         check(r[0].equals("0") && r[1].contains("stop=verification-failed") && r[1].contains("verified=0") && r[1].contains("records/s=0 "), r[1]);
-        String[][] bad = {{"--workers", "1.5"}, {"--workers", "0"}, {"--target", "abc"}, {"--target", "0"}, {"--window", "Infinity"}, {"--window", "-1"}, {"--window", "NaN"}};
+        String[][] bad = {{"--workers", "1.5"}, {"--workers", "0"}, {"--target", "abc"}, {"--target", "0"}, {"--window", "Infinity"}, {"--window", "-1"}, {"--window", "NaN"}, {"--window", "86401"}, {"--window", "1e300"}};
         for (String[] b : bad) {
             String[] args = {"--engine", "memory", "--addr", "x:1", b[0], b[1]};
             check(run(args, new Memory(), Map.of())[0].equals("2"), String.join(" ", b));
         }
         check(run(new String[] {"--engine", "nope", "--addr", "x:1"}, new Memory(), Map.of())[0].equals("2"), "unknown engine");
+        r = run(new String[] {"--engine", "memory", "--addr", "x:1", "--target", "3", "--window", "86400"}, new Memory(), Map.of());
+        check(r[0].equals("0") && r[1].contains("stop=reached"), "a window of exactly 24 h is accepted and the run ends at its target");
         Memory unknown = new Memory();
         unknown.build = "unknown";
         check(run(new String[] {"--engine", "memory", "--addr", "x:1", "--target", "5", "--require-known-build"}, unknown, Map.of())[0].equals("2"), "a gated run refuses an unknown build");

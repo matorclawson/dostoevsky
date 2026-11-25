@@ -16,6 +16,9 @@ import java.util.TreeMap;
 public final class Worker {
     private Worker() {}
 
+    /** A longer window overflows the nanosecond arithmetic (seconds times 1e9 exceeds a long). */
+    public static final double MAX_WINDOW_SECONDS = 24 * 3600;
+
     /** Creates one adapter; it may connect. */
     public interface Factory {
         Core.Adapter create(String addr, String token, int workers) throws Exception;
@@ -74,8 +77,8 @@ public final class Worker {
             return 2;
         }
         if (!a.containsKey("engine") || !a.containsKey("addr") || workers < 1 || workers > 100000 || target < 1
-                || Double.isNaN(window) || Double.isInfinite(window) || window < 0) {
-            err.println("usage: --engine E --addr host:port [--workers N>=1] [--target N>=1] [--window S>=0, finite] [--require-known-build]");
+                || !(window >= 0 && window <= MAX_WINDOW_SECONDS)) { // NaN and Infinity fail the comparison
+            err.println("usage: --engine E --addr host:port [--workers N>=1] [--target N>=1] [--window S, 0 to 86400] [--require-known-build]");
             return 2;
         }
         Factory factory = engines.get(a.get("engine"));

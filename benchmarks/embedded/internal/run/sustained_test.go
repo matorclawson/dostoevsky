@@ -2,6 +2,7 @@ package run
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"strconv"
 	"strings"
@@ -325,4 +326,153 @@ func TestSustainedHistogramQuantilesAreWithinOnePercent(t *testing.T) {
 	}
 	huge.add(0)
 	huge.add(-time.Second)
+}
+
+// ----- paired review of PR 31 (1f9b19b): one test per finding -----
+
+// M1: a slow bucket telemetry must not let fresh publishes start after the window.
+func TestSustainedNoPublishStartsAfterTheWindowEvenWhenTelemetryIsSlow(t *testing.T) {
+	old := diskUsedKiB
+	diskUsedKiB = func(string) (uint64, error) { time.Sleep(300 * time.Millisecond); return 1, nil } // a slow disk walk
+	t.Cleanup(func() { diskUsedKiB = old })
+	f := newFake()
+	f.slow = time.Millisecond
+	window := 100 * time.Millisecond
+	lc := &lateCounter{fake: f, window: window + 30*time.Millisecond}
+	_, r := sustainedRun(t, func() Store { return lc }, Sustained{Window: window, Target: 1_000_000_000, Workers: 4, Bucket: 20 * time.Millisecond})
+	if lc.late.Load() != 0 || r["stop"] != StopWindow {
+		t.Fatalf("%d publishes started more than 30 ms after the window; %v", lc.late.Load(), r)
+	}
+}
+
+// lateCounter counts publishes that START later than `window` after the first one (the run starts just before it).
+type lateCounter struct {
+	*fake
+	window time.Duration
+	first  atomic.Int64
+	late   atomic.Int64
+}
+
+func (l *lateCounter) Publish(b []byte) (uint64, error) {
+	now := time.Now().UnixNano()
+	l.first.CompareAndSwap(0, now)
+	if now-l.first.Load() > int64(l.window) {
+		l.late.Add(1)
+	}
+	return l.fake.Publish(b)
+}
+
+// M2: a publish still in flight when the window ends and then failing is a failed run, with the other acknowledgments kept.
+type failsLate struct {
+	*fake
+	after time.Duration
+}
+
+func (f failsLate) Publish(b []byte) (uint64, error) {
+	if binary.BigEndian.Uint64(b) == 1 {
+		time.Sleep(f.after)
+		return 0, errors.New("late publish failure")
+	}
+	return f.fake.Publish(b)
+}
+
+func TestSustainedAPublishThatFailsAfterTheWindowStillMakesAFailedRun(t *testing.T) {
+	f := newFake()
+	f.slow = time.Millisecond
+	_, r := sustainedRun(t, func() Store { return failsLate{f, 200 * time.Millisecond} }, Sustained{Window: 40 * time.Millisecond, Target: 1_000_000_000, Workers: 2, Bucket: time.Hour})
+	acked, _ := strconv.Atoi(r["acked"])
+	if r["stop"] != StopFailed || !strings.Contains(r["reason"], "late publish failure") || acked < 1 || r["final_reopen_ms"] != "none" {
+		t.Fatalf("%v", r)
+	}
+}
+
+// M3: Close never overlaps an active Retain, also on a failure path.
+type blockedRetain struct {
+	*fake
+	release   chan struct{}
+	active    atomic.Bool
+	overlap   atomic.Bool
+	failAfter int64
+	n         atomic.Int64
+}
+
+func (b *blockedRetain) Publish(d []byte) (uint64, error) {
+	if b.n.Add(1) > b.failAfter {
+		return 0, errors.New("producer failure")
+	}
+	return b.fake.Publish(d)
+}
+
+func (b *blockedRetain) Retain(uint64) error {
+	b.active.Store(true)
+	<-b.release
+	b.active.Store(false)
+	return nil
+}
+
+func (b *blockedRetain) Close() {
+	if b.active.Load() {
+		b.overlap.Store(true)
+	}
+	b.fake.Close()
+}
+
+func TestSustainedCloseWaitsForAnActiveRetention(t *testing.T) {
+	b := &blockedRetain{fake: newFake(), release: make(chan struct{}), failAfter: 400}
+	go func() { time.Sleep(300 * time.Millisecond); close(b.release) }()
+	_, r := sustainedRun(t, func() Store { return b }, Sustained{Window: 30 * time.Second, Target: 1_000_000, Workers: 2, Bucket: time.Hour, KeepLast: 10, RetainEvery: 20 * time.Millisecond})
+	if b.overlap.Load() {
+		t.Fatal("Close ran while Retain was active")
+	}
+	if r["stop"] != StopFailed {
+		t.Fatalf("%v", r)
+	}
+}
+
+func TestSustainedARetentionThatNeverReturnsIsReportedAndTheStoreIsNotClosed(t *testing.T) {
+	old := abandonAfter
+	abandonAfter = 200 * time.Millisecond
+	t.Cleanup(func() { abandonAfter = old })
+	b := &blockedRetain{fake: newFake(), release: make(chan struct{}), failAfter: 400}
+	t.Cleanup(func() { close(b.release) })
+	_, r := sustainedRun(t, func() Store { return b }, Sustained{Window: 30 * time.Second, Target: 1_000_000, Workers: 2, Bucket: time.Hour, KeepLast: 10, RetainEvery: 20 * time.Millisecond})
+	if b.overlap.Load() || !strings.Contains(r["reason"], "retention still running") {
+		t.Fatalf("overlap=%v %v", b.overlap.Load(), r)
+	}
+}
+
+// M4: a corrupted last byte of a record is a verification failure.
+type lastByteBad struct{ *fake }
+
+func (b lastByteBad) Read(o uint64) ([]byte, error) {
+	got, err := b.fake.Read(o)
+	if err != nil || len(got) < 512 {
+		return got, err
+	}
+	bad := append([]byte(nil), got...)
+	bad[511] ^= 0xFF
+	return bad, nil
+}
+
+func TestSustainedACorruptedLastByteFailsVerification(t *testing.T) {
+	f := newFake()
+	_, r := sustainedRun(t, func() Store { return lastByteBad{f} }, Sustained{Window: 30 * time.Second, Target: 500, Workers: 2, Bucket: time.Hour})
+	if r["stop"] != StopVerify || !strings.Contains(r["reason"], "read back wrong") {
+		t.Fatalf("%v", r)
+	}
+}
+
+// L1: a record in both samples is read and counted once.
+func TestSustainedOverlappingSamplesCountEachRecordOnce(t *testing.T) {
+	lines, r := sustainedRun(t, func() Store { return newFake() }, Sustained{Window: 30 * time.Second, Target: 30, Workers: 1, Bucket: time.Hour})
+	if r["stop"] != StopReached || r["acked"] != "30" {
+		t.Fatalf("%v", r)
+	}
+	for _, l := range lines {
+		if strings.HasPrefix(l, "reopen ") {
+			if n, _ := strconv.Atoi(fields(l)["verified"]); n != 30 {
+				t.Fatalf("verified %d of 30 acknowledged: %q", n, l)
+			}
+		}
+	}
 }

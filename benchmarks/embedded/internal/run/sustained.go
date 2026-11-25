@@ -168,7 +168,20 @@ func availMemText() string {
 	return strconv.FormatUint(kib, 10)
 }
 
+// lockedWriter serializes the lines of the coordinator, retention and reopen, which can print at the same time.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(b)
+}
+
 func executeSustained(engine string, open func(string, bool) (Store, error), o Sustained, out io.Writer) (err error) {
+	out = &lockedWriter{w: out}
 	if o.Workers < 1 || o.Target < 1 || o.Window <= 0 || o.Bucket <= 0 || o.KeepLast < 0 || (o.KeepLast > 0 && o.RetainEvery <= 0) {
 		return errors.New("invalid sustained workload")
 	}
@@ -202,8 +215,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			b.BindContext(ctx)
 		}
 	}
+	noClose := false // set when a retention is still running at the end: closing under it would be a bug
 	closeStore := func() (cerr error) {
-		if s == nil || closed {
+		if s == nil || closed || noClose {
 			return nil
 		}
 		closed = true
@@ -227,6 +241,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		maxOffset     atomic.Uint64
 		floor         atomic.Uint64 // the offset below which retention may have dropped records
 		stop          atomic.Pointer[stopInfo]
+		failure       atomic.Pointer[stopInfo] // the first engine failure, kept apart from whichever stop was admitted first
 		cur           atomic.Pointer[latHist]
 		total         = new(latHist)
 		reopens       int
@@ -238,9 +253,16 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	)
 	cur.Store(new(latHist))
 	setStop := func(kind, text string) { stop.CompareAndSwap(nil, &stopInfo{kind, text, time.Now()}) }
+	// An engine failure always counts as the result, even when the window (or the target) was admitted first: an
+	// in-flight publish that fails after the stop is still a failed engine, never a normal window.
+	setFailure := func(text string) {
+		failure.CompareAndSwap(nil, &stopInfo{StopFailed, text, time.Now()})
+		setStop(StopFailed, text)
+	}
 	stride := max(o.Target/2000, 1)
 
 	start := time.Now()
+	deadline := start.Add(o.Window) // monotonic: producers check it themselves, so slow telemetry cannot extend the window
 	var wg sync.WaitGroup
 	for range o.Workers {
 		wg.Add(1)
@@ -249,6 +271,10 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			data := make([]byte, 512)
 			for {
 				if stop.Load() != nil {
+					return
+				}
+				if !time.Now().Before(deadline) {
+					setStop(StopWindow, fmt.Sprintf("window of %v ended at %d acknowledged", o.Window, acked.Load()))
 					return
 				}
 				i := next.Add(1) - 1
@@ -263,7 +289,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 				gate.RUnlock()
 				if e != nil {
 					// Never retried: an ambiguous publish is the engine's failure.
-					setStop(StopFailed, fmt.Sprintf("engine failed at %d acknowledged: publish %d: %v", acked.Load(), i, e))
+					setFailure(fmt.Sprintf("engine failed at %d acknowledged: publish %d: %v", acked.Load(), i, e))
 					return
 				}
 				acked.Add(1)
@@ -318,6 +344,15 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		n := min(ringN, len(ring))
 		pairs = append(pairs, ring[:n]...)
 		sampMu.Unlock()
+		// The strided and the recent samples can hold the same record: each is read and counted once.
+		seen := make(map[uint64]bool, len(pairs))
+		pairs = slices.DeleteFunc(pairs, func(p pair) bool {
+			if seen[p.off] {
+				return true
+			}
+			seen[p.off] = true
+			return false
+		})
 		fl := floor.Load()
 		pairs = slices.DeleteFunc(pairs, func(p pair) bool { return p.off < fl })
 		if len(pairs) > o.Sample {
@@ -328,11 +363,11 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 			}
 			pairs = picked
 		}
-		want := make([]byte, 8)
+		want := make([]byte, 512) // the whole record: the index in the first 8 bytes, zeros after, as published
 		for _, p := range pairs {
 			got, e := s.Read(p.off)
 			binary.BigEndian.PutUint64(want, uint64(p.i))
-			if e != nil || len(got) != 512 || !bytes.Equal(got[:8], want) {
+			if e != nil || !bytes.Equal(got, want) {
 				return 0, fmt.Errorf("record %d at offset %d read back wrong: %v", p.i, p.off, e)
 			}
 		}
@@ -373,7 +408,10 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	}
 
 	var retaining atomic.Bool
+	var retentionWG sync.WaitGroup
+	var fenced atomic.Bool // set once the run is over: no retention starts after it
 	retain := func() {
+		defer retentionWG.Done()
 		defer retaining.Store(false)
 		gate.RLock() // s is replaced only under the write lock, so it is read under the read lock
 		defer gate.RUnlock()
@@ -388,7 +426,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		keep := top - uint64(o.KeepLast)
 		begin := time.Now()
 		if e := r.Retain(keep); e != nil {
-			setStop(StopFailed, fmt.Sprintf("engine failed at %d acknowledged: retention: %v", acked.Load(), e))
+			setFailure(fmt.Sprintf("engine failed at %d acknowledged: retention: %v", acked.Load(), e))
 			return
 		}
 		floor.Store(keep)
@@ -438,8 +476,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 					bucketEnd = bucketEnd.Add(o.Bucket)
 				}
 			}
-			if o.KeepLast > 0 && !now.Before(retainAt) && retaining.CompareAndSwap(false, true) {
+			if o.KeepLast > 0 && !now.Before(retainAt) && !fenced.Load() && retaining.CompareAndSwap(false, true) {
 				retainAt = now.Add(o.RetainEvery)
+				retentionWG.Add(1)
 				go retain()
 			}
 			if o.ReopenEvery > 0 && acked.Load() >= nextReopen {
@@ -452,7 +491,21 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		}
 	}
 	elapsed := time.Since(start)
+	// Retention is fenced and joined BEFORE anything closes the store: a Close that overlaps an active Retain is a bug of
+	// the harness. A retention still blocked after abandonAfter is reported and the store is then left unclosed.
+	fenced.Store(true)
+	retentionDone := make(chan struct{})
+	go func() { retentionWG.Wait(); close(retentionDone) }()
+	retentionStuck := false
+	select {
+	case <-retentionDone:
+	case <-time.After(abandonAfter):
+		retentionStuck = true
+	}
 	st := stop.Load()
+	if f := failure.Load(); f != nil && (st == nil || st.kind == StopWindow || st.kind == StopReached) {
+		st = f // a failed publish after the window or the target was admitted still makes this a failed run
+	}
 	if st == nil && acked.Load() >= o.Target {
 		st = &stopInfo{StopReached, fmt.Sprintf("reached %d acknowledged messages", acked.Load()), time.Now()}
 	}
@@ -462,7 +515,11 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	if abandoned {
 		st = &stopInfo{st.kind, st.text + "; producers still inside a publish after " + abandonAfter.String() + " were abandoned", st.at}
 	}
-	if (st.kind == StopReached || st.kind == StopWindow) && !abandoned {
+	if retentionStuck {
+		noClose = true
+		st = &stopInfo{StopFailed, st.text + "; retention still running after " + abandonAfter.String() + ", the store was not closed", st.at}
+	}
+	if (st.kind == StopReached || st.kind == StopWindow) && !abandoned && !retentionStuck {
 		// A finished run closes, reopens and verifies once more; a problem there is the result.
 		if bad := reopen(true); bad != nil {
 			st = bad

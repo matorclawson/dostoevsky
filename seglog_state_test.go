@@ -278,6 +278,14 @@ func TestCheckpoint3StructureIsEnforced(t *testing.T) {
 	}()
 	part := frame(f3CpPartition, append(append(u32(0), u64(0)...), u64(0)...))
 	cat := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	tdN := func(pid uint32) []byte {
+		d, _ := appendTopicDef3(nil, topicDef3{Partition: pid, Number: pid, Topic: []byte("t")})
+		return d
+	}
+	partN := func(pid uint32) []byte { return frame(f3CpPartition, append(append(u32(pid), u64(0)...), u64(0)...)) }
+	grp := func(name string) []byte {
+		return frame(f3CpGroup, append(append(append(u32(0), byte(len(name)), 0), name...), u64(0)...))
+	}
 
 	if _, _, err := readCheckpoint3(cat(begin(1, 1, 1, 0), cfg, td, part, end(1, 1, 1, 0))); err != nil {
 		t.Fatalf("a well-formed checkpoint was refused: %v", err)
@@ -295,6 +303,11 @@ func TestCheckpoint3StructureIsEnforced(t *testing.T) {
 		"short begin":               frame(f3CpBegin, []byte{1, 2, 3}),
 		"starts with config":        cat(cfg, end(1, 0, 0, 0)),
 		"short partition entry":     cat(begin(1, 1, 1, 0), cfg, td, frame(f3CpPartition, []byte{1}), end(1, 1, 1, 0)),
+		"topics out of order":       cat(begin(1, 2, 2, 0), cfg, tdN(1), tdN(0), partN(0), partN(1), end(1, 2, 2, 0)),
+		"topics repeated":           cat(begin(1, 2, 2, 0), cfg, tdN(0), tdN(0), partN(0), partN(1), end(1, 2, 2, 0)),
+		"partitions out of order":   cat(begin(1, 2, 2, 0), cfg, tdN(0), tdN(1), partN(1), partN(0), end(1, 2, 2, 0)),
+		"groups out of order":       cat(begin(1, 1, 1, 2), cfg, td, part, grp("b"), grp("a"), end(1, 1, 1, 2)),
+		"groups repeated":           cat(begin(1, 1, 1, 2), cfg, td, part, grp("a"), grp("a"), end(1, 1, 1, 2)),
 		"group name past the entry": cat(begin(1, 1, 1, 1), cfg, td, part, frame(f3CpGroup, append(u32(0), 200, 0, 1, 2)), end(1, 1, 1, 1)),
 	} {
 		if _, _, err := readCheckpoint3(b); !errors.Is(err, errCheckpointInvalid) {
@@ -635,5 +648,32 @@ func TestReplayRefusesFramesThatDoNotFollowTheState(t *testing.T) {
 	_, body, _, _ = readFrame3(fence)
 	if err := r.Frame(f3Fence, body); err != nil || r.Fences != 1 {
 		t.Fatalf("fence: %v %d", err, r.Fences)
+	}
+}
+
+func TestReplayRefusesACheckpointFromAnotherSegment(t *testing.T) {
+	cp, err := appendCheckpoint3(nil, sampleState(t).snapshot(1, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seven, eight := uint64(7), uint64(8)
+	r := newReplayer3(newLogState())
+	r.WantSegment = &seven
+	frames, _ := splitFrames(cp)
+	for _, f := range frames {
+		if err := r.Frame(f.typ, f.body); err != nil {
+			t.Fatalf("a checkpoint of the right segment was refused: %v", err)
+		}
+	}
+	r = newReplayer3(newLogState())
+	r.WantSegment = &eight
+	var got error
+	for _, f := range frames {
+		if got = r.Frame(f.typ, f.body); got != nil {
+			break
+		}
+	}
+	if !errors.Is(got, errCheckpointInvalid) || !strings.Contains(got.Error(), "segment") || !r.st.empty() {
+		t.Fatalf("a checkpoint from another segment was adopted: %v", got)
 	}
 }

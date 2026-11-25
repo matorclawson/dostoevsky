@@ -19,8 +19,10 @@ import (
 //	cp-end     id u64 | topics u32 | partitions u32 | groups u32
 //
 // It is valid only if cp-end is present with the same id and counts as cp-begin and every
-// frame between them checks out. A crash in the middle of writing one leaves an incomplete
-// checkpoint, which replay ignores. Nothing in the engine uses these frames yet.
+// frame between them checks out. Within it, partition ids, topic definitions and groups are in
+// one canonical ascending order without repeats (the writer produces that order, the reader
+// requires it). A crash in the middle of writing one leaves an incomplete checkpoint, which
+// replay ignores. Nothing in the engine uses these frames yet.
 const (
 	f3CpBegin     byte = 3
 	f3Config      byte = 6
@@ -157,13 +159,20 @@ func (b *cpBuilder) add(typ byte, body []byte) (done bool, err error) {
 		if err != nil {
 			return false, cpInvalid("%v", err)
 		}
+		if n := len(b.cp.Topics); n > 0 && d.Partition <= b.cp.Topics[n-1].Partition {
+			return false, cpInvalid("topic definitions are not in ascending partition id order (id %d after %d)", d.Partition, b.cp.Topics[n-1].Partition)
+		}
 		d.Topic = bytes.Clone(d.Topic)
 		b.cp.Topics = append(b.cp.Topics, d)
 	case len(b.cp.Partitions) < b.wantParts:
 		if typ != f3CpPartition || len(body) != 4+8+8 {
 			return false, cpInvalid("expected a partition entry of 20 bytes, got type %d of %d bytes", typ, len(body))
 		}
-		b.cp.Partitions = append(b.cp.Partitions, cpPartition3{binary.LittleEndian.Uint32(body), binary.LittleEndian.Uint64(body[4:]), binary.LittleEndian.Uint64(body[12:])})
+		pe := cpPartition3{binary.LittleEndian.Uint32(body), binary.LittleEndian.Uint64(body[4:]), binary.LittleEndian.Uint64(body[12:])}
+		if n := len(b.cp.Partitions); n > 0 && pe.Partition <= b.cp.Partitions[n-1].Partition {
+			return false, cpInvalid("partition entries are not in ascending id order (id %d after %d)", pe.Partition, b.cp.Partitions[n-1].Partition)
+		}
+		b.cp.Partitions = append(b.cp.Partitions, pe)
 	case len(b.cp.Groups) < b.wantG:
 		if typ != f3CpGroup || len(body) < 4+2+8 {
 			return false, cpInvalid("expected a group entry, got type %d of %d bytes", typ, len(body))
@@ -172,12 +181,19 @@ func (b *cpBuilder) add(typ byte, body []byte) (done bool, err error) {
 		if len(body) < 4+2+g+8 {
 			return false, cpInvalid("group name of %d bytes exceeds the entry", g)
 		}
-		b.cp.Groups = append(b.cp.Groups, cpGroup3{
+		ge := cpGroup3{
 			Partition: binary.LittleEndian.Uint32(body),
 			Group:     bytes.Clone(body[6 : 6+g]),
 			Next:      binary.LittleEndian.Uint64(body[6+g:]),
 			State:     cloneState(body[6+g+8:]),
-		})
+		}
+		if n := len(b.cp.Groups); n > 0 {
+			prev := b.cp.Groups[n-1]
+			if ge.Partition < prev.Partition || (ge.Partition == prev.Partition && bytes.Compare(ge.Group, prev.Group) <= 0) {
+				return false, cpInvalid("group entries are not in ascending (partition id, name) order, or repeat")
+			}
+		}
+		b.cp.Groups = append(b.cp.Groups, ge)
 	default:
 		if typ != f3CpEnd || len(body) != 8+12 {
 			return false, cpInvalid("expected cp-end, got type %d of %d bytes", typ, len(body))
@@ -241,11 +257,14 @@ func cpFrameError(err error) error {
 // only by a checkpoint), so a checkpoint that disagrees with the frames before it is reported
 // instead of trusted.
 type replayer3 struct {
-	st          *logState
-	cp          *cpBuilder
-	OnRecord    func(record3) error // called after a record was applied to the state
-	OnCommit    func(commit3) error // called after a commit was applied to the state
-	Checkpoints int                 // complete checkpoints seen
+	st       *logState
+	cp       *cpBuilder
+	OnRecord func(record3) error // called after a record was applied to the state
+	OnCommit func(commit3) error // called after a commit was applied to the state
+	// WantSegment, when set, is the segment the frames come from: a checkpoint naming another
+	// segment is refused (a checkpoint copied or restored from elsewhere must not be trusted).
+	WantSegment *uint64
+	Checkpoints int // complete checkpoints seen
 	Fences      int
 }
 
@@ -266,6 +285,9 @@ func (r *replayer3) Frame(typ byte, body []byte) error {
 		}
 		cp := r.cp.cp
 		r.cp = nil
+		if r.WantSegment != nil && cp.Segment != *r.WantSegment {
+			return cpInvalid("checkpoint names segment %d inside segment %d", cp.Segment, *r.WantSegment)
+		}
 		r.Checkpoints++
 		return r.adopt(cp)
 	}

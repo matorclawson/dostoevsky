@@ -1,0 +1,16 @@
+# group:artifact:version sha256-of-the-jar. The jars are fetched from repo1.maven.org by exact URL and refused on any
+# difference. The table, with licenses and dates, is DEPS-java-worker-v1.md in the evidence record.
+org.apache.kafka:kafka-clients:4.4.0 1ab07317eb6633241392449d329dbdc5d9251e6ffc4926860f42dd966e88bdf9
+at.yawk.lz4:lz4-java:1.11.2 8a7458657938e9b692224db83aac458c13abd7a59ab75c3d3b08bd2233a646a2
+com.github.luben:zstd-jni:1.5.7-17 c9043e2da8a16c13b6cd7661a5cb56685a573c3546ef4bd0ead67b0b67c2e107
+org.xerial.snappy:snappy-java:1.1.10.7 4c766cb3f855415ee734b2392949a0b6f12a60879334a74518deaf6270d32e36
+org.slf4j:slf4j-api:1.7.36 d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0
+io.nats:jnats:2.26.4 fe9ee228123d4d5fb3066eccbdb3c7464a9a9738e14a92905f1c97898d33a3d3
+com.google.code.gson:gson:2.14.0 2cbd119bf1961c28788310963dc80ba65f58cdeec1dd139c8bdb1240faa2c36f
+com.google.errorprone:error_prone_annotations:2.48.0 b49c5c958316ed67a09c699dda9aa749caf434d51d863dea599ef36a49b9c855
+org.jspecify:jspecify:1.0.0 1fad6e6be7557781e4d33729d49ae1cdc8fdda6fe477bb0cc68ce351eafdfbab
+org.bouncycastle:bcprov-lts8on:2.73.12.1 7514e0d8b9987b1cce93c15d8379d14fed2663b37e7c0b0692e596ed6b6e58a7
+org.json:json:20260719 c243f45f9590c12694a4142ed3f07fc70dfb71e4daebd05ae234bf92a2da92a6
+redis.clients:jedis:8.0.2 34fb85c67291fd70cee4e2e86240b0c155ea8b998175975e264d86baaf54ffc2
+redis.clients.authentication:redis-authx-core:0.1.1-beta2 cc56edb08b3df8562cddac108dca61907d21cc4ad04de05e9f5d1b01058390af
+org.apache.commons:commons-pool2:2.13.1 f77a5060d6936a9144023584232f9de3f2248f1abfe156e9d31795f18770674f

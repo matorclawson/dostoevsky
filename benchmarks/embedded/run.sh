@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 # Run from the project root. Keep experimental dependencies in this module.
-(cd benchmarks/embedded && CGO_ENABLED=0 "${GO:-go}" build -buildvcs=false -o ../../.dev/embedded/ ./cmd/...)
+(cd benchmarks/embedded && CGO_ENABLED=0 "${GO:-go}" build -buildvcs=false -o ../../.dev/embedded/ ./cmd/dost ./cmd/jet)
 export GOMAXPROCS="${GOMAXPROCS:-2}"
 if [ "${BENCH_SUITE:-}" = gate ]; then
  exec sh benchmarks/embedded/gate.sh

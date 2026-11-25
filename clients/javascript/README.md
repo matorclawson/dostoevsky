@@ -18,4 +18,17 @@ await c.commit("jobs", ack.partition, "workers", ack.offset);
 
 Errors throw `ClientError` with `status` and `code` (`conflict`, `expired`, `limit`, ...).
 
+## Native client (preview)
+
+`dostoevsky-client/native` speaks the binary [wire protocol](https://github.com/rodriveracom/dostoevsky/blob/main/docs/wire-v1.md). **No released Dostoevsky server speaks it yet**, so it is tested only against the protocol's test vectors and a scripted server. No speed claim is made.
+
+```js
+import { NativeClient } from "dostoevsky-client/native";
+const c = await NativeClient.connect({ host: "127.0.0.1", port: 8788 }, token);
+const acks = await Promise.all(jobs.map((job) => c.publish("jobs", job))); // in flight together, appended in this order
+c.close();
+```
+
+The methods are those of `Client`. Calls beyond the server's window wait their turn, and their bytes stay in memory until sent. Nothing is retried and there is no reconnect: after `ConnectionLost`, connect again; if `sent` is true the request may have taken effect.
+
 Test (no server needed): `cd clients/javascript && npm test`

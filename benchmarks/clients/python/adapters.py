@@ -24,7 +24,7 @@ def build_id(path: str) -> str:
     try:
         here = os.path.dirname(os.path.abspath(path))
         sha = subprocess.run(["git", "-C", here, "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "-C", here, "status", "--porcelain", "--", here], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "-C", here, "status", "--porcelain", "--", "."], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
         return sha + ("-dirty" if dirty else "")
     except Exception:  # noqa: BLE001 - identity is best effort and says so
         return "unknown"

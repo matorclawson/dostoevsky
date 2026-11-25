@@ -344,6 +344,25 @@ class AdapterTest(unittest.TestCase):
         self.assertTrue(a.client_build, "no build identity")
         self.assertRegex(a.client_build, r"^([0-9a-f]{12}(-dirty)?|unknown)$")
 
+    def test_build_id_on_a_clean_tree_is_a_bare_commit_and_a_change_adds_dirty(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as repo:
+            def git(*a):
+                subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *a],
+                               check=True, capture_output=True)
+            git("init", "-q")
+            pkg = os.path.join(repo, "clients", "python", "pkg")
+            os.makedirs(pkg)
+            with open(os.path.join(pkg, "__init__.py"), "w") as f:
+                f.write("x = 1\n")
+            git("add", ".")
+            git("commit", "-q", "-m", "one")
+            clean = adapters.build_id(os.path.join(pkg, "__init__.py"))
+            self.assertRegex(clean, r"^[0-9a-f]{12}$")
+            with open(os.path.join(pkg, "__init__.py"), "w") as f:
+                f.write("x = 2\n")
+            self.assertEqual(adapters.build_id(os.path.join(pkg, "__init__.py")), clean + "-dirty")
+
     def test_build_id_says_unknown_outside_a_checkout(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(adapters.build_id(os.path.join(d, "x.py")), "unknown")

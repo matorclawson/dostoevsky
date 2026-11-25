@@ -3,7 +3,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from dostoevsky import Client, ClientError  # noqa: E402
+from dostoevsky_client import Client, ClientError  # noqa: E402
 
 TOKEN = "a-test-token-with-entropy"
 LOG = []  # (path, query, body) of every request the stub saw

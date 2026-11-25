@@ -1,5 +1,5 @@
 import os
-from dostoevsky import Client
+from dostoevsky_client import Client
 
 client = Client(os.getenv("DOSTOEVSKY_URL", "http://127.0.0.1:8787"), os.environ["DOSTOEVSKY_TOKEN"])
 ack = client.publish("jobs", b"task from python", key="jobs+λ", id="python-demo")

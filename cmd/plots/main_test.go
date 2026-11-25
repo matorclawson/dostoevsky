@@ -387,18 +387,24 @@ func TestAReceiptThatMixesPercentileKindsIsRefused(t *testing.T) {
 	}
 }
 
-// benchmarks/clients/receipt_examples.txt holds the lines the Python and JavaScript workers write
+// benchmarks/clients/receipt_examples*.txt hold the lines the Python, JavaScript and Java workers write
 // (their tests rebuild them byte for byte). Here the parser that draws the charts reads every one:
 // no stray token, the percentile marker present, the numbers parse.
 func TestEveryLanguageWorkerLineParses(t *testing.T) {
-	raw, err := os.ReadFile("../../benchmarks/clients/receipt_examples.txt")
-	if err != nil {
-		t.Fatal(err)
+	files, err := filepath.Glob("../../benchmarks/clients/receipt_examples*.txt") // one file per set of workers
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no receipt example files: %v", err)
 	}
 	var lines []string
-	for _, l := range strings.Split(string(raw), "\n") {
-		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
-			lines = append(lines, l)
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(string(raw), "\n") {
+			if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
+				lines = append(lines, l)
+			}
 		}
 	}
 	if len(lines) < 6 {

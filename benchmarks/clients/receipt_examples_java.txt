@@ -1,0 +1,6 @@
+# Receipt lines as the Java worker writes them, for the same fixed inputs as receipt_examples.txt: 1000 messages
+# acknowledged and verified in 2.00 s, every latency exactly 2 ms (every percentile 2002.301 us), 51200 KiB peak
+# client memory. The Java tests rebuild these lines byte for byte; the Go test in cmd/plots parses them.
+engine=java-kafka workers=8 result=ok acked=1000 verified=1000 records/s=500 elapsed_s=2.00 p50_us=2002.301 p95_us=2002.301 p99_us=2002.301 p99_9_us=2002.301 p99_99_us=2002.301 quantiles=bin-upper-1pct client_rss_KiB=51200 client_rss_source=VmHWM lang=java client=kafka-clients-4.4.0 client_build=n/a stop=reached
+engine=java-dostoevsky workers=8 result=ok acked=1000 verified=1000 records/s=500 elapsed_s=2.00 p50_us=2002.301 p95_us=2002.301 p99_us=2002.301 p99_9_us=2002.301 p99_99_us=2002.301 quantiles=bin-upper-1pct client_rss_KiB=51200 client_rss_source=VmHWM lang=java client=dostoevsky-client-0.1.0 client_build=0123456789ab stop=reached
+engine=java-redis workers=8 result=FAILED acked=4 verified=4 records/s=2 elapsed_s=2.00 p50_us=2002.301 p95_us=2002.301 p99_us=2002.301 p99_9_us=2002.301 p99_99_us=2002.301 quantiles=bin-upper-1pct client_rss_KiB=51200 client_rss_source=ps-sampled lang=java client=jedis-8.0.2 client_build=n/a ambiguous=1 stop=failed detail=publish_4:_AmbiguousOutcome:ambiguous-timeout_(after_4_acknowledged)

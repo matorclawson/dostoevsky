@@ -30,6 +30,14 @@ import (
 //	disk      the data disk's free space fell below Sustained.MinFreeDiskKiB,
 //	verify    a sampled record read back wrong.
 //
+// Counting contract: acked is the number of messages the engine acknowledged, all of them.
+// The first failure (or other stop) tells every producer to stop at its next loop; a
+// publish already in flight, or one started before the stop was seen, still completes, and
+// if the engine acknowledged it it is counted, because it is on disk. The reason text names
+// the count at the moment the stop was recorded ("failed at N acknowledged"), which can be a
+// few below the final acked. The single publish that returned the error is never counted
+// and nothing is retried. All counters are atomic, so none of this races.
+//
 // Whatever the reason, the run prints one final "sustained" line saying so in plain words
 // together with the count reached; a failure is a result, not an error exit. Per-bucket
 // lines (messages per second, p99, memory, disk) and per-reopen lines come before it.

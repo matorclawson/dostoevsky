@@ -173,6 +173,9 @@ var (
 	failedTrials   = map[string]map[int]int{}
 	allowFailures  bool
 	ignoredEngines []string
+	// notShown lists the engines that are in the receipt but deliberately left out of the
+	// charts with -ignore-engines; the footer and the description name them.
+	notShown []string
 )
 
 type chart struct {
@@ -276,11 +279,12 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 	if err := checkEngineSet(trials, expectedEngines, ignoredEngines); err != nil {
 		return fmt.Errorf("%s: %w", receipt, err)
 	}
-	if len(expectedEngines) > 2 {
+	if comparisonMode(expectedEngines) {
 		if err := requireComparisonMeta(expectedEngines, meta); err != nil {
 			return fmt.Errorf("%s: %w", metaPath, err)
 		}
 	}
+	notShown = leftOut(trials, expectedEngines, ignoredEngines)
 	engineLabels, engineArch = map[string]string{}, map[string]string{}
 	for k, v := range meta {
 		if e, ok := strings.CutPrefix(k, "label."); ok {
@@ -312,6 +316,9 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 		}
 	}
 	footer := footerLines(meta, receipt)
+	if len(notShown) > 0 {
+		footer = append(footer, notShownLine())
+	}
 	for _, c := range gateCharts {
 		data := onlyEngines(collect(trials, c.key, c.scale), expectedEngines)
 		if len(data) == 0 {
@@ -434,9 +441,9 @@ func label(engine string) string {
 }
 
 func renderBars(c chart, data []series, footer []string) string {
-	// More than two engines declared means comparison rendering, even if fewer have data
-	// (a seven-engine run where five failed every trial still draws as a comparison).
-	if len(data) > 2 || len(expectedEngines) > 2 {
+	// Comparison rendering follows the declared engines, not how many have data: any engine
+	// beyond dostoevsky and jetstream, at any count, means comparison mode.
+	if len(data) > 2 || comparisonMode(expectedEngines) {
 		return renderMulti(c, data, footer)
 	}
 	producers := map[int]bool{}
@@ -473,7 +480,7 @@ func renderBars(c chart, data []series, footer []string) string {
 	shift := 12 * failureRows(data, ws, groupW) // zero without failures, so those charts do not change
 	h := base + 74 + shift + 15*len(footer) + 10
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
-	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict), style)
+	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict+notShownSentence()), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
 	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", c.note + " " + verdict}
 	if c.explain != "" && losing(data, c.lower) {

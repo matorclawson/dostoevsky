@@ -465,3 +465,79 @@ func TestCLILegendWrapsAnOverWideLabel(t *testing.T) {
 		t.Fatal("the long label is missing from the legend")
 	}
 }
+
+// cc M1 and L2 (pair 288500): comparison mode follows the declared engines at any count. RabbitMQ
+// charted with only Dostoevsky needs its qualifiers and architecture, and engines left out with
+// -ignore-engines are named on the chart.
+func TestCLIAnyNonLegacyEngineMeansComparisonMode(t *testing.T) {
+	bin := buildPlots(t)
+	dir := t.TempDir()
+	r := write(t, dir, "c.log", multiLog(multiRPS, nil))
+	rest := "jetstream,sqlite,redis,valkey,kafka"
+	args := func(meta, out string) []string {
+		return []string{"-receipt", r, "-section", "*", "-meta", meta, "-sketch", dir + "/none", "-out", out,
+			"-engines", "dostoevsky,rabbitmq", "-ignore-engines", rest}
+	}
+	noNotes := write(t, dir, "nonotes.txt", strings.NewReplacer(
+		"note.1=RabbitMQ: durability per vendor default, not verified; Erlang from the Hex.pm prebuilt\n", "",
+		"note.2=Kafka: fsync per message inferred from log.flush.interval.messages=1\n", "").Replace(multiMeta))
+	_, stderr, code := plots(t, bin, dir, args(noNotes, dir+"/o1")...)
+	if code == 0 || !strings.Contains(stderr, "durability per vendor default, not verified") || !strings.Contains(stderr, "Erlang") {
+		t.Fatalf("RabbitMQ charted without its qualifiers: exit %d, %s", code, stderr)
+	}
+	bare := write(t, dir, "bare.txt", "footer.1=h\nnote.1=RabbitMQ: durability per vendor default, not verified; Erlang from the Hex.pm prebuilt\ncommand=x\n")
+	if _, stderr, code := plots(t, bin, dir, args(bare, dir+"/o2")...); code == 0 || !strings.Contains(stderr, "arch.rabbitmq") {
+		t.Fatalf("RabbitMQ charted with no architecture: exit %d, %s", code, stderr)
+	}
+	full := write(t, dir, "full.txt", multiMeta)
+	if _, stderr, code := plots(t, bin, dir, args(full, dir+"/ok")...); code != 0 {
+		t.Fatalf("a complete meta file was refused: %s", stderr)
+	}
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join(dir, "ok", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	th := read("throughput.svg")
+	for _, want := range []string{
+		"RabbitMQ 4.4 (quorum queue) (server, loopback)", "durability per vendor default, not verified", "Dostoevsky (in process)",
+		"Not shown: jetstream, sqlite, redis, valkey, kafka (excluded with -ignore-engines)",
+	} {
+		if !strings.Contains(th, want) {
+			t.Errorf("throughput.svg lacks %q", want)
+		}
+	}
+	if desc := regexp.MustCompile(`<desc id="d">([^<]*)</desc>`).FindStringSubmatch(th); desc == nil || !strings.Contains(desc[1], "Not shown: jetstream") {
+		t.Errorf("the description does not name the omitted engines: %v", desc)
+	}
+	if !strings.Contains(read("memory.svg"), "Peak memory, client plus server processes") {
+		t.Error("a Dostoevsky plus RabbitMQ chart must use the comparison memory title")
+	}
+	// The legacy pair with engines left out also names them, and its charts keep the legacy renderer.
+	_, stderr, code = plots(t, bin, dir, "-receipt", r, "-section", "*", "-meta", write(t, dir, "footer.txt", "footer.1=h\ncommand=x\n"), "-sketch", dir+"/none",
+		"-out", dir+"/legacy", "-ignore-engines", "sqlite,redis,valkey,kafka,rabbitmq")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	lb, _ := os.ReadFile(filepath.Join(dir, "legacy", "throughput.svg"))
+	if !strings.Contains(string(lb), "Not shown: sqlite, redis, valkey, kafka, rabbitmq (excluded with -ignore-engines)") {
+		t.Error("the legacy chart does not name the engines left out")
+	}
+}
+
+func TestComparisonModeIsAnythingBeyondTheLegacyPair(t *testing.T) {
+	for in, want := range map[string]bool{
+		"": false, "dostoevsky": false, "jetstream": false, "dostoevsky,jetstream": false,
+		"dostoevsky,rabbitmq": true, "rabbitmq": true, "dostoevsky,jetstream,sqlite": true, "kafka,jetstream": true,
+	} {
+		var list []string
+		if in != "" {
+			list = strings.Split(in, ",")
+		}
+		if got := comparisonMode(list); got != want {
+			t.Errorf("comparisonMode(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

@@ -229,7 +229,7 @@ func renderMulti(c chart, data []series, footer []string) string {
 	if c.multiTitle != "" {
 		title = c.multiTitle
 	}
-	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(title), html.EscapeString(alt+" "+verdict), styleMulti)
+	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(title), html.EscapeString(alt+" "+verdict+notShownSentence()), styleMulti)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(title))
 	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", strings.TrimSpace(c.note + " " + verdict)}
 	if c.explain != "" && losing(data, c.lower) {
@@ -388,4 +388,45 @@ func checkEngineSet(trials []trial, expected, ignored []string) error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// comparisonMode is true when the declared engines include anything but dostoevsky and
+// jetstream: the legacy renderer and the legacy meta apply only to a subset of that pair.
+func comparisonMode(declared []string) bool {
+	for _, e := range declared {
+		if e != "dostoevsky" && e != "jetstream" {
+			return true
+		}
+	}
+	return false
+}
+
+// leftOut returns the engines that appear in the receipt and are ignored rather than
+// charted, in engineOrder, so an omission is named on the chart and never silent.
+func leftOut(trials []trial, expected, ignored []string) []string {
+	present := map[string]bool{}
+	for _, t := range trials {
+		if e := t["engine"]; e != "" {
+			present[e] = true
+		}
+	}
+	var out []string
+	for _, e := range ignored {
+		if present[e] && !inEngines(e, expected) {
+			out = append(out, e)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return engineRank(out[i]) < engineRank(out[j]) })
+	return out
+}
+
+func notShownLine() string {
+	return "Not shown: " + strings.Join(notShown, ", ") + " (excluded with -ignore-engines)"
+}
+
+func notShownSentence() string {
+	if len(notShown) == 0 {
+		return ""
+	}
+	return " " + notShownLine() + "."
 }

@@ -25,7 +25,7 @@ const server = http.createServer(async (req, res) => {
       "Dostoevsky-Key": encodeURIComponent("+/λ"), "Dostoevsky-ID": "x", "Dostoevsky-Time": "2026-01-01T00:00:00Z" });
   }
   if (op === "position") return send(200, Buffer.from([1, 2]), { "Dostoevsky-Next": "3" });
-  if (op === "commit") return send(204);
+  if (op === "commit") return u.searchParams.get("group") === "withbody" ? send(200, "an unexpected body") : send(204);
   send(404, "not found\n");
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -74,4 +74,9 @@ test("the token only travels over https or to loopback", () => {
 
 test("an oversized response is refused", async () => {
   await assert.rejects(client.read("jobs", 0, 77n), (e) => e instanceof ClientError && e.code === "oversized_response");
+});
+
+test("commit disposes of an unexpected body", async () => {
+  await client.commit("jobs", 0, "withbody", 1n);
+  await client.commit("jobs", 0, "withbody", 2n); // the connection is reusable afterwards
 });

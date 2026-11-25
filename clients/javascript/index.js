@@ -22,14 +22,29 @@ function checkUrl(url) {
 
 async function bounded(res, limit) {
   const declared = Number(res.headers.get("content-length"));
-  if (declared > limit) { await res.body?.cancel(); throw new ClientError(res.status, "oversized_response"); }
+  if (declared > limit) {
+    await res.body?.cancel();
+    throw new ClientError(res.status, "oversized_response");
+  }
   if (!res.body) return new Uint8Array();
+  // Read through one reader. On any early exit cancel through that reader: cancelling
+  // res.body while a reader holds the lock throws ERR_INVALID_STATE.
+  const reader = res.body.getReader();
   const chunks = [];
   let size = 0;
-  for await (const chunk of res.body) {
-    size += chunk.length;
-    if (size > limit) { await res.body.cancel(); throw new ClientError(res.status, "oversized_response"); }
-    chunks.push(chunk);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > limit) {
+        await reader.cancel();
+        throw new ClientError(res.status, "oversized_response");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
   }
   const out = new Uint8Array(size);
   let at = 0;
@@ -73,7 +88,7 @@ export class Client {
   }
   async read(topic, partition, offset, waitMs = 0) {
     const res = await this.#call("read", { topic, partition, offset, wait_ms: waitMs });
-    if (res.status === 204) return null;
+    if (res.status === 204) { await res.body?.cancel(); return null; }
     return { ...receipt(res.headers), key: decodeURIComponent(res.headers.get("Dostoevsky-Key")),
       id: decodeURIComponent(res.headers.get("Dostoevsky-ID")), time: res.headers.get("Dostoevsky-Time"),
       value: await bounded(res, MAX_BODY) };
@@ -83,6 +98,7 @@ export class Client {
     return { next: BigInt(res.headers.get("Dostoevsky-Next")), state: await bounded(res, MAX_BODY) };
   }
   async commit(topic, partition, group, expected, state = new Uint8Array()) {
-    await this.#call("commit", { topic, partition, group, expected }, state);
+    const res = await this.#call("commit", { topic, partition, group, expected }, state);
+    await res.body?.cancel(); // a success carries no body; release the connection either way
   }
 }

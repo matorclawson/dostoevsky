@@ -61,11 +61,12 @@ func TestMemoryNeedsAServerProcess(t *testing.T) {
 // A pinned run is a separate row and only when asked for.
 func TestTheGatewayControlIsUnpinnedByDefaultAndPinnedOnlyOnRequest(t *testing.T) {
 	t.Setenv("BENCH_GATEWAY_GOMAXPROCS", "")
-	if engineLabel() != "gateway" || gatewayEnv() != nil {
-		t.Fatalf("default: label %q env %v", engineLabel(), gatewayEnv())
+	t.Setenv("GOMAXPROCS", "2") // set in the parent: the headline child must NOT inherit it
+	if engineLabel() != "gateway" || len(gatewayEnv()) != 1 || gatewayEnv()[0] != "GOMAXPROCS=" {
+		t.Fatalf("default: label %q env %v (it must clear an inherited GOMAXPROCS)", engineLabel(), gatewayEnv())
 	}
 	t.Setenv("BENCH_GATEWAY_GOMAXPROCS", "unpinned")
-	if engineLabel() != "gateway" || gatewayEnv() != nil {
+	if engineLabel() != "gateway" || len(gatewayEnv()) != 1 || gatewayEnv()[0] != "GOMAXPROCS=" {
 		t.Fatalf("unpinned: label %q env %v", engineLabel(), gatewayEnv())
 	}
 	t.Setenv("BENCH_GATEWAY_GOMAXPROCS", "1")

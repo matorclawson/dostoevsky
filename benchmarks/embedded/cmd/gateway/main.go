@@ -127,11 +127,14 @@ func pinnedProcs() string {
 	return v
 }
 
+// gatewayEnv is the extra environment of the gateway child. The child inherits the parent's environment, so the headline
+// control CLEARS GOMAXPROCS (an empty value is ignored by the Go runtime, and the last duplicate wins): a pin that happens to
+// be set in the harness's environment must not silently pin the gateway while the row is labelled unpinned.
 func gatewayEnv() []string {
 	if p := pinnedProcs(); p != "" {
 		return []string{"GOMAXPROCS=" + p}
 	}
-	return nil
+	return []string{"GOMAXPROCS="}
 }
 
 func engineLabel() string {

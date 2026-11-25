@@ -137,6 +137,9 @@ func (h *latHist) quantile(q float64) time.Duration {
 	return 0
 }
 
+// telemetryBound is how long the final line waits for the disk figures: a slow disk walk must not hold the receipt back.
+var telemetryBound = time.Second
+
 // us3 prints a duration as microseconds with three decimals (the upper bin edge, nothing rounded away).
 func us3(d time.Duration) string { return strconv.FormatFloat(float64(d)/1000, 'f', 3, 64) }
 
@@ -192,6 +195,16 @@ func (l *lockedWriter) Write(b []byte) (int, error) {
 
 func (l *lockedWriter) shutOff() { l.mu.Lock(); l.shut = true; l.mu.Unlock() }
 
+// finish writes the final receipt line and shuts the writer in one step.
+func (l *lockedWriter) finish(line string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.shut {
+		io.WriteString(l.w, line)
+	}
+	l.shut = true
+}
+
 func executeSustained(engine string, open func(string, bool) (Store, error), o Sustained, out io.Writer) (err error) {
 	lw := &lockedWriter{w: out}
 	out = lw
@@ -213,7 +226,12 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	if err != nil {
 		return err
 	}
+	// keepDir: the data directory is left in place when abandoned work may still own the store (it is named in the reason).
+	keepDir := false
 	defer func() {
+		if keepDir {
+			return
+		}
 		if rerr := removeAll(dir); rerr != nil && err == nil {
 			err = rerr
 		}
@@ -277,6 +295,17 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		setStop(StopFailed, text)
 	}
 	stride := max(o.Target/2000, 1)
+	// guarded is the host memory guard that also records the available memory at the cut-off, for the final line.
+	var cutoffKiB atomic.Uint64
+	guarded := func() error {
+		e := checkMemory()
+		if e != nil {
+			if k, err := memAvailable(); err == nil {
+				cutoffKiB.CompareAndSwap(0, max(k, 1))
+			}
+		}
+		return e
+	}
 
 	start := time.Now()
 	deadline := start.Add(o.Window) // monotonic: producers check it themselves, so slow telemetry cannot extend the window
@@ -359,6 +388,17 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		}
 		return
 	}
+	// diskTextBounded is diskText with a deadline, for the final line: a slow disk walk does not hold the receipt back.
+	diskTextBounded := func() (used, free string) {
+		ch := make(chan [2]string, 1)
+		go func() { u, f := diskText(); ch <- [2]string{u, f} }()
+		select {
+		case r := <-ch:
+			return r[0], r[1]
+		case <-time.After(telemetryBound):
+			return "unmeasured", "unmeasured"
+		}
+	}
 
 	// verify reads back a sample of acknowledged records that retention has not dropped:
 	// the strided sample across the whole run and the most recent ones.
@@ -400,7 +440,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		want := make([]byte, 512) // the whole record: the index in the first 8 bytes, zeros after, as published
 		for _, p := range pairs {
 			if guardEvery++; guardEvery%64 == 1 { // the host memory guard also covers a long verification
-				if me := checkMemory(); me != nil {
+				if me := guarded(); me != nil {
 					return 0, memoryCut{me}
 				}
 			}
@@ -424,7 +464,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		if over.Load() && !final { // the run ended while a background reopen waited for the lock: it must not touch the store now
 			return nil
 		}
-		if me := checkMemory(); me != nil {
+		if me := guarded(); me != nil {
 			return fail(StopMemory, "stopped by the host memory guard before the reopen at %d acknowledged (%v)", acked.Load(), me)
 		}
 		if e := closeStore(); e != nil {
@@ -511,7 +551,7 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 				nextReopen += o.ReopenEvery
 			}
 		case now := <-tick.C:
-			if e := checkMemory(); e != nil {
+			if e := guarded(); e != nil {
 				setStop(StopMemory, fmt.Sprintf("stopped by the host memory guard at %d acknowledged (%v); the engine had not finished", acked.Load(), e))
 				cancel() // a store waiting on a server stops waiting
 			} else if kib, e := diskFreeKiB(dir); e == nil && o.MinFreeDiskKiB > 0 && kib < o.MinFreeDiskKiB {
@@ -594,25 +634,61 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 		st = &stopInfo{st.kind, fmt.Sprintf("window of %v ended at %d acknowledged", o.Window, acked.Load()), st.at}
 	}
 	if abandoned {
-		// A publish that never settled may or may not have been stored: not a normal stop, and nothing is closed over it.
-		st = &stopInfo{StopFailed, st.text + "; ambiguous: producers still inside a publish after " + abandonAfter.String() + " were abandoned", st.at}
+		// A publish that never settled may or may not have been stored: not a normal stop. The store may still be owned by
+		// that publish, so nothing is closed, the data directory is left in place, and no live store field is read.
+		noClose, keepDir = true, true
+		st = &stopInfo{StopFailed, st.text + "; ambiguous: producers still inside a publish after " + abandonAfter.String() + " were abandoned; the data directory " + dir + " was left in place", st.at}
 	}
 	if retentionStuck {
-		noClose = true
-		st = &stopInfo{StopFailed, st.text + "; retention or a reopen still running after " + abandonAfter.String() + ", the store was not closed", st.at}
+		noClose, keepDir = true, true
+		st = &stopInfo{StopFailed, st.text + "; retention or a reopen still running after " + abandonAfter.String() + ", the store was not closed; the data directory " + dir + " was left in place", st.at}
 	}
-	if (st.kind == StopReached || st.kind == StopWindow) && !abandoned && !retentionStuck {
+	owned := !abandoned && !retentionStuck // only then is the store ours to reopen, read and close
+	// A guard that can cancel across the final phases (reopen, verification, close), not just between calls.
+	guardStop := make(chan struct{})
+	guardDone := make(chan struct{})
+	go func() {
+		defer close(guardDone)
+		t := time.NewTicker(tickEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-guardStop:
+				return
+			case <-t.C:
+				if e := guarded(); e != nil {
+					cancel() // a store waiting on a server stops waiting
+					return
+				}
+			}
+		}
+	}()
+	if (st.kind == StopReached || st.kind == StopWindow) && owned {
 		// A finished run closes, reopens and verifies once more; a problem there is the result.
 		if bad := reopen(true); bad != nil {
 			st = bad
 		}
 	}
-	harness, server := maxRSSKiB(), serverPeak()
-	used, free := diskText()
+	harness, server := maxRSSKiB(), "unmeasured"
+	if owned {
+		server = serverPeak()
+	}
+	used, free := diskTextBounded()
 	if e := closeStore(); e != nil && st.kind != StopFailed {
 		st = &stopInfo{StopFailed, st.text + "; close: " + e.Error(), st.at}
 	}
-	fmt.Fprintf(out, "sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%s reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s reason=%q\n",
-		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens, finalReopenMS, harness, server, used, availMemText(), free, st.text)
+	close(guardStop)
+	<-guardDone
+	// Checked once more before a normal completion is reported: memory that fell during the final close is still a cut-off.
+	if e := guarded(); e != nil && (st.kind == StopReached || st.kind == StopWindow) {
+		st = &stopInfo{StopMemory, fmt.Sprintf("stopped by the host memory guard before completion at %d acknowledged (%v)", acked.Load(), e), time.Now()}
+	}
+	cut := "none"
+	if k := cutoffKiB.Load(); k > 0 && st.kind == StopMemory {
+		cut = strconv.FormatUint(k, 10)
+	}
+	// The final line and the shut-off of the writer are ONE step: nothing can print after the receipt.
+	lw.finish(fmt.Sprintf("sustained engine=%s workers=%d target=%d window_s=%.0f stop=%s acked=%d seconds=%.1f msgs_per_s=%.0f p99_us=%s reopens=%d final_reopen_ms=%s harness_peak_rss_KiB=%d server_peak_rss_KiB=%s disk_KiB=%s avail_mem_KiB=%s avail_disk_KiB=%s mem_cutoff_KiB=%s reason=%q\n",
+		engine, o.Workers, o.Target, o.Window.Seconds(), st.kind, acked.Load(), elapsed.Seconds(), float64(acked.Load())/elapsed.Seconds(), us3(total.quantile(0.99)), reopens, finalReopenMS, harness, server, used, availMemText(), free, cut, st.text))
 	return nil
 }

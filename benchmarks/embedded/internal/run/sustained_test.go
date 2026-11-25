@@ -594,7 +594,7 @@ func TestSustainedTheMemoryGuardCoversTheFinalVerification(t *testing.T) {
 			}
 			return 1 << 30, nil
 		})
-	if r["stop"] != StopMemory || !strings.Contains(r["reason"], "memory guard") {
+	if r["stop"] != StopMemory || !strings.Contains(r["reason"], "memory guard") || r["mem_cutoff_KiB"] != "100" {
 		t.Fatalf("%v", r)
 	}
 }
@@ -618,5 +618,49 @@ func TestSustainedNothingIsPrintedAfterTheFinalLine(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if out.String() != before || !strings.HasPrefix(before[strings.LastIndex(strings.TrimSpace(before), "\n")+1:], "sustained ") {
 		t.Fatalf("output after the final line: %q", out.String())
+	}
+}
+
+// M2: an abandoned (ambiguous) publish owns the store: it is never closed over, the data directory is kept, and the
+// receipt does not wait for a slow disk probe.
+func TestSustainedAnAbandonedPublishIsNeverClosedOverAndTheReceiptIsNotHeldBack(t *testing.T) {
+	old, oldBound := abandonAfter, telemetryBound
+	abandonAfter, telemetryBound = 100*time.Millisecond, 50*time.Millisecond
+	oldUsed := diskUsedKiB
+	diskUsedKiB = func(string) (uint64, error) { time.Sleep(700 * time.Millisecond); return 1, nil }
+	t.Cleanup(func() { abandonAfter, telemetryBound, diskUsedKiB = old, oldBound, oldUsed })
+	h := hangs{newFake(), make(chan struct{})}
+	t.Cleanup(func() { close(h.release) })
+	begin := time.Now()
+	_, r := sustainedRun(t, func() Store { return h }, Sustained{Window: 20 * time.Millisecond, Target: 1_000_000_000, Workers: 2, Bucket: time.Hour})
+	if took := time.Since(begin); took > 500*time.Millisecond {
+		t.Fatalf("the receipt waited %v for the disk probe", took)
+	}
+	if n := atomic.LoadInt32(h.fake.closeCount); n != 0 {
+		t.Fatalf("the store was closed %d times over an active publish", n)
+	}
+	if r["stop"] != StopFailed || !strings.Contains(r["reason"], "left in place") {
+		t.Fatalf("%v", r)
+	}
+}
+
+// M3: memory that falls during the final Close is still a cut-off, with the value printed.
+func TestSustainedMemoryThatFallsDuringTheFinalCloseIsACutoff(t *testing.T) {
+	var low atomic.Bool
+	f := newFake()
+	f.onClose = func(n int32) {
+		if n == 2 { // 1 is the final reopen's close, 2 the final close
+			low.Store(true)
+		}
+	}
+	_, r := sustainedRunMem(t, func() Store { return f }, Sustained{Window: 30 * time.Second, Target: 100, Workers: 1, Bucket: time.Hour},
+		func() (uint64, error) {
+			if low.Load() {
+				return 100, nil
+			}
+			return 1 << 30, nil
+		})
+	if r["stop"] != StopMemory || r["mem_cutoff_KiB"] != "100" {
+		t.Fatalf("%v", r)
 	}
 }

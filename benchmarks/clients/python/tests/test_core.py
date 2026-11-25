@@ -58,12 +58,18 @@ class HistTest(unittest.TestCase):
         h = core.Hist()
         for ns in VECTOR["durations_ns"]:
             h.add_ns(ns)
-        for q, want in VECTOR["quantiles_us"].items():
-            self.assertEqual(h.quantile_us(float(q)), want, q)
+        for q, want in VECTOR["quantiles_ns"].items():
+            self.assertEqual(h.quantile_ns(float(q)), want, q)
+
+    def test_a_short_sample_keeps_its_sub_microsecond_precision(self):
+        h = core.Hist()
+        h.add_ns(1900)
+        got = h.quantile_ns(0.5)
+        self.assertTrue(1900 <= got <= 1900 * 1.0101, got)  # not rounded down to 1 us
 
     def test_an_empty_histogram_has_no_quantiles_and_merging_adds(self):
         a, b = core.Hist(), core.Hist()
-        self.assertEqual(a.quantile_us(0.99), 0)
+        self.assertEqual(a.quantile_ns(0.99), 0)
         a.add_ns(5000)
         b.add_ns(5000)
         a.merge(b)

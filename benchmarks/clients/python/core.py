@@ -46,8 +46,8 @@ class Hist:
     def total(self) -> int:
         return sum(self.n)
 
-    def quantile_us(self, q: float) -> int:
-        """The upper edge of the bin holding the q-th quantile, in whole microseconds."""
+    def quantile_ns(self, q: float) -> int:
+        """The upper edge of the bin holding the q-th quantile, in whole nanoseconds."""
         total = self.total()
         if total == 0:
             return 0
@@ -56,8 +56,12 @@ class Hist:
         for i, c in enumerate(self.n):
             seen += c
             if seen >= rank:
-                return int(math.pow(1.01, i + 1) * 1e3) // 1000
+                return int(math.pow(1.01, i + 1) * 1e3)
         return 0
+
+    def quantile_us_text(self, q: float) -> str:
+        """The quantile as receipts print it: microseconds with three decimals, nothing rounded away."""
+        return f"{self.quantile_ns(q) / 1000:.3f}"
 
 
 _CLASS = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
@@ -198,9 +202,9 @@ def receipt_line(engine: str, workers: int, res: Result, verified: int, client: 
         f"engine={engine}", f"workers={workers}", f"result={'ok' if ok else 'FAILED'}",
         f"acked={res.acked}", f"verified={verified}",
         f"records/s={rate:.0f}", f"elapsed_s={res.elapsed:.2f}",
-        f"p50_us={res.hist.quantile_us(0.50)}", f"p95_us={res.hist.quantile_us(0.95)}",
-        f"p99_us={res.hist.quantile_us(0.99)}", f"p99_9_us={res.hist.quantile_us(0.999)}",
-        f"p99_99_us={res.hist.quantile_us(0.9999)}", "quantiles=bin-upper-1pct",
+        f"p50_us={res.hist.quantile_us_text(0.50)}", f"p95_us={res.hist.quantile_us_text(0.95)}",
+        f"p99_us={res.hist.quantile_us_text(0.99)}", f"p99_9_us={res.hist.quantile_us_text(0.999)}",
+        f"p99_99_us={res.hist.quantile_us_text(0.9999)}", "quantiles=bin-upper-1pct",
         f"client_rss_KiB={rss_kib}", "client_rss_source=ru_maxrss",
         "lang=python", f"client={_token(client)}", f"client_build={_token(build)}",
     ]

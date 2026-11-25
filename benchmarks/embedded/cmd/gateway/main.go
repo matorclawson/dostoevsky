@@ -20,6 +20,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,7 +40,18 @@ type store struct {
 	client *http.Client
 	base   string // http://127.0.0.1:port
 	token  string
-	proc   *serverproc.Proc // nil in tests that bring their own server
+	// proc is nil in tests that bring their own server.
+	proc *serverproc.Proc
+	// ctx is nil outside tests: requests then run under the harness's run context.
+	ctx func() context.Context
+}
+
+// context is what every request runs under, so the memory guard's cancel ends a request that is waiting.
+func (s store) context() context.Context {
+	if s.ctx != nil {
+		return s.ctx()
+	}
+	return run.Context()
 }
 
 func newClient(workers int) *http.Client {
@@ -59,7 +71,7 @@ func (s store) do(method, path string, body []byte) (*http.Response, []byte, err
 	if body != nil {
 		rd = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, s.base+prefix+path, rd)
+	req, err := http.NewRequestWithContext(s.context(), method, s.base+prefix+path, rd)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -173,10 +185,10 @@ func main() {
 		// The same code that starts the gateway for the language benchmarks (internal/servers).
 		// Start returns after an authorized read succeeded, which ends the timed restart:
 		// reopen is the process start until the gateway answers a read.
-		srv, err := servers.Start("gateway", servers.Options{Bin: bin, Dir: dir, Env: gatewayEnv()})
+		srv, err := servers.Start("gateway", servers.Options{Ctx: run.Context(), Bin: bin, Dir: dir, Env: gatewayEnv()})
 		if err != nil {
 			return nil, err
 		}
-		return store{newClient(workers), "http://" + srv.Addr, srv.Token, srv.Proc}, nil
+		return store{client: newClient(workers), base: "http://" + srv.Addr, token: srv.Token, proc: srv.Proc}, nil
 	})
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -18,14 +17,14 @@ type store struct {
 }
 
 func (s store) Publish(data []byte) (uint64, error) {
-	ack, e := s.js.Publish(context.Background(), "events", data)
+	ack, e := s.js.Publish(run.Context(), "events", data)
 	if e != nil {
 		return 0, e
 	}
 	return ack.Sequence, nil
 }
 func (s store) Read(i uint64) ([]byte, error) {
-	r, e := s.stream.GetMsg(context.Background(), i)
+	r, e := s.stream.GetMsg(run.Context(), i)
 	if e != nil {
 		return nil, e
 	}
@@ -52,9 +51,9 @@ func main() {
 		}
 		var stream jetstream.Stream
 		if create {
-			stream, e = js.CreateStream(context.Background(), jetstream.StreamConfig{Name: "EVENTS", Subjects: []string{"events"}, Storage: jetstream.FileStorage, Replicas: 1})
+			stream, e = js.CreateStream(run.Context(), jetstream.StreamConfig{Name: "EVENTS", Subjects: []string{"events"}, Storage: jetstream.FileStorage, Replicas: 1})
 		} else {
-			stream, e = js.Stream(context.Background(), "EVENTS")
+			stream, e = js.Stream(run.Context(), "EVENTS")
 		}
 		return store{s, nc, js, stream}, e
 	})

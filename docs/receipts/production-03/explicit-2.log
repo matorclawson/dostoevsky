@@ -1,0 +1,44 @@
+go: downloading github.com/nats-io/nats-server/v2 v2.15.3
+go: downloading github.com/nats-io/nats.go v1.56.0
+go: downloading github.com/klauspost/compress v1.20.4
+go: downloading github.com/nats-io/nkeys v0.4.17
+go: downloading github.com/nats-io/nuid v1.0.1
+go: downloading github.com/antithesishq/antithesis-sdk-go v0.9.0-default-no-op
+go: downloading github.com/minio/highwayhash v1.0.4
+go: downloading github.com/nats-io/jwt/v2 v2.8.3
+go: downloading golang.org/x/crypto v0.58.0
+go: downloading golang.org/x/time v0.16.0
+go: downloading golang.org/x/sys v0.50.0
+trial=1 engine=dostoevsky workers=1 verified=16000 records/s=943 p95_us=1697 p99_us=2823 liveHeap_KiB=705 peakRSS_KiB=9404 reopen_ms=186.88 verified_reads_per_s=73045
+trial=1 engine=jetstream workers=1 verified=16000 records/s=706 p95_us=2690 p99_us=4534 liveHeap_KiB=9590 peakRSS_KiB=44684 reopen_ms=16.85 verified_reads_per_s=9254
+trial=1 engine=dostoevsky workers=8 verified=16000 records/s=2919 p95_us=4953 p99_us=6708 liveHeap_KiB=719 peakRSS_KiB=10204 reopen_ms=197.71 verified_reads_per_s=74696
+trial=1 engine=jetstream workers=8 verified=16000 records/s=879 p95_us=14169 p99_us=22667 liveHeap_KiB=9604 peakRSS_KiB=44008 reopen_ms=14.33 verified_reads_per_s=9544
+trial=1 engine=dostoevsky workers=32 verified=16000 records/s=6228 p95_us=11030 p99_us=16094 liveHeap_KiB=731 peakRSS_KiB=10380 reopen_ms=200.24 verified_reads_per_s=71750
+trial=1 engine=jetstream workers=32 verified=16000 records/s=733 p95_us=68571 p99_us=88151 liveHeap_KiB=9630 peakRSS_KiB=44960 reopen_ms=19.53 verified_reads_per_s=11360
+trial=2 engine=jetstream workers=1 verified=16000 records/s=746 p95_us=2525 p99_us=4360 liveHeap_KiB=9624 peakRSS_KiB=44208 reopen_ms=14.17 verified_reads_per_s=10510
+trial=2 engine=dostoevsky workers=1 verified=16000 records/s=880 p95_us=1904 p99_us=3193 liveHeap_KiB=705 peakRSS_KiB=9404 reopen_ms=199.86 verified_reads_per_s=72258
+trial=2 engine=jetstream workers=8 verified=16000 records/s=823 p95_us=15438 p99_us=21795 liveHeap_KiB=9606 peakRSS_KiB=44152 reopen_ms=14.52 verified_reads_per_s=9443
+trial=2 engine=dostoevsky workers=8 verified=16000 records/s=3115 p95_us=4434 p99_us=6433 liveHeap_KiB=717 peakRSS_KiB=10080 reopen_ms=213.34 verified_reads_per_s=66245
+trial=2 engine=jetstream workers=32 verified=16000 records/s=893 p95_us=49524 p99_us=60336 liveHeap_KiB=9631 peakRSS_KiB=44464 reopen_ms=15.16 verified_reads_per_s=9814
+trial=2 engine=dostoevsky workers=32 verified=16000 records/s=7635 p95_us=7357 p99_us=13938 liveHeap_KiB=730 peakRSS_KiB=10300 reopen_ms=211.32 verified_reads_per_s=70956
+trial=3 engine=dostoevsky workers=1 verified=16000 records/s=800 p95_us=2364 p99_us=4153 liveHeap_KiB=705 peakRSS_KiB=9660 reopen_ms=209.92 verified_reads_per_s=73186
+trial=3 engine=jetstream workers=1 verified=16000 records/s=729 p95_us=2494 p99_us=4269 liveHeap_KiB=9590 peakRSS_KiB=44360 reopen_ms=16.90 verified_reads_per_s=9879
+trial=3 engine=dostoevsky workers=8 verified=16000 records/s=2947 p95_us=5204 p99_us=7947 liveHeap_KiB=720 peakRSS_KiB=10128 reopen_ms=208.60 verified_reads_per_s=66410
+trial=3 engine=jetstream workers=8 verified=16000 records/s=874 p95_us=13999 p99_us=19054 liveHeap_KiB=9625 peakRSS_KiB=44704 reopen_ms=14.17 verified_reads_per_s=10045
+trial=3 engine=dostoevsky workers=32 verified=16000 records/s=7764 p95_us=6756 p99_us=9383 liveHeap_KiB=730 peakRSS_KiB=10268 reopen_ms=199.52 verified_reads_per_s=70537
+trial=3 engine=jetstream workers=32 verified=16000 records/s=884 p95_us=48097 p99_us=63340 liveHeap_KiB=9630 peakRSS_KiB=44640 reopen_ms=14.02 verified_reads_per_s=10446
+trial=4 engine=jetstream workers=1 verified=16000 records/s=813 p95_us=1903 p99_us=3011 liveHeap_KiB=9601 peakRSS_KiB=44216 reopen_ms=18.12 verified_reads_per_s=9328
+trial=4 engine=dostoevsky workers=1 verified=16000 records/s=900 p95_us=1774 p99_us=2868 liveHeap_KiB=711 peakRSS_KiB=9532 reopen_ms=198.59 verified_reads_per_s=73220
+trial=4 engine=jetstream workers=8 verified=16000 records/s=809 p95_us=16337 p99_us=23331 liveHeap_KiB=9608 peakRSS_KiB=44380 reopen_ms=14.90 verified_reads_per_s=9528
+trial=4 engine=dostoevsky workers=8 verified=16000 records/s=2943 p95_us=5048 p99_us=8034 liveHeap_KiB=724 peakRSS_KiB=10152 reopen_ms=193.75 verified_reads_per_s=71682
+trial=4 engine=jetstream workers=32 verified=16000 records/s=815 p95_us=58219 p99_us=75866 liveHeap_KiB=9631 peakRSS_KiB=44664 reopen_ms=13.80 verified_reads_per_s=10124
+trial=4 engine=dostoevsky workers=32 verified=16000 records/s=7929 p95_us=6445 p99_us=7682 liveHeap_KiB=731 peakRSS_KiB=10044 reopen_ms=203.78 verified_reads_per_s=53956
+trial=5 engine=dostoevsky workers=1 verified=16000 records/s=867 p95_us=1953 p99_us=3622 liveHeap_KiB=710 peakRSS_KiB=9660 reopen_ms=209.41 verified_reads_per_s=71107
+trial=5 engine=jetstream workers=1 verified=16000 records/s=812 p95_us=1896 p99_us=3129 liveHeap_KiB=9592 peakRSS_KiB=43820 reopen_ms=14.49 verified_reads_per_s=9417
+trial=5 engine=dostoevsky workers=8 verified=16000 records/s=3087 p95_us=4532 p99_us=6991 liveHeap_KiB=723 peakRSS_KiB=10188 reopen_ms=202.85 verified_reads_per_s=64942
+trial=5 engine=jetstream workers=8 verified=16000 records/s=806 p95_us=15981 p99_us=24682 liveHeap_KiB=9604 peakRSS_KiB=44200 reopen_ms=14.64 verified_reads_per_s=9183
+trial=5 engine=dostoevsky workers=32 verified=16000 records/s=7964 p95_us=6596 p99_us=9686 liveHeap_KiB=730 peakRSS_KiB=10436 reopen_ms=207.71 verified_reads_per_s=68188
+trial=5 engine=jetstream workers=32 verified=16000 records/s=707 p95_us=74263 p99_us=93496 liveHeap_KiB=9629 peakRSS_KiB=45112 reopen_ms=16.97 verified_reads_per_s=8841
+workers=1 records/s=880/746 peakRSS_KiB=9532/44216 (Dostoevsky/JetStream)
+workers=8 records/s=2947/823 peakRSS_KiB=10152/44200 (Dostoevsky/JetStream)
+workers=32 records/s=7764/815 peakRSS_KiB=10300/44664 (Dostoevsky/JetStream)

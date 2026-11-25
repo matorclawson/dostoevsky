@@ -1,6 +1,4 @@
-"""Tests of the interop script's own plumbing (not the clients). From the repository root:
-    PYTHONPATH=clients/python python3 -m unittest scripts/test_client_interop.py
-"""
+"""Tests of the interop script's own plumbing (not the clients). From the repository root: make test-scripts"""
 import os
 import subprocess
 import sys

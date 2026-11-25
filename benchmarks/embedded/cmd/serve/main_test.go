@@ -67,6 +67,11 @@ func TestServeRefusesWhatItCannotStart(t *testing.T) {
 	if err := serve(context.Background(), "redis", "", strings.NewReader(""), &out); err == nil || !strings.Contains(err.Error(), "no server binary") {
 		t.Fatalf("no binary: %v", err)
 	}
+	t.Setenv("BENCH_KAFKA_HOME", "")
+	t.Setenv("BENCH_JAVA_HOME", "")
+	if err := serve(context.Background(), "kafka", "", strings.NewReader(""), &out); err == nil || !strings.Contains(err.Error(), "BENCH_KAFKA_HOME") {
+		t.Fatalf("kafka without its homes: %v", err)
+	}
 	if out.Len() != 0 {
 		t.Fatalf("printed %q although nothing started", out.String())
 	}

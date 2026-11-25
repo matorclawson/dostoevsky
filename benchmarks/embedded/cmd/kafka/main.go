@@ -11,59 +11,26 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/run"
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/serverproc"
+	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/servers"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-const topic = "events"
-
-// brokerConfig is one trial's server.properties. The keys come from the Kafka
-// 4.4 KRaft documentation (https://kafka.apache.org/44/operations/kraft/); the
-// durability keys are listed in benchmarks/comparison/ENGINES.md.
+// The broker's configuration, client options, clean-shutdown check and topic handling live in
+// internal/servers, shared with the language client benchmarks. These names stay for this
+// command's own use and its tests.
 func brokerConfig(dir string, port, controllerPort int) string {
-	return strings.Join([]string{
-		"process.roles=broker,controller",
-		"node.id=1",
-		fmt.Sprintf("controller.quorum.bootstrap.servers=127.0.0.1:%d", controllerPort),
-		fmt.Sprintf("listeners=PLAINTEXT://127.0.0.1:%d,CONTROLLER://127.0.0.1:%d", port, controllerPort),
-		fmt.Sprintf("advertised.listeners=PLAINTEXT://127.0.0.1:%d", port),
-		"controller.listener.names=CONTROLLER",
-		"listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
-		"inter.broker.listener.name=PLAINTEXT",
-		"log.dirs=" + filepath.Join(dir, "kafka-logs"),
-		"num.partitions=1",
-		"default.replication.factor=1",
-		"min.insync.replicas=1",
-		"offsets.topic.replication.factor=1",
-		"transaction.state.log.replication.factor=1",
-		"transaction.state.log.min.isr=1",
-		"group.initial.rebalance.delay.ms=0",
-		"log.flush.interval.messages=1",
-		"auto.create.topics.enable=false",
-		"",
-	}, "\n")
+	return servers.KafkaConfig(dir, port, controllerPort)
 }
+func clientOptions(addr string) []kgo.Opt { return servers.KafkaClientOptions(addr) }
+func cleanShutdown(logDir string) error   { return servers.KafkaCleanShutdown(logDir) }
+func closeClient(c *kgo.Client)           { servers.CloseKafkaClient(c) }
 
-// clientOptions: acks=all, no idempotent producer and no record retries, so an
-// ambiguous produce fails the trial instead of being sent again. Topics are never
-// auto-created: the harness creates the topic before the timed span.
-func clientOptions(addr string) []kgo.Opt {
-	return []kgo.Opt{
-		kgo.SeedBrokers(addr),
-		kgo.RequiredAcks(kgo.AllISRAcks()),
-		kgo.DisableIdempotentWrite(),
-		kgo.RecordRetries(0),
-	}
-}
+const topic = servers.KafkaTopic
 
 // Every blocking call to the broker below runs under the trial context (cancelled
 // when the memory guard trips) with its own deadline; where franz-go has no
@@ -148,17 +115,6 @@ func (s *store) Read(offset uint64) ([]byte, error) {
 
 func (s *store) ServerPeakKiB() (uint64, error) { return s.proc.PeakKiB() }
 
-// closeClient relies on franz-go's Client.Close, which stops the client and fails
-// every record still buffered (it does not flush them), instead of calling
-// AbortBufferedRecords first: a trial that reaches cleanup has either finished or
-// failed, and nothing buffered may be waited for. The broker is killed right after.
-func closeClient(c *kgo.Client) {
-	if c != nil {
-		// A close that hangs must not hold cleanup open; the broker is killed next.
-		run.Within(context.Background(), 10*time.Second, func() error { c.Close(); return nil })
-	}
-}
-
 func (s *store) Close() {
 	closeClient(s.reader)
 	closeClient(s.client)
@@ -169,70 +125,6 @@ func (s *store) Close() {
 		panic(err)
 	}
 }
-
-// ensureTopic creates the topic (when fresh) with one partition and a replication
-// factor of one, then waits until its leader is ready. It runs before the timed
-// publish span so topic creation can never land inside a measured publish.
-func ensureTopic(client *kgo.Client, fresh bool, deadline time.Time) error {
-	if fresh {
-		req := kmsg.NewPtrCreateTopicsRequest()
-		t := kmsg.NewCreateTopicsRequestTopic()
-		t.Topic, t.NumPartitions, t.ReplicationFactor = topic, 1, 1
-		req.Topics = append(req.Topics, t)
-		ctx, cancel := context.WithTimeout(run.Context(), 30*time.Second)
-		resp, err := client.Request(ctx, req)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("create topic: %w", err)
-		}
-		for _, rt := range resp.(*kmsg.CreateTopicsResponse).Topics {
-			if rt.ErrorCode != 0 {
-				return fmt.Errorf("create topic %s: error code %d", rt.Topic, rt.ErrorCode)
-			}
-		}
-	}
-	for {
-		md := kmsg.NewPtrMetadataRequest()
-		mt := kmsg.NewMetadataRequestTopic()
-		name := topic
-		mt.Topic = &name
-		md.Topics = append(md.Topics, mt)
-		ctx, cancel := context.WithTimeout(run.Context(), 10*time.Second)
-		resp, err := client.Request(ctx, md)
-		cancel()
-		if err == nil {
-			for _, rt := range resp.(*kmsg.MetadataResponse).Topics {
-				if rt.ErrorCode == 0 && len(rt.Partitions) == 1 && rt.Partitions[0].ErrorCode == 0 && rt.Partitions[0].Leader >= 0 {
-					return nil
-				}
-			}
-		}
-		if err := run.Context().Err(); err != nil {
-			return fmt.Errorf("topic readiness stopped: %w", err)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("topic %s has no ready leader: %v", topic, err)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-}
-
-// cleanShutdown confirms from Kafka's own state that the broker shut down cleanly:
-// its log manager writes .kafka_cleanshutdown into each log directory when it does.
-func cleanShutdown(logDir string) error {
-	if _, err := os.Stat(filepath.Join(logDir, ".kafka_cleanshutdown")); err != nil {
-		var names []string
-		if entries, e := os.ReadDir(logDir); e == nil {
-			for _, en := range entries {
-				names = append(names, en.Name())
-			}
-		}
-		return fmt.Errorf("no .kafka_cleanshutdown marker in %s (it holds %v): %w", logDir, names, err)
-	}
-	return nil
-}
-
-func script(home, name string) string { return filepath.Join(home, "bin", name) }
 
 func main() {
 	label := os.Getenv("BENCH_ENGINE_LABEL")
@@ -249,7 +141,6 @@ func main() {
 		if home == "" || java == "" {
 			return nil, fmt.Errorf("BENCH_KAFKA_HOME and BENCH_JAVA_HOME must be set")
 		}
-		env := []string{"JAVA_HOME=" + java, "KAFKA_HEAP_OPTS=-Xms1g -Xmx1g", "LOG_DIR=" + filepath.Join(dir, "logs")}
 		var err error
 		if fresh || port == 0 {
 			if port, err = serverproc.FreePort(); err != nil {
@@ -259,73 +150,11 @@ func main() {
 				return nil, err
 			}
 		}
-		conf := filepath.Join(dir, "server.properties")
-		if err = os.WriteFile(conf, []byte(brokerConfig(dir, port, controller)), 0o600); err != nil {
-			return nil, err
-		}
-		storage := func(args ...string) (string, error) {
-			ctx, cancel := context.WithTimeout(run.Context(), 120*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, script(home, "kafka-storage.sh"), args...)
-			cmd.Env = append(os.Environ(), env...)
-			out, err := cmd.CombinedOutput()
-			return strings.TrimSpace(string(out)), err
-		}
-		if fresh {
-			if clusterID, err = storage("random-uuid"); err != nil || clusterID == "" {
-				return nil, fmt.Errorf("random-uuid: %v %s", err, clusterID)
-			}
-			if out, err := storage("format", "--standalone", "-t", clusterID, "-c", conf); err != nil {
-				return nil, fmt.Errorf("format: %v: %s", err, out)
-			}
-		}
-		proc, err := serverproc.Start(script(home, "kafka-server-start.sh"), []string{conf}, env, filepath.Join(dir, "server.log"), 50*time.Millisecond)
+		k, err := servers.StartKafka(servers.KafkaOptions{Home: home, Java: java, Dir: dir, Fresh: fresh, ClusterID: clusterID, Port: port, ControllerPort: controller})
 		if err != nil {
 			return nil, err
 		}
-		addr := "127.0.0.1:" + strconv.Itoa(port)
-		fail := func(err error) (run.Store, error) {
-			proc.Stop(30 * time.Second)
-			return nil, err
-		}
-		const ready = 180 * time.Second
-		if err = run.Within(run.Context(), ready+5*time.Second, func() error { return proc.WaitReady("tcp", addr, ready) }); err != nil {
-			return fail(err)
-		}
-		client, err := kgo.NewClient(clientOptions(addr)...) // builds the client; it dials lazily
-		if err != nil {
-			return fail(err)
-		}
-		// Readiness is tied to our broker: it must report the cluster ID that this
-		// trial formatted, and it must answer before the deadline.
-		deadline := time.Now().Add(ready)
-		for {
-			ctx, cancel := context.WithTimeout(run.Context(), 5*time.Second)
-			resp, e := client.Request(ctx, kmsg.NewPtrMetadataRequest())
-			cancel()
-			if e == nil {
-				if md, ok := resp.(*kmsg.MetadataResponse); ok && md.ClusterID != nil {
-					if *md.ClusterID == clusterID {
-						break
-					}
-					closeClient(client)
-					return fail(fmt.Errorf("broker reports cluster %q, not this trial's %q", *md.ClusterID, clusterID))
-				}
-			}
-			if cerr := run.Context().Err(); cerr != nil {
-				closeClient(client)
-				return fail(fmt.Errorf("broker readiness stopped: %w", cerr))
-			}
-			if time.Now().After(deadline) {
-				closeClient(client)
-				return fail(fmt.Errorf("broker did not become ready: %v", e))
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-		if err = ensureTopic(client, fresh, time.Now().Add(120*time.Second)); err != nil {
-			closeClient(client)
-			return fail(err)
-		}
-		return &store{client: client, proc: proc, addr: addr, logDir: filepath.Join(dir, "kafka-logs")}, nil
+		clusterID = k.ClusterID
+		return &store{client: k.Client, proc: k.Proc, addr: k.Addr, logDir: k.LogDir}, nil
 	})
 }

@@ -33,25 +33,31 @@ type Server struct {
 	Addr   string // host:port on loopback
 	Token  string // secret for this trial only
 	Proc   *serverproc.Proc
-	name   string // nats: the server_name this trial's configuration carries (not derived from the token)
+	stop   func() error // engine-specific shutdown; nil means a plain Stop
+	name   string       // nats: the server_name this trial's configuration carries (not derived from the token)
 }
 
 // Options select the binary and where the trial's files go.
 type Options struct {
 	Ctx    context.Context // cancels the start: the server is stopped and Start returns (default: never)
-	Bin    string          // the server executable
+	Bin    string          // the server executable (not used by kafka)
+	Home   string          // kafka: the unpacked kafka_2.13-<version> directory
+	Java   string          // kafka: the JDK
 	Env    []string        // extra environment for the server process (for example GOMAXPROCS)
 	Dir    string          // private directory for this trial
 	Sample time.Duration   // memory sampling interval (default 50 ms)
 }
 
 // Engines lists what Start accepts.
-var Engines = []string{"gateway", "redis", "nats"}
+var Engines = []string{"gateway", "redis", "nats", "kafka"}
 
 // Start launches the engine's server and returns once it answers as the launched process.
 func Start(engine string, o Options) (*Server, error) {
 	if o.Ctx == nil {
 		o.Ctx = context.Background()
+	}
+	if engine == "kafka" {
+		return startKafkaServer(o)
 	}
 	if o.Bin == "" {
 		return nil, fmt.Errorf("%s: no server binary given", engine)
@@ -123,7 +129,32 @@ func Start(engine string, o Options) (*Server, error) {
 }
 
 // Stop ends the server and its children and reports whether it stopped cleanly.
-func (s *Server) Stop() error { return s.Proc.Stop(30 * time.Second) }
+func (s *Server) Stop() error {
+	if s.stop != nil {
+		return s.stop()
+	}
+	return s.Proc.Stop(30 * time.Second)
+}
+
+// startKafkaServer starts a fresh single-node broker (the same code the Go comparison runs) on
+// private ports. Kafka has no token: the cluster ID the broker reports is checked against the
+// one this trial formatted, and the ports are private to the trial.
+func startKafkaServer(o Options) (*Server, error) {
+	port, err := serverproc.FreePort()
+	if err != nil {
+		return nil, err
+	}
+	controller, err := serverproc.FreePort()
+	if err != nil {
+		return nil, err
+	}
+	k, err := StartKafka(KafkaOptions{Home: o.Home, Java: o.Java, Dir: o.Dir, Fresh: true, Port: port, ControllerPort: controller, Ctx: o.Ctx, Sample: o.Sample})
+	if err != nil {
+		return nil, fmt.Errorf("kafka: %w", err)
+	}
+	CloseKafkaClient(k.Client) // the driver only needs the broker; workers bring their own clients
+	return &Server{Engine: "kafka", Addr: k.Addr, Proc: k.Proc, stop: k.Stop}, nil
+}
 
 // RedisConfig is one trial's redis.conf: loopback TCP on its own port, a password, and
 // the shared durability settings.
@@ -176,6 +207,8 @@ func (s *Server) confirm(ctx context.Context) error {
 				return fmt.Errorf("redis answered %q (%v), wanted %s", line, err, want)
 			}
 		}
+	case "kafka":
+		// Confirmed inside StartKafka: the broker reported this trial's cluster ID.
 	case "nats":
 		c, err := net.DialTimeout("tcp", s.Addr, 10*time.Second)
 		if err != nil {

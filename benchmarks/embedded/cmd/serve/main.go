@@ -31,7 +31,7 @@ import (
 )
 
 func main() {
-	engine := flag.String("engine", "", "gateway, redis or nats")
+	engine := flag.String("engine", "", "gateway, redis, nats or kafka")
 	bin := flag.String("bin", os.Getenv("BENCH_SERVER_BIN"), "server executable (default $BENCH_SERVER_BIN)")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT) // before any start
@@ -74,7 +74,7 @@ func serve(ctx context.Context, engine, bin string, stdin io.Reader, out io.Writ
 			err = rerr
 		}
 	}()
-	s, err := servers.Start(engine, servers.Options{Ctx: ctx, Bin: bin, Dir: dir})
+	s, err := servers.Start(engine, servers.Options{Ctx: ctx, Bin: bin, Home: os.Getenv("BENCH_KAFKA_HOME"), Java: os.Getenv("BENCH_JAVA_HOME"), Dir: dir})
 	if err != nil {
 		return err
 	}

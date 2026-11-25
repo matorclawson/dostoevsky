@@ -13,6 +13,9 @@ import (
 	"path/filepath"
 	"slices"
 	"syscall"
+	"time"
+
+	"github.com/rodriveracom/dostoevsky/internal/tsprobe"
 )
 
 // ErrIncompleteBackup is returned by Open for a directory that holds .journal.tmp
@@ -141,7 +144,9 @@ func (j *journal) writeFrames(frames []byte) error {
 	if j.failed != nil {
 		return j.failed
 	}
+	began := time.Now()
 	_, err := j.file.WriteAt(frames, j.end)
+	written := time.Now()
 	if err == nil {
 		if j.synced {
 			err = syncData(j.file)
@@ -153,6 +158,7 @@ func (j *journal) writeFrames(frames []byte) error {
 		j.failed = fmt.Errorf("journal write requires reopen: %w", err)
 		return j.failed
 	}
+	tsprobe.Synced(began, written, time.Now())
 	j.end += int64(len(frames))
 	j.fenced = true
 	return nil

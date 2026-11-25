@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/rodriveracom/dostoevsky/internal/tsprobe"
 )
 
 var (
@@ -231,6 +233,7 @@ func (n *Node) Close() error {
 		return nil
 	}
 	n.closed = true
+	tsprobe.Dump(gatherLimit)
 	for _, s := range n.streams {
 		s.signal()
 	}

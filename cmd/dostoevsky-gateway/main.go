@@ -15,6 +15,7 @@ import (
 	"fmt"
 	d "github.com/rodriveracom/dostoevsky"
 	"github.com/rodriveracom/dostoevsky/clienthttp"
+	"github.com/rodriveracom/dostoevsky/internal/tsprobe"
 	"log"
 	"net"
 	"net/http"
@@ -123,7 +124,8 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 40 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
+	defer tsprobe.Profile()()
+	srv := &http.Server{Handler: tsprobe.Timed(h), ConnState: tsprobe.ConnState, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 40 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	done := make(chan error, 1)
 	if useTLS {
 		pair, err := tls.LoadX509KeyPair(*cert, *key)

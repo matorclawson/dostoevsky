@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/rodriveracom/dostoevsky/internal/tsprobe"
 )
 
 // One isolated caller writes inline. Only callers that arrive during a write
@@ -24,6 +26,7 @@ type queuedPublish struct {
 	ctx       context.Context
 	partition Partition
 	msg       Message
+	queuedAt  time.Time
 	result    Record
 	err       error
 	done      chan struct{}
@@ -76,6 +79,7 @@ func (n *Node) schedulePublish(ctx context.Context, p Partition, m Message) (Rec
 		q.mu.Unlock()
 		defer n.mu.Unlock()
 		q.note(1)
+		tsprobe.Group(tsprobe.Inline, 1)
 		return n.publishLocked(ctx, p, m)
 	}
 	if err := ctx.Err(); err != nil {
@@ -85,8 +89,11 @@ func (n *Node) schedulePublish(ctx context.Context, p Partition, m Message) (Rec
 	if !q.active {
 		q.active = true
 		q.mu.Unlock()
+		asked := time.Now()
 		n.mu.Lock()
+		tsprobe.LockWait.Add(time.Since(asked))
 		q.note(1)
+		tsprobe.Group(tsprobe.Leader, 1)
 		r, err := n.publishLocked(ctx, p, m)
 		n.mu.Unlock()
 		if batch := q.take(); len(batch) > 0 {
@@ -97,12 +104,15 @@ func (n *Node) schedulePublish(ctx context.Context, p Partition, m Message) (Rec
 	size := len(p.Topic) + len(m.ID) + len(m.Key) + len(m.Value)
 	if len(q.pending) >= maxQueuedPublishes || size > maxQueuedBytes-q.bytes {
 		q.mu.Unlock()
+		asked := time.Now()
 		n.mu.Lock()
 		defer n.mu.Unlock()
+		tsprobe.LockWait.Add(time.Since(asked))
 		q.note(1)
+		tsprobe.Group(tsprobe.Overflow, 1)
 		return n.publishLocked(ctx, p, m)
 	}
-	w := &queuedPublish{ctx: ctx, partition: p, msg: m, done: make(chan struct{})}
+	w := &queuedPublish{ctx: ctx, partition: p, msg: m, queuedAt: time.Now(), done: make(chan struct{})}
 	q.pending = append(q.pending, w)
 	q.bytes += size
 	q.mu.Unlock()
@@ -121,7 +131,12 @@ func (q *publishQueue) take() []*queuedPublish {
 }
 func (n *Node) drainPublishes(batch []*queuedPublish) {
 	for len(batch) > 0 {
+		asked := time.Now()
 		n.mu.Lock()
+		tsprobe.LockWait.Add(time.Since(asked))
+		for _, w := range batch {
+			tsprobe.QueueWait.Add(time.Since(w.queuedAt))
+		}
 		n.writeQueued(batch)
 		n.mu.Unlock()
 		released := len(batch)
@@ -146,12 +161,14 @@ func (q *publishQueue) gather(released int) {
 	if released < 2 {
 		return
 	}
-	deadline := q.clock().Add(gatherLimit)
+	began := q.clock()
+	deadline := began.Add(tsprobe.GatherLimit(gatherLimit))
 	for {
 		q.mu.Lock()
 		pending := len(q.pending)
 		q.mu.Unlock()
 		if pending >= released || !q.clock().Before(deadline) {
+			tsprobe.Gathered(q.clock().Sub(began), pending >= released)
 			return
 		}
 		q.relax()
@@ -159,6 +176,7 @@ func (q *publishQueue) gather(released int) {
 }
 func (n *Node) writeQueued(batch []*queuedPublish) {
 	n.publishes.note(len(batch))
+	tsprobe.Group(tsprobe.Queued, len(batch))
 	if len(batch) > 1 {
 		items := make([]Publication, 0, len(batch))
 		for _, w := range batch {

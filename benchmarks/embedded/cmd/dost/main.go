@@ -4,6 +4,7 @@ import (
 	"context"
 	d "github.com/rodriveracom/dostoevsky"
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/run"
+	"github.com/rodriveracom/dostoevsky/internal/tsprobe"
 )
 
 type store struct{ node *d.Node }
@@ -27,6 +28,7 @@ func (s store) Close() {
 	}
 }
 func main() {
+	defer tsprobe.Profile()()
 	run.Main("dostoevsky", func(dir string, _ bool) (run.Store, error) {
 		n, e := d.Open(dir, d.Config{Node: "n", Nodes: []string{"n"}, Topics: map[string]int{"events": 1}})
 		return store{n}, e

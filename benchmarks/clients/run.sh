@@ -37,6 +37,9 @@ canonical_seconds() { # name value allow_zero
   exit 2
 }
 canonical_seconds BENCH_WINDOW "$window" yes
+# Every worker refuses a window longer than 24 hours (its nanosecond arithmetic would overflow); refusing it here too means
+# the smoke pass cannot succeed and the timed trials then fail.
+[ "$window" -le 86400 ] || { echo "BENCH_WINDOW must be at most 86400 seconds (24 hours), not '$window'" >&2; exit 2; }
 [ -z "${WORKER_MAX+x}" ] || canonical_seconds WORKER_MAX "$WORKER_MAX" no
 [ -z "${STOP_WAIT+x}" ] || canonical_seconds STOP_WAIT "$STOP_WAIT" no
 [ -z "${READY_WAIT+x}" ] || canonical_seconds READY_WAIT "$READY_WAIT" no

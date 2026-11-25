@@ -10,6 +10,7 @@ use dostoevsky_bench_core::{run, Factory};
 use std::collections::BTreeMap;
 
 fn main() {
+    dostoevsky_bench_core::quiet_panics(); // a panic message can carry anything an engine or library said
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let engines: BTreeMap<String, Factory> = adapters::engines();

@@ -133,6 +133,12 @@ for bad in WORKER_MAX=ten WORKER_MAX=0 STOP_WAIT=-5 READY_WAIT=1.5 BENCH_WINDOW=
   check "an invalid '$bad' is refused before anything starts (exit 2, no trial line)" "[ $code -eq 2 ] && [ \$(grep -c '^trial=' $t/out) -eq 0 ] && grep -q 'must be' $t/err"
 done
 
+# The window is capped at 24 hours exactly as in every worker, in the preflight.
+run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 BENCH_WINDOW=86401 CLIENT_ENGINES=dostoevsky
+check "BENCH_WINDOW above 86400 is refused before anything starts" "[ $code -eq 2 ] && [ \$(grep -c '^trial=' $t/out) -eq 0 ] && grep -q 'at most 86400' $t/err"
+out=$(env RUN_SH_PRINT_COMMANDS=1 BENCH_WINDOW=86400 CLIENT_LANGS=python SERVE_BIN="$t/serve" sh "$here/run.sh" 2>&1)
+check "BENCH_WINDOW of exactly 86400 passes the preflight" "printf '%s\n' \"$out\" | grep -q '^python: '"
+
 # The Python worker must be started with the client on its path (a rehearsal failed without it).
 out=$(env RUN_SH_PRINT_COMMANDS=1 CLIENT_LANGS="python javascript java rust" SERVE_BIN="$t/serve" sh "$here/run.sh" 2>&1)
 check "the python worker command sets PYTHONPATH=clients/python and runs the venv's interpreter" "printf '%s\n' \"$out\" | grep -q '^python: env PYTHONPATH=clients/python .dev/bench-venv/bin/python benchmarks/clients/python/worker.py'"

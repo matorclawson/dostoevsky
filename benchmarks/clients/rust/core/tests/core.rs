@@ -274,3 +274,15 @@ fn a_producer_that_panics_after_an_ack_fails_the_run_and_its_ack_is_still_verifi
         assert!(line.contains("result=FAILED") && !line.contains("hunter2"), "{line}");
     }
 }
+
+#[test]
+fn a_panic_prints_one_fixed_sentence_and_never_its_message() {
+    // cargo builds examples for `cargo test`; the probe sits next to the test binary's deps directory.
+    let exe = std::env::current_exe().unwrap();
+    let probe = exe.parent().unwrap().parent().unwrap().join("examples").join("panic_probe");
+    let out = std::process::Command::new(&probe).output().unwrap_or_else(|e| panic!("cannot run {}: {e}", probe.display()));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "the probe must panic");
+    assert_eq!(err.trim(), PANIC_SENTENCE, "stderr is the fixed sentence and nothing else");
+    assert!(!err.contains("hunter2") && !err.contains("adapter bug"), "{err}");
+}

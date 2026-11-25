@@ -156,3 +156,16 @@ func TestACancelledStartStopsTheServer(t *testing.T) {
 		t.Fatal("the cancelled start waited out the readiness bound")
 	}
 }
+
+// The data directory is quoted in redis.conf: a space or a quote in the path must not split or end the value.
+func TestRedisDirIsQuotedAgainstSpacesAndQuotes(t *testing.T) {
+	for dir, want := range map[string]string{
+		"/data/trial 1":    `dir "/data/trial 1"` + "\n",
+		`/data/it"s`:       `dir "/data/it\"s"` + "\n",
+		`/data/back\slash`: `dir "/data/back\\slash"` + "\n",
+	} {
+		if conf := RedisConfig(dir, 7000, "tok"); !strings.Contains(conf, want) {
+			t.Errorf("dir %q: config lacks %q:\n%s", dir, want, conf)
+		}
+	}
+}

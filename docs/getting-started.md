@@ -23,11 +23,11 @@ if err != nil {
 defer node.Close()
 ```
 
-The steps below assume `cfg`, `dir`, `node`, a context `ctx`, and `p := dostoevsky.Partition{Topic: "orders", Number: 0}`. Only one process can open a directory at a time. A second `Open` fails on the lock instead of corrupting the journal.
+The steps below assume `cfg`, `dir`, `node`, a context `ctx`, and `p := dostoevsky.Partition{Topic: "orders", Number: 0}`. **Each step is self-contained**: it starts from an empty store (the test helper opens a fresh one for every step) and publishes whatever records it needs, so you can run any step on its own. They are not one continuous session, and offsets in one step do not carry into the next. Only one process can open a directory at a time. A second `Open` fails on the lock instead of corrupting the journal.
 
 ## 3. Publish and read
 
-`Publish` returns after the record is on disk. The optional `ID` makes a retry safe, so a client that lost a response can send the same message again:
+`Publish` returns after the record is on disk. A stable, non-empty `ID` makes a retry safe, so a client that lost a response can send the same message again:
 
 <!-- snippet:publish -->
 ```go
@@ -47,7 +47,7 @@ if err != nil {
 fmt.Println(rec.Offset, again.Offset, string(got.Value))
 ```
 
-A record's key picks its partition, and its offset is its position in that partition. Reusing an ID with a different key or payload returns `ErrConflict`.
+A record's key picks its partition, and its offset is its position in that partition. Deduplication applies within the partition the key routes to and only for a supplied, non-empty ID, until retention removes the record. Reusing an ID in that partition with a different key or payload returns `ErrConflict`.
 
 ## 4. Consumer groups
 
@@ -55,6 +55,11 @@ A consumer group has its own cursor per partition, so groups never interfere. `C
 
 <!-- snippet:groups -->
 ```go
+for _, id := range []string{"a", "b", "c"} {
+	if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: id, Value: []byte(id)}); err != nil {
+		panic(err)
+	}
+}
 // "billing" consumes two records. "audit" has not started and still sees all three.
 for offset := int64(0); offset < 2; offset++ {
 	if err := node.Commit(ctx, p, "billing", offset, nil); err != nil {
@@ -76,6 +81,11 @@ Nothing is lost when the process stops. Reopen the directory with the same confi
 
 <!-- snippet:restart -->
 ```go
+for _, id := range []string{"a", "b"} {
+	if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: id, Value: []byte(id)}); err != nil {
+		panic(err)
+	}
+}
 if err := node.Commit(ctx, p, "billing", 0, []byte(`{"seen":1}`)); err != nil {
 	panic(err)
 }
@@ -99,6 +109,16 @@ History grows until you trim it. `Retain` removes everything below an absolute o
 
 <!-- snippet:retention -->
 ```go
+for i := 0; i < 5; i++ {
+	if _, err := node.Publish(ctx, "orders", dostoevsky.Message{Value: []byte(fmt.Sprint("event-", i))}); err != nil {
+		panic(err)
+	}
+}
+for offset := int64(0); offset < 3; offset++ {
+	if err := node.Commit(ctx, p, "billing", offset, nil); err != nil {
+		panic(err)
+	}
+}
 // Remove every record below offset 3. A floor above any group's cursor is refused.
 if err := node.Retain(ctx, map[dostoevsky.Partition]int64{p: 3}); err != nil {
 	panic(err)
@@ -116,6 +136,9 @@ Retention rewrites the journal and needs room for a second copy while it runs. P
 
 <!-- snippet:backup -->
 ```go
+if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: "order-1", Value: []byte("paid")}); err != nil {
+	panic(err)
+}
 // The destination must not exist. Backup syncs the copy before it returns.
 if err := node.Backup(ctx, backupDir); err != nil {
 	panic(err)

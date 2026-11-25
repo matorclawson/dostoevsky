@@ -55,18 +55,19 @@ func Example_publishAndRead() {
 	}
 	fmt.Println(rec.Offset, again.Offset, string(got.Value))
 	// endsnippet:publish
+
 	// Output: 0 0 paid
 }
 
 func Example_consumerGroups() {
 	_, _, node, ctx, p, done := demo()
 	defer done()
+	// snippet:groups
 	for _, id := range []string{"a", "b", "c"} {
 		if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: id, Value: []byte(id)}); err != nil {
 			panic(err)
 		}
 	}
-	// snippet:groups
 	// "billing" consumes two records. "audit" has not started and still sees all three.
 	for offset := int64(0); offset < 2; offset++ {
 		if err := node.Commit(ctx, p, "billing", offset, nil); err != nil {
@@ -79,18 +80,19 @@ func Example_consumerGroups() {
 	stale := node.Commit(ctx, p, "billing", 0, nil)
 	fmt.Println(billing.Next, audit.Next, errors.Is(stale, dostoevsky.ErrConflict))
 	// endsnippet:groups
+
 	// Output: 2 0 true
 }
 
 func Example_restartAndResume() {
 	dir, cfg, node, ctx, p, done := demo()
 	defer func() { node.Close(); done() }()
+	// snippet:restart
 	for _, id := range []string{"a", "b"} {
 		if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: id, Value: []byte(id)}); err != nil {
 			panic(err)
 		}
 	}
-	// snippet:restart
 	if err := node.Commit(ctx, p, "billing", 0, []byte(`{"seen":1}`)); err != nil {
 		panic(err)
 	}
@@ -105,12 +107,14 @@ func Example_restartAndResume() {
 	pos, _ := node.Position(ctx, p, "billing")
 	fmt.Println(pos.Next, string(pos.State))
 	// endsnippet:restart
+
 	// Output: 1 {"seen":1}
 }
 
 func Example_retention() {
 	_, _, node, ctx, p, done := demo()
 	defer done()
+	// snippet:retention
 	for i := 0; i < 5; i++ {
 		if _, err := node.Publish(ctx, "orders", dostoevsky.Message{Value: []byte(fmt.Sprint("event-", i))}); err != nil {
 			panic(err)
@@ -121,7 +125,6 @@ func Example_retention() {
 			panic(err)
 		}
 	}
-	// snippet:retention
 	// Remove every record below offset 3. A floor above any group's cursor is refused.
 	if err := node.Retain(ctx, map[dostoevsky.Partition]int64{p: 3}); err != nil {
 		panic(err)
@@ -130,18 +133,19 @@ func Example_retention() {
 	kept, _ := node.Read(ctx, p, 3, false)
 	fmt.Println(errors.Is(expired, dostoevsky.ErrExpired), string(kept.Value))
 	// endsnippet:retention
+
 	// Output: true event-3
 }
 
 func Example_backup() {
 	dir, cfg, node, ctx, p, done := demo()
 	defer done()
-	if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: "order-1", Value: []byte("paid")}); err != nil {
-		panic(err)
-	}
 	backupDir := filepath.Join(filepath.Dir(dir), filepath.Base(dir)+"-backup")
 	defer os.RemoveAll(backupDir)
 	// snippet:backup
+	if _, err := node.Publish(ctx, "orders", dostoevsky.Message{ID: "order-1", Value: []byte("paid")}); err != nil {
+		panic(err)
+	}
 	// The destination must not exist. Backup syncs the copy before it returns.
 	if err := node.Backup(ctx, backupDir); err != nil {
 		panic(err)
@@ -154,6 +158,7 @@ func Example_backup() {
 	rec, _ := copyNode.Read(ctx, p, 0, false)
 	fmt.Println(string(rec.Value))
 	// endsnippet:backup
+
 	// Output: paid
 }
 

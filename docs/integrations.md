@@ -26,7 +26,7 @@ Close the node on shutdown and give each directory exactly one owner process. Re
 
 ## Several nodes: the mesh
 
-Run the same library in each application and mount its peer handler on your own HTTP server. Every node shares the ordered membership list and partition counts, and a partition's owner is its number modulo the node count. `Mesh` routes `Publish`, `Read`, `Position` and `Commit` to the owner; peer requests carry a configuration fingerprint and a shared bearer token. Run `make dev-mesh-a` and `make dev-mesh-b` in two terminals for a working pair ([`examples/mesh`](../examples/mesh/main.go)). Use HTTPS between machines. Each partition still has one durable copy: an offline owner makes its partitions unavailable, and there is no automatic failover.
+Run the same library in each application and mount its peer handler on your own HTTP server. Every node shares the ordered membership list and partition counts. For explicitly declared topics a partition's owner is its partition number modulo the node count; wildcard topics add a hash of the topic name to that placement. `Mesh` routes `Publish`, `Read`, `Position` and `Commit` to the owner; peer requests carry a configuration fingerprint and a shared bearer token. Run `make dev-mesh-a` and `make dev-mesh-b` in two terminals for a working pair ([`examples/mesh`](../examples/mesh/main.go)). Use HTTPS between machines. Each partition still has one durable copy: an offline owner makes its partitions unavailable, and there is no automatic failover.
 
 ## A durable task queue
 
@@ -56,10 +56,10 @@ This table is a summary, not a benchmark. Check each system's documentation for 
 |---|---|---|---|---|---|
 | Runs as | Library in your Go process | Server (also embeddable in Go) | Broker cluster | Server | Library, one file |
 | Language clients | Go | Many | Many | Many | Many |
-| Replication and failover | No | Yes (Raft) | Yes | Primary and replicas, asynchronous by default | No |
-| Durability | Journal synced before acknowledgment | Configurable file sync | Replication and configurable flush | Append-only file with a configurable sync policy | Journal with `synchronous=FULL` |
+| Replication and failover | No | Yes (Raft) | Yes in a cluster (a single broker also runs) | Primary and replicas, asynchronous by default | No |
+| Durability | Journal synced before acknowledgment | Configurable file sync | Replication and configurable flush | Optional append-only file (off in the default configuration) with a configurable sync policy | Write-ahead log: WAL mode with `synchronous=FULL` syncs every commit; other settings trade that away |
 | Consumer groups | Yes, with state committed with the cursor | Durable consumers | Yes | Yes | You build them with tables |
-| Stateful processing | `Fold`, `Pipe` | No | Kafka Streams | No | SQL |
+| Integrated stream processing | `Fold`, `Pipe` | Consumers keep their own state | Kafka Streams library | No: scripts and data structures, not a processing engine | No: SQL over tables |
 | Where it is the better choice | Embedded, low memory, one process | Networked messaging, many clients | High-volume, replicated logs, a large ecosystem | Fast in-memory structures you already run | Transactions with your other tables |
 
-Sources: [JetStream](https://docs.nats.io/nats-concepts/jetstream), [Kafka](https://kafka.apache.org/documentation/), [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/), [SQLite WAL](https://sqlite.org/wal.html).
+Sources: [JetStream](https://docs.nats.io/nats-concepts/jetstream); [Kafka](https://kafka.apache.org/documentation/) and its [single-broker quickstart](https://kafka.apache.org/quickstart); [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/), [Redis persistence](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/) and the [default `redis.conf` (`appendonly no`, `appendfsync`)](https://raw.githubusercontent.com/redis/redis/8.12.0/redis.conf); [SQLite WAL](https://sqlite.org/wal.html) and [`PRAGMA synchronous`](https://www.sqlite.org/pragma.html#pragma_synchronous).

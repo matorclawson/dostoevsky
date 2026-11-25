@@ -5,10 +5,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AmbiguousOutcome } from "./core.mjs";
+import { AmbiguousOutcome, takeWhenItArrives } from "./core.mjs";
 
 const TOPIC = "events";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Terminal-only diagnostics, switched on by the worker's --debug-errors: raw engine detail on stderr, never in a receipt.
+export const debug = { on: false, log: (...a) => { if (debug.on) console.error("debug:", ...a); } };
 
 // '<package>-<version>' of an INSTALLED package, read from its own package.json. A package's
 // "exports" map may hide ./package.json (@nats-io/jetstream does), so the package is resolved by its
@@ -93,14 +96,29 @@ export async function kafka(addr, token) {
         // Read-back is not a publish: the no-retry rule is about acknowledged writes. A consumer group needs a coordinator,
         // which a fresh broker creates on first use, so the consumer keeps kafkajs's default retries while it joins.
         consumer = k.consumer({ groupId: "verify" });
+        // Do not read until the group has actually been joined and a partition assigned; a crash is an error with its
+        // cause, not a silent wait. (A "negative timeout" warning from kafkajs's own heartbeat timer is harmless noise.)
+        const { GROUP_JOIN, CRASH, REBALANCING, FETCH_START } = consumer.events;
+        let settled = false;
+        const joined = new Promise((resolve, reject) => {
+          consumer.on(GROUP_JOIN, (e) => { debug.log("group join", JSON.stringify(e.payload.memberAssignment)); settled = true; resolve(); });
+          consumer.on(CRASH, (e) => { debug.log("consumer crash", e.payload.error); if (!settled) reject(e.payload.error); });
+          consumer.on(REBALANCING, (e) => debug.log("rebalancing", e.payload.groupId));
+          consumer.on(FETCH_START, () => debug.log("fetch start"));
+        });
         await consumer.connect();
         await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
         await consumer.run({ eachMessage: async ({ message }) => { loaded.set(BigInt(message.offset), message.value); } });
+        let timer;
+        await Promise.race([joined, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("consumer group not joined within 60 s")), 60000); })]).finally(() => clearTimeout(timer));
+        consumer.seek({ topic: TOPIC, partition: 0, offset: "0" }); // from the beginning, whatever the group's own position
       }
-      for (const deadline = Date.now() + 60000; Date.now() < deadline; await sleep(20)) {
-        if (loaded.has(offset)) { const v = loaded.get(offset); loaded.delete(offset); return v; }
+      try {
+        return await takeWhenItArrives(loaded, offset, 60000);
+      } catch (e) {
+        debug.log(`read of offset ${offset} failed: ${e.message}; ${loaded.size} messages are waiting in memory`);
+        throw new Error(`offset ${offset} not found within the verification deadline`);
       }
-      throw new Error(`offset ${offset} not found within the verification deadline`);
     },
     close: async () => { if (consumer) await consumer.disconnect(); await producer.disconnect(); },
   };

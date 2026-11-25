@@ -297,3 +297,33 @@ test("a clean checkout's build id is a bare commit, a changed file adds -dirty, 
   assert.equal(buildId(dir), clean + "-dirty");
   assert.equal(buildId(mkdtempSync(path.join(tmpdir(), "notarepo-"))), "unknown");
 });
+
+test("a read with a fresh deadline WAITS for the message instead of giving up at once", async () => {
+  const map = new Map();
+  setTimeout(() => map.set(5n, "late"), 150);
+  const begin = Date.now();
+  assert.equal(await core.takeWhenItArrives(map, 5n, 5000), "late");
+  const waited = Date.now() - begin;
+  assert.ok(waited >= 100 && waited < 3000, `waited ${waited} ms`);
+  assert.equal(map.has(5n), false, "the value is taken out");
+});
+
+test("a message that never arrives is waited for the whole budget, not given up on at once", async () => {
+  const begin = Date.now();
+  await assert.rejects(core.takeWhenItArrives(new Map(), 1n, 300), /did not arrive within \d+ ms/);
+  assert.ok(Date.now() - begin >= 250, `gave up after ${Date.now() - begin} ms`);
+});
+
+test("a budget that is not a positive finite number is refused loudly", async () => {
+  for (const bad of [0, -1, NaN, Infinity, undefined, -Date.now()]) {
+    await assert.rejects(core.takeWhenItArrives(new Map([[1n, "x"]]), 1n, bad), RangeError, String(bad));
+  }
+});
+
+test("the deadline is absolute: a clock that starts at zero cannot make it negative", async () => {
+  let t = 0; // a fake clock that has just started
+  const now = () => t;
+  const map = new Map();
+  const sleep = async (ms) => { t += ms; if (t >= 60) map.set(7n, "ok"); };
+  assert.equal(await core.takeWhenItArrives(map, 7n, 1000, now, sleep), "ok");
+});

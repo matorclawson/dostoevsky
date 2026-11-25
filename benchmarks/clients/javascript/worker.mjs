@@ -28,7 +28,9 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
     console.error("usage: --engine E --addr host:port [--workers N>=1, an integer] [--target N>=1, an integer] [--window S, 0 to 86400] [--require-known-build]");
     return 2;
   }
-  engines ??= (await import("./adapters.mjs")).ENGINES;
+  const adapterModule = engines === null ? await import("./adapters.mjs") : null;
+  if (adapterModule) adapterModule.debug.on = args["debug-errors"];
+  engines ??= adapterModule.ENGINES;
   if (!(args.engine in engines)) { console.error(`unknown engine '${args.engine}' (have ${Object.keys(engines).sort().join(", ")})`); return 2; }
   const adapter = await engines[args.engine](args.addr, env.BENCH_TOKEN ?? "");
   if (args["require-known-build"] && adapter.clientBuild === "unknown") {

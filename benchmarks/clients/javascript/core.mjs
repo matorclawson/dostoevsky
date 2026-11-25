@@ -121,6 +121,20 @@ export async function verify(adapter, records, onError = () => {}) {
   return "";
 }
 
+// Waits up to `budgetMs` for `key` to appear in `map` (filled by a consumer callback) and takes it out. The deadline is
+// ABSOLUTE and fixed before the first look (now + budget); a budget that is not a positive finite number is refused
+// loudly, so a deadline can never silently be "already past". Returns the value, or throws with how long it waited.
+export async function takeWhenItArrives(map, key, budgetMs, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
+  if (!Number.isFinite(budgetMs) || budgetMs <= 0) throw new RangeError(`the wait budget must be a positive number of milliseconds, not ${budgetMs}`);
+  const started = now();
+  const limit = started + budgetMs;
+  while (now() < limit) {
+    if (map.has(key)) { const v = map.get(key); map.delete(key); return v; }
+    await sleep(Math.min(20, Math.max(1, limit - now())));
+  }
+  throw new Error(`${String(key)} did not arrive within ${now() - started} ms`);
+}
+
 export function peakRssKiB() { return process.resourceUsage().maxRSS; } // KiB on every platform libuv supports
 
 // A value that stays ONE whitespace-free token, so the line parses as key=value pairs.

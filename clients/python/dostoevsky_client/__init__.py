@@ -60,10 +60,22 @@ def _check_url(url: str) -> None:
 
 
 def _bounded(response, limit: int) -> bytes:
-    data = response.read(limit + 1)
+    """The whole body, at most `limit` bytes. A body that ends before the announced length
+    (Content-Length short, or chunked without its terminating chunk) is an error, never a
+    success with a truncated value."""
+    try:
+        data = response.read(limit + 1)
+    except http.client.IncompleteRead as error:
+        raise ClientError(response.status, "incomplete_response") from error
     if len(data) > limit:
         raise ClientError(response.status, "oversized_response")
+    if response.length:  # bytes still owed by a Content-Length body
+        raise ClientError(response.status, "incomplete_response")
     return data
+
+
+class _Stale(Exception):
+    """The connection was dead when used: no byte of a reply was seen."""
 
 
 _MAX_IDLE = 16        # idle connections kept per Client
@@ -117,18 +129,38 @@ class Client:
         conn.close()
 
     def _once(self, conn, method, path, data):
+        """One request on `conn`. `_Stale` means NOTHING of a reply was seen (the connection was
+        dead when used); any failure after the reply began is final and is never repeated."""
         try:
             conn.request(method, path, body=data, headers=self._auth)
+        except TimeoutError:
+            conn.close()
+            raise
+        except (OSError, http.client.HTTPException) as error:
+            conn.close()
+            raise _Stale(error) from error
+        try:
             response = conn.getresponse()
-            body = response.read(MAX_BODY + 1)
-        except (http.client.HTTPException, OSError) as error:
+        except TimeoutError:
             conn.close()
-            if isinstance(error, OSError):
-                raise
+            raise
+        except (ConnectionError, http.client.RemoteDisconnected) as error:  # no reply byte arrived
+            conn.close()
+            raise _Stale(error) from error
+        except (OSError, http.client.HTTPException) as error:  # a reply began and was malformed
+            conn.close()
             raise ConnectionError(str(error)) from error
-        if len(body) > MAX_BODY:
+        try:
+            body = _bounded(response, MAX_BODY)
+        except ClientError:
             conn.close()
-            raise ClientError(response.status, "oversized_response")
+            raise
+        except TimeoutError:
+            conn.close()
+            raise
+        except (OSError, http.client.HTTPException) as error:
+            conn.close()
+            raise ConnectionError(str(error)) from error
         if response.will_close:
             conn.close()
         else:
@@ -138,20 +170,24 @@ class Client:
         return response.status, response.headers, body
 
     def _call(self, op, params, data=None, retry_safe=True):
-        """One call. A request that fails on a REUSED connection before any response is
-        retried once on a fresh one, but only when repeating it is safe (reads, positions and
-        publishes that carry an id); anything else surfaces the error rather than risk a
-        duplicate."""
+        """One call. A REUSED connection that turns out dead before any reply byte arrived is
+        replaced by a fresh one and the request sent again, but only when repeating it is safe
+        (reads, positions and publishes that carry an id). Id-less publishes and commits are
+        never replayed. A failure once the reply has begun (a short or malformed body, a
+        timeout) is never retried."""
         path = self._prefix + op + "?" + urlencode(params)
         method = "GET" if data is None else "POST"
         conn = self._take()
-        if conn is not None:
-            try:
-                return self._once(conn, method, path, data)
-            except ConnectionError:  # not a timeout: a long poll must not wait twice
-                if not retry_safe:
-                    raise
-        return self._once(self._connect(), method, path, data)
+        try:
+            if conn is not None:
+                try:
+                    return self._once(conn, method, path, data)
+                except _Stale as stale:
+                    if not retry_safe:
+                        raise ConnectionError(str(stale)) from stale.__cause__
+            return self._once(self._connect(), method, path, data)
+        except _Stale as stale:
+            raise ConnectionError(str(stale)) from stale.__cause__
 
     def publish(self, topic: str, value: bytes, *, key: str = "", id: str = "") -> Receipt:
         _, h, _ = self._call("publish", dict(topic=topic, key=key, id=id), value, retry_safe=bool(id))

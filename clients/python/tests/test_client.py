@@ -34,6 +34,8 @@ class Stub(BaseHTTPRequestHandler):
         if q.get("topic") == "closing":
             self.close_connection = True
         op = u.path.rsplit("/", 1)[1]
+        if q.get("topic") in ("short", "unterminated"):
+            return self._truncated(q["topic"])
         if self.headers.get("Authorization") != "Bearer " + TOKEN:
             return self._send(401, b"unauthorized\n")
         if op == "publish":
@@ -56,6 +58,23 @@ class Stub(BaseHTTPRequestHandler):
         if op == "commit":
             return self._send(204, b"")
         self._send(404, b"not found\n")
+
+    def _truncated(self, kind):
+        """A reply that announces more than it delivers, then the connection ends."""
+        self.send_response(200)
+        for k, v in {"Dostoevsky-Partition": "0", "Dostoevsky-Offset": "1", "Dostoevsky-Key": "", "Dostoevsky-ID": "",
+                     "Dostoevsky-Time": "t"}.items():
+            self.send_header(k, v)
+        if kind == "short":
+            self.send_header("Content-Length", "10")
+            self.end_headers()
+            self.wfile.write(b"abc")
+            self.close_connection = True  # keep-alive server: the client must see the stream end
+        else:
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.write(b"3\r\nabc\r\n")  # no terminating zero-length chunk
+            self.close_connection = True
 
     def _send(self, code, body, headers=None):
         self.send_response(code)
@@ -174,12 +193,26 @@ class ClientTest(unittest.TestCase):
         with self.assertRaises(ConnectionError):                 # commit is never repeated
             self.c.commit("jobs", 0, "g", 3)
 
+    def test_an_incomplete_body_is_an_error_never_a_truncated_success(self):
+        for topic in ("short", "unterminated"):
+            with self.assertRaises(ClientError, msg=topic) as e:
+                self.c.read(topic, 0, 1)
+            self.assertEqual(e.exception.code, "incomplete_response", topic)
+
+    def test_a_failure_after_the_reply_began_is_never_replayed(self):
+        self.c.read("jobs", 0, 5)  # pool a connection: the next call reuses it
+        before = len([e for e in LOG if e[1].get("topic") == "short"])
+        with self.assertRaises(ClientError):  # a read is safe to repeat, but only before any reply byte
+            self.c.read("short", 0, 1)
+        self.assertEqual(len([e for e in LOG if e[1].get("topic") == "short"]) - before, 1)
+
     def test_errors_carry_status_and_word(self):
         with self.assertRaises(ClientError) as e:
             self.c.publish("jobs", b"", id="clash")
         self.assertEqual((e.exception.status, e.exception.code), (409, "conflict"))
         with self.assertRaises(ClientError) as e:
-            Client(self.url, "wrong").position("jobs", 0, "g")
+            with Client(self.url, "wrong") as wrong:  # closed, so no socket is left for the GC to warn about
+                wrong.position("jobs", 0, "g")
         self.assertEqual(e.exception.status, 401)
 
 

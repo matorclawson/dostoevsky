@@ -11,15 +11,37 @@ TOPIC = "events"
 
 
 def _version(dist: str) -> str:
+    """The package's name and the version pip installed, from the installed metadata."""
     return f"{dist}-{importlib.metadata.version(dist)}"
 
 
+def build_id(path: str) -> str:
+    """The git commit of the checkout `path` lives in, and whether it has uncommitted changes
+    ("<12 hex>" or "<12 hex>-dirty"); "unknown" when git cannot say."""
+    import subprocess
+    try:
+        here = os.path.dirname(os.path.abspath(path))
+        sha = subprocess.run(["git", "-C", here, "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "-C", here, "status", "--porcelain", "--", here], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        return sha + ("-dirty" if dirty else "")
+    except Exception:  # noqa: BLE001 - identity is best effort and says so
+        return "unknown"
+
+
 class Dostoevsky:
-    """Our client through the gateway (HTTP/1.1 keep-alive, a small connection pool)."""
+    """Our client through the gateway (HTTP/1.1 keep-alive, a small connection pool). It needs the
+    pooled client: an older one that opens a connection per call would be measured as something it
+    is not, so the worker refuses to run with it."""
 
     def __init__(self, addr, token, workers):
-        from dostoevsky_client import Client  # PYTHONPATH=clients/python
-        self.client_name = "dostoevsky-client-0.1.0(keep-alive)"
+        import dostoevsky_client  # PYTHONPATH=clients/python
+        from dostoevsky_client import Client
+        if not hasattr(Client, "close") or not hasattr(Client, "_take"):
+            raise RuntimeError(
+                "dostoevsky_client at %s has no connection pool (it predates the keep-alive client, PR 41); "
+                "refusing to benchmark it" % os.path.dirname(os.path.abspath(dostoevsky_client.__file__)))
+        self.client_name = "dostoevsky-client-0.1.0(keep-alive pool)"
+        self.client_build = build_id(dostoevsky_client.__file__)
         self._c = Client("http://" + addr, token)
 
     def publish(self, data):
@@ -46,6 +68,8 @@ class Kafka:
             "bootstrap.servers": addr, "acks": "all", "enable.idempotence": False, "retries": 0,
             "linger.ms": 0, "batch.num.messages": 1, "queue.buffering.max.messages": 100000,
         })
+        self.delivery_timeout = 60.0
+        self._timed_out = False
         self._stop = threading.Event()
         self._poller = threading.Thread(target=self._poll, daemon=True)
         self._poller.start()
@@ -58,17 +82,22 @@ class Kafka:
 
     def publish(self, data):
         done, box = threading.Event(), []
+        abandoned = threading.Event()
 
         def delivered(err, msg):
+            if abandoned.is_set():  # reported after we stopped waiting: it is not counted, whatever it says
+                return
             box.append((err, msg))
             done.set()
 
         self._p.produce(TOPIC, value=data, on_delivery=delivered)
-        if not done.wait(60):
-            raise TimeoutError("no delivery report within 60 s")
+        if not done.wait(self.delivery_timeout):
+            abandoned.set()
+            self._timed_out = True  # the message may still be queued: close() purges instead of flushing it
+            raise TimeoutError("no delivery report before the deadline")
         err, msg = box[0]
         if err is not None:
-            raise RuntimeError(str(err))
+            raise RuntimeError("delivery failed")  # librdkafka's text is not copied into receipts
         return msg.offset()
 
     def read(self, offset):
@@ -92,7 +121,13 @@ class Kafka:
         self._stop.set()
         if self._consumer is not None:
             self._consumer.close()
-        self._p.flush(10)
+        if self._timed_out:
+            # A delivery wait timed out: whatever is still queued or in flight was not counted and must
+            # not be delivered or waited for now. Drop it, then give the library a short, bounded moment.
+            self._p.purge()
+            self._p.flush(2)
+        else:
+            self._p.flush(10)
 
 
 class Nats:

@@ -2,8 +2,10 @@ import io
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
+import types
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -81,7 +83,8 @@ class WorkloadTest(unittest.TestCase):
         res = core.run_workload(m, 1, 100, 0)
         self.assertEqual(res.stop, core.STOP_FAILED)
         self.assertEqual((res.acked, m.attempts), (5, 6))  # five acknowledged, the sixth failed, no seventh
-        self.assertIn("the engine went away", res.detail)
+        self.assertIn("ConnectionError:connection", res.detail)
+        self.assertNotIn("the engine went away", res.detail)  # the message text never reaches a receipt
         self.assertIn("after 5 acknowledged", res.detail)
 
     def test_with_many_workers_a_failure_stops_the_others_and_attempts_exceed_acks_by_at_most_the_workers(self):
@@ -117,7 +120,7 @@ class ReceiptTest(unittest.TestCase):
         line = core.receipt_line("python-memory", 2, res, 100, "memory-0", 12345)
         keys = dict(kv.split("=", 1) for kv in line.split())
         for k in ("engine", "workers", "acked", "verified", "records/s", "elapsed_s", "p50_us", "p95_us", "p99_us",
-                  "p99_9_us", "p99_99_us", "client_rss_KiB", "client_rss_source", "lang", "client", "stop"):
+                  "p99_9_us", "p99_99_us", "client_rss_KiB", "client_rss_source", "lang", "client", "client_build", "result", "stop"):
             self.assertIn(k, keys)
         self.assertEqual((keys["engine"], keys["stop"], keys["acked"], keys["verified"]), ("python-memory", "reached", "100", "100"))
         self.assertNotIn("\n", line)
@@ -165,6 +168,148 @@ class RedisIdTest(unittest.TestCase):
         self.assertEqual(adapters.pack_id(b"5-65535"), (5 << 16) | 65535)
         with self.assertRaises(ValueError):
             adapters.pack_id("5-65536")
+
+
+class FailureTest(unittest.TestCase):
+    def test_a_failure_after_the_run_was_already_reached_still_makes_it_failed(self):
+        """Target 2, two workers: worker A finishes index 0, sees the target reached and stops; worker B's
+        publish (index 1) is still in flight and then fails. The run must be a failed run, not 'reached'."""
+        go = threading.Event()
+
+        class Late(Memory):
+            def publish(self, data):
+                if data[:8] == (1).to_bytes(8, "big"):
+                    go.wait(5)
+                    raise ConnectionResetError("reset by peer")
+                return super().publish(data)
+
+        m = Late()
+        threading.Timer(0.3, go.set).start()
+        res = core.run_workload(m, 2, 2, 0)
+        self.assertEqual(res.stop, core.STOP_FAILED)
+        self.assertEqual(res.acked, 1)
+        self.assertEqual(core.receipt_line("x", 2, res, 1, "c", 1).split()[2], "result=FAILED")
+
+    def test_result_is_FAILED_for_a_failure_and_for_a_verification_failure_and_ok_otherwise(self):
+        def result(m, **kw):
+            out = io.StringIO()
+            worker.main(["--engine", "memory", "--addr", "x:1", "--target", "20"] + kw.get("extra", []),
+                        env={}, out=out, adapters={"memory": lambda a, t, w: m})
+            return dict(kv.split("=", 1) for kv in out.getvalue().split())
+        ok = result(Memory())
+        self.assertEqual((ok["result"], ok["stop"], ok["verified"]), ("ok", "reached", "20"))
+        failed = result(Memory(fail_at=5))
+        self.assertEqual((failed["result"], failed["stop"]), ("FAILED", "failed"))
+        bad = result(Memory(corrupt=True))
+        self.assertEqual((bad["result"], bad["stop"], bad["verified"], bad["records/s"]), ("FAILED", "verification-failed", "0", "0"))
+
+    def test_throughput_counts_only_verified_messages(self):
+        res = core.Result(acked=100, elapsed=2.0, stop=core.STOP_VERIFY, detail="x")
+        line = dict(kv.split("=", 1) for kv in core.receipt_line("x", 1, res, 0, "c", 1).split())
+        self.assertEqual(line["records/s"], "0")
+        res.stop = core.STOP_REACHED
+        line = dict(kv.split("=", 1) for kv in core.receipt_line("x", 1, res, 60, "c", 1).split())
+        self.assertEqual(line["records/s"], "30")
+
+    def test_error_text_never_reaches_the_receipt_only_the_class_and_a_fixed_word(self):
+        class Leaky(Memory):
+            def publish(self, data):
+                raise RuntimeError("AUTH failed for redis://user:hunter2@10.0.0.9:6379 payload=" + "ab" * 8)
+
+            def read(self, offset):
+                raise RuntimeError("secret-in-read hunter2")
+
+        res = core.run_workload(Leaky(), 1, 5, 0)
+        line = core.receipt_line("x", 1, res, 0, "c", 1)
+        for leak in ("hunter2", "10.0.0.9", "redis://", "payload", "AUTH"):
+            self.assertNotIn(leak, line)
+        self.assertIn("RuntimeError:engine-error", line)
+        m = Memory()
+        res = core.run_workload(m, 1, 3, 0)
+        m.read = Leaky().read
+        self.assertNotIn("hunter2", core.verify(m, res.records))
+        self.assertIn("RuntimeError:engine-error", core.verify(m, res.records))
+        self.assertEqual(core.reason(TimeoutError("x")), "TimeoutError:timeout")
+        self.assertEqual(core.reason(ConnectionResetError("x")), "ConnectionResetError:connection")
+
+
+class AdapterTest(unittest.TestCase):
+    def fake_module(self, name, **attrs):
+        mod = types.ModuleType(name)
+        mod.__file__ = os.path.abspath(__file__)
+        for k, v in attrs.items():
+            setattr(mod, k, v)
+        saved = sys.modules.get(name)
+        sys.modules[name] = mod
+        self.addCleanup(lambda: sys.modules.pop(name, None) if saved is None else sys.modules.__setitem__(name, saved))
+        return mod
+
+    def test_the_dostoevsky_adapter_refuses_a_client_without_a_connection_pool(self):
+        class OldClient:  # opens a connection per call: no close(), no pool
+            def __init__(self, url, token):
+                pass
+        self.fake_module("dostoevsky_client", Client=OldClient)
+        with self.assertRaises(RuntimeError) as e:
+            adapters.Dostoevsky("127.0.0.1:1", "t", 1)
+        self.assertIn("no connection pool", str(e.exception))
+
+    def test_the_dostoevsky_adapter_records_which_client_build_it_used(self):
+        class Pooled:
+            def __init__(self, url, token):
+                pass
+
+            def close(self):
+                pass
+
+            def _take(self):
+                return None
+        self.fake_module("dostoevsky_client", Client=Pooled)
+        a = adapters.Dostoevsky("127.0.0.1:1", "t", 1)
+        self.assertIn("keep-alive pool", a.client_name)
+        self.assertTrue(a.client_build, "no build identity")
+        self.assertRegex(a.client_build, r"^([0-9a-f]{12}(-dirty)?|unknown)$")
+
+    def test_build_id_says_unknown_outside_a_checkout(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(adapters.build_id(os.path.join(d, "x.py")), "unknown")
+
+    def test_kafka_stops_counting_at_the_deadline_and_cleanup_purges_instead_of_flushing(self):
+        calls = []
+
+        class FakeProducer:
+            def __init__(self, conf):
+                self.callbacks = []
+
+            def produce(self, topic, value=None, on_delivery=None):
+                self.callbacks.append(on_delivery)  # never reports in time
+
+            def poll(self, t):
+                time.sleep(t)
+
+            def purge(self):
+                calls.append("purge")
+
+            def flush(self, t):
+                calls.append(("flush", t))
+
+        class Msg:
+            def offset(self):
+                return 7
+
+        self.fake_module("confluent_kafka", Producer=FakeProducer, Consumer=object, TopicPartition=object)
+        saved = adapters._version
+        adapters._version = lambda dist: dist + "-test"
+        self.addCleanup(lambda: setattr(adapters, "_version", saved))
+        k = adapters.Kafka("127.0.0.1:1", "", 1)
+        k.delivery_timeout = 0.05
+        with self.assertRaises(TimeoutError):
+            k.publish(b"x")
+        late = k._p.callbacks[0]
+        late(None, Msg())  # a report that arrives after the deadline is ignored
+        self.assertTrue(k._timed_out)
+        k.close()
+        self.assertEqual(calls[0], "purge")
+        self.assertTrue(all(c == "purge" or c[1] <= 2 for c in calls), calls)  # cleanup is bounded
 
 
 if __name__ == "__main__":

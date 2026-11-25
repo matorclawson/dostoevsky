@@ -43,7 +43,7 @@ def main(argv, env=os.environ, out=sys.stdout, adapters=None):
             res.stop, res.detail = core.STOP_VERIFY, why
     finally:
         adapter.close()
-    print(core.receipt_line(f"python-{args.engine}", args.workers, res, verified, adapter.client_name, core.peak_rss_kib()), file=out)
+    print(core.receipt_line(f"python-{args.engine}", args.workers, res, verified, adapter.client_name, core.peak_rss_kib(), getattr(adapter, "client_build", "n/a")), file=out)
     return 0
 
 

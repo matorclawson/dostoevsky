@@ -7,6 +7,7 @@ sustained mode (reached, window, failed, verification-failed). Standard library 
 be tested without any engine or client library installed.
 """
 import math
+import re
 import resource
 import struct
 import sys
@@ -59,6 +60,25 @@ class Hist:
         return 0
 
 
+_CLASS = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+
+
+def reason(e: BaseException) -> str:
+    """What may go into a receipt about an engine error: the exception CLASS and one word from a
+    fixed set. Never the message, which can carry tokens, addresses with credentials or payload bytes."""
+    name = type(e).__name__
+    cls = name if _CLASS.fullmatch(name) else "Exception"
+    if isinstance(e, TimeoutError):
+        word = "timeout"
+    elif isinstance(e, ConnectionError):
+        word = "connection"
+    elif isinstance(e, (LookupError, ValueError, TypeError)):
+        word = "protocol"
+    else:
+        word = "engine-error"
+    return f"{cls}:{word}"
+
+
 def payload(i: int) -> bytes:
     return struct.pack(">Q", i) + bytes(RECORD_BYTES - 8)
 
@@ -87,6 +107,13 @@ def run_workload(adapter, workers: int, target: int, window: float, clock=time.m
             if state["stop"] is None:
                 state["stop"] = (kind, text)
 
+    def fail(text: str) -> None:
+        # A failure is never hidden by an earlier "reached" or "window": whichever came first,
+        # a publish that failed makes the run a failed run.
+        with lock:
+            if state["stop"] is None or state["stop"][0] != STOP_FAILED:
+                state["stop"] = (STOP_FAILED, text)
+
     start = clock()
     deadline = start + window if window > 0 else None
 
@@ -108,7 +135,7 @@ def run_workload(adapter, workers: int, target: int, window: float, clock=time.m
             try:
                 offset = adapter.publish(payload(i))
             except Exception as e:  # noqa: BLE001 - any engine error is a result, never retried
-                set_stop(STOP_FAILED, f"publish {i}: {type(e).__name__}: {e}")
+                fail(f"publish {i}: {reason(e)}")
                 return
             h.add_ns(time.perf_counter_ns() - begin)
             mine.append((i, offset))
@@ -135,7 +162,7 @@ def verify(adapter, records) -> str:
         try:
             got = adapter.read(offset)
         except Exception as e:  # noqa: BLE001
-            return f"record {i} at {offset}: {type(e).__name__}: {e}"
+            return f"record {i} at {offset}: read {reason(e)}"
         if got != payload(i):
             return f"record {i} at {offset}: the bytes read back differ from the bytes published"
     return ""
@@ -147,17 +174,21 @@ def peak_rss_kib() -> int:
     return peak // 1024 if sys.platform == "darwin" else peak
 
 
-def receipt_line(engine: str, workers: int, res: Result, verified: int, client: str, rss_kib: int) -> str:
-    rate = res.acked / res.elapsed if res.elapsed > 0 else 0
+def receipt_line(engine: str, workers: int, res: Result, verified: int, client: str, rss_kib: int, build: str = "n/a") -> str:
+    """One line. `result=FAILED` whenever the run failed or its read-back did not verify; the
+    throughput counts only acknowledged-and-verified messages."""
+    ok = res.stop in (STOP_REACHED, STOP_WINDOW)
+    rate = verified / res.elapsed if res.elapsed > 0 else 0
     fields = [
-        f"engine={engine}", f"workers={workers}", f"acked={res.acked}", f"verified={verified}",
+        f"engine={engine}", f"workers={workers}", f"result={'ok' if ok else 'FAILED'}",
+        f"acked={res.acked}", f"verified={verified}",
         f"records/s={rate:.0f}", f"elapsed_s={res.elapsed:.2f}",
         f"p50_us={res.hist.quantile_us(0.50)}", f"p95_us={res.hist.quantile_us(0.95)}",
         f"p99_us={res.hist.quantile_us(0.99)}", f"p99_9_us={res.hist.quantile_us(0.999)}",
         f"p99_99_us={res.hist.quantile_us(0.9999)}",
         f"client_rss_KiB={rss_kib}", "client_rss_source=ru_maxrss",
-        f"lang=python", f"client={client}", f"stop={res.stop}",
+        "lang=python", f"client={client}", f"client_build={build}", f"stop={res.stop}",
     ]
     if res.detail:
-        fields.append("detail=" + res.detail.replace("\n", " ").replace(" ", "_")[:200])
+        fields.append("detail=" + re.sub(r"[^A-Za-z0-9_.:,()/-]", "_", res.detail)[:200])
     return " ".join(fields)

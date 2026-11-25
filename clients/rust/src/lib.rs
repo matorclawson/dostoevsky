@@ -345,9 +345,7 @@ impl Client {
         }
         stream.flush().map_err(dead)?;
         match conn.fill_buf() {
-            Ok(b) if b.is_empty() => {
-                return Err((Error::Transport("connection closed before a reply".into()), true))
-            }
+            Ok([]) => return Err((Error::Transport("connection closed before a reply".into()), true)),
             Err(e) => return Err(dead(e)),
             Ok(_) => {}
         }

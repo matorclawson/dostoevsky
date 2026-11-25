@@ -11,8 +11,8 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 <rect class="bg" width="100%" height="100%"/>
 <text x="72" y="26" font-size="18" font-weight="600">Reopen time</text>
 <text x="72" y="46" font-size="12" class="m">milliseconds. Bars are medians; dots are trials.</text>
-<text x="72" y="61" font-size="12" class="m">Lower is better. Embedded JetStream wins at 1, 8 and 32 producers. Dostoevsky scans its journal on</text>
-<text x="72" y="76" font-size="12" class="m">open.</text>
+<text x="72" y="61" font-size="12" class="m">Lower is better. Embedded JetStream wins at 1, 8 and 32 producers. Dostoevsky replays its journal</text>
+<text x="72" y="76" font-size="12" class="m">on open; where that time goes was not profiled.</text>
 <line class="g" x1="72" x2="736" y1="340.0" y2="340.0"/><text class="m" x="64" y="344.0" font-size="11" text-anchor="end">0</text>
 <line class="g" x1="72" x2="736" y1="253.3" y2="253.3"/><text class="m" x="64" y="257.3" font-size="11" text-anchor="end">50</text>
 <line class="g" x1="72" x2="736" y1="166.7" y2="166.7"/><text class="m" x="64" y="170.7" font-size="11" text-anchor="end">100</text>

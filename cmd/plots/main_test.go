@@ -1,8 +1,10 @@
 package main
 
 import (
+	"html"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -108,8 +110,12 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 	if !strings.Contains(first["architecture.svg"], "ack only after sync") || !strings.Contains(first["architecture.svg"], "<desc id=\"d\">") {
 		t.Error("architecture.svg missing durability text or description")
 	}
-	if !strings.Contains(first["reopen.svg"], "JetStream wins at 1 and 8 producers.") || !strings.Contains(first["reopen.svg"], "Dostoevsky scans its journal on open.") {
-		t.Error("reopen.svg must derive and state where JetStream wins")
+	// The subtitle wraps at 100 characters, so compare the text of its lines joined with spaces,
+	// not the raw SVG: the winner sentence must be derived from the data (JetStream has the lower
+	// reopen medians in the fixture) and the observation must be present.
+	subtitle := subtitleText(first["reopen.svg"])
+	if !strings.Contains(subtitle, "JetStream wins at 1 and 8 producers.") || !strings.Contains(subtitle, "Dostoevsky replays its journal on open; where that time goes was not profiled.") {
+		t.Errorf("reopen.svg must derive and state where JetStream wins, with the observation; subtitle: %q", subtitle)
 	}
 	if strings.Contains(first["reopen.svg"], "Reopen and verify") || !strings.Contains(first["reopen.svg"], "Reopen time") {
 		t.Error("reopen.svg title must say it measures reopen time only")
@@ -344,4 +350,15 @@ func TestMissingMetricStopsThePlotterAndNeverAwardsAWin(t *testing.T) {
 	if got := winners(data, true); strings.Contains(got, "32") {
 		t.Fatalf("a winner was awarded at 32 producers without an opponent: %q", got)
 	}
+}
+
+// subtitleText joins the chart's subtitle lines (class m, font size 12) with single spaces,
+// undoing the 100-character wrap, so tests can assert on the sentences as written.
+func subtitleText(svg string) string {
+	re := regexp.MustCompile(`<text x="72" y="[0-9]+" font-size="12" class="m">([^<]*)</text>`)
+	var parts []string
+	for _, m := range re.FindAllStringSubmatch(svg, -1) {
+		parts = append(parts, html.UnescapeString(m[1]))
+	}
+	return strings.Join(parts, " ")
 }

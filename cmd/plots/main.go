@@ -200,7 +200,7 @@ var gateCharts = []chart{
 	{file: "reopen.svg", title: "Reopen time", unit: "milliseconds", key: "reopen_ms", scale: 1, decimals: 1, lower: true,
 		alt:     "Grouped bars of median time to reopen the store, in milliseconds, at 1, 8 and 32 producers for Dostoevsky and embedded JetStream, with each trial as a dot. The time stops before the records are verified.",
 		note:    "Lower is better.",
-		explain: "Dostoevsky scans its journal on open."},
+		explain: "Dostoevsky replays its journal on open; where that time goes was not profiled."},
 }
 
 // writeArchitecture is cleared by -architecture=false for secondary hosts.

@@ -273,9 +273,12 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	// over: the loop has ended, so a background reopen still waiting for the lock does nothing (the final reopen is exempt).
 	var over atomic.Bool
 	// noClose: a retention is still running at the end, and closing under it would be a bug.
-	noClose := false
+	var noClose atomic.Bool
 	closeStore := func() (cerr error) {
-		if s == nil || closed || noClose {
+		if noClose.Load() { // ownership first: s and closed belong to abandoned work once this is set
+			return nil
+		}
+		if s == nil || closed {
 			return nil
 		}
 		closed = true
@@ -322,13 +325,16 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	}
 	stride := max(o.Target/2000, 1)
 	// guarded is the host memory guard that also records the available memory at the cut-off, for the final line.
+	// The FIRST trip is latched (memTrip and cutoffKiB): memory that recovers before the run returns cannot erase it.
 	var cutoffKiB atomic.Uint64
+	var memTrip atomic.Pointer[stopInfo]
 	guarded := func() error {
 		e := checkMem()
 		if e != nil {
 			if k, err := memFn(); err == nil {
 				cutoffKiB.CompareAndSwap(0, max(k, 1))
 			}
+			memTrip.CompareAndSwap(nil, &stopInfo{StopMemory, fmt.Sprintf("stopped by the host memory guard at %d acknowledged (%v)", acked.Load(), e), time.Now()})
 		}
 		return e
 	}
@@ -663,11 +669,13 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	if abandoned {
 		// A publish that never settled may or may not have been stored: not a normal stop. The store may still be owned by
 		// that publish, so nothing is closed, the data directory is left in place, and no live store field is read.
-		noClose, keepDir = true, true
+		noClose.Store(true)
+		keepDir = true
 		st = &stopInfo{StopFailed, st.text + "; ambiguous: producers still inside a publish after " + abandonAfter.String() + " were abandoned; the data directory " + dir + " was left in place", st.at}
 	}
 	if retentionStuck {
-		noClose, keepDir = true, true
+		noClose.Store(true)
+		keepDir = true
 		st = &stopInfo{StopFailed, st.text + "; retention or a reopen still running after " + abandonAfter.String() + ", the store was not closed; the data directory " + dir + " was left in place", st.at}
 	}
 	owned := !abandoned && !retentionStuck // only then is the store ours to reopen, read and close
@@ -707,8 +715,9 @@ func executeSustained(engine string, open func(string, bool) (Store, error), o S
 	close(guardStop)
 	<-guardDone
 	// Checked once more before a normal completion is reported: memory that fell during the final close is still a cut-off.
-	if e := guarded(); e != nil && (st.kind == StopReached || st.kind == StopWindow) {
-		st = &stopInfo{StopMemory, fmt.Sprintf("stopped by the host memory guard before completion at %d acknowledged (%v)", acked.Load(), e), time.Now()}
+	guarded()
+	if t := memTrip.Load(); t != nil && (st.kind == StopReached || st.kind == StopWindow) {
+		st = t // a trip at ANY point of the run counts, even if memory has recovered since
 	}
 	cut := "none"
 	if k := cutoffKiB.Load(); k > 0 && st.kind == StopMemory {

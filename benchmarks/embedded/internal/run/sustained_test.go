@@ -670,3 +670,24 @@ func TestSustainedMemoryThatFallsDuringTheFinalCloseIsACutoff(t *testing.T) {
 		t.Fatalf("%v", r)
 	}
 }
+
+// M2 (round 4): the first guard trip is latched; memory that recovers before the run returns does not erase it.
+func TestSustainedAMemoryTripDuringTheFinalCloseIsLatchedEvenIfMemoryRecovers(t *testing.T) {
+	var armed, tripped atomic.Bool
+	f := newFake()
+	f.onClose = func(n int32) {
+		if n == 2 { // the final close
+			armed.Store(true)
+		}
+	}
+	_, r := sustainedRunMem(t, func() Store { return f }, Sustained{Window: 30 * time.Second, Target: 100, Workers: 1, Bucket: time.Hour},
+		func() (uint64, error) {
+			if armed.Load() && tripped.CompareAndSwap(false, true) {
+				return 100, nil // low exactly once, then recovered
+			}
+			return 1 << 30, nil
+		})
+	if r["stop"] != StopMemory || r["mem_cutoff_KiB"] != "100" {
+		t.Fatalf("%v", r)
+	}
+}

@@ -42,6 +42,20 @@ public final class ClientTest {
             int code = 200;
             byte[] out = new byte[0];
             String op = path.substring(path.lastIndexOf('/') + 1);
+            if ("stall".equals(q.get("topic"))) {  // headers, ten bytes, then silence
+                ex.sendResponseHeaders(200, 100);
+                ex.getResponseBody().write(new byte[10]);
+                ex.getResponseBody().flush();
+                try { Thread.sleep(4000); } catch (InterruptedException ignored) { }
+                ex.close();
+                return;
+            }
+            if ("short".equals(q.get("topic"))) {  // announces 10 bytes, delivers 3, ends
+                ex.sendResponseHeaders(200, 10);
+                ex.getResponseBody().write(new byte[3]);
+                ex.close();
+                return;
+            }
             if (!("Bearer " + TOKEN).equals(auth)) { code = 401; out = "unauthorized\n".getBytes(StandardCharsets.UTF_8); }
             else if (op.equals("publish")) {
                 if ("clash".equals(q.get("id"))) { code = 409; out = "conflict\n".getBytes(StandardCharsets.UTF_8); }
@@ -102,6 +116,17 @@ public final class ClientTest {
             for (var bad : new String[] {"http://example.com", "http://10.0.0.5:8787", "http://0.0.0.0:1", "http://localhost.example.com", "ftp://127.0.0.1", "127.0.0.1:8787"}) {
                 try { Client.checkUrl(bad); check(false, "accepted " + bad); } catch (IllegalArgumentException expected) { }
             }
+            try { c.read("short", 0, 1, 0); check(false, "a short body was accepted"); }
+            catch (java.io.IOException expected) { }
+
+            // The body deadline: headers arrive, the body stalls. Without a deadline on the read this
+            // would wait for the server (4 s here, 40 s by default) instead of one second.
+            c.timeout = java.time.Duration.ofSeconds(1);
+            long begin = System.nanoTime();
+            try { c.read("stall", 0, 1, 0); check(false, "a stalled body was accepted"); }
+            catch (java.io.IOException e) { check(e.getMessage() != null, "message"); }
+            long ms = (System.nanoTime() - begin) / 1_000_000;
+            check(ms < 3000, "the body read ignored its deadline: " + ms + " ms");
             System.out.println("ok");
         } finally {
             server.stop(0);

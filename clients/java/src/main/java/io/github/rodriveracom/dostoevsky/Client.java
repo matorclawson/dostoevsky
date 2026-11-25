@@ -10,6 +10,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Optional;
 import java.util.StringJoiner;
 
@@ -32,6 +36,16 @@ public final class Client {
     static final int MAX_BODY = 1 << 20;
 
     private record Reply(int statusCode, HttpHeaders headers, byte[] body) {}
+
+    /** Closes a response stream whose body read outlives its deadline; one daemon thread serves every client. */
+    private static final ScheduledExecutorService WATCHDOG = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "dostoevsky-client-watchdog");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** Bound on connecting, on waiting for the reply headers, and on reading the whole body. */
+    volatile Duration timeout = Duration.ofSeconds(40);
 
     private final String base;
     private final String token;
@@ -62,20 +76,41 @@ public final class Client {
             query.add(pairs[i] + "=" + URLEncoder.encode(pairs[i + 1], StandardCharsets.UTF_8));
         }
         var request = HttpRequest.newBuilder(URI.create(base + op + "?" + query))
-            .timeout(Duration.ofSeconds(40)).header("Authorization", "Bearer " + token)
+            .timeout(timeout).header("Authorization", "Bearer " + token)
             .header("Content-Type", "application/octet-stream");
         if (body == null) request.GET();
         else request.POST(HttpRequest.BodyPublishers.ofByteArray(body));
         var res = http.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
         try (var in = res.body()) {
             int code = res.statusCode();
-            if (code / 100 != 2) {
-                byte[] text = in.readNBytes(256);
-                throw new ClientException(code, new String(text, StandardCharsets.UTF_8).strip());
+            // The request timeout covers connecting and the reply headers only. The body read has
+            // its own deadline: a watchdog closes the stream, which aborts a read blocked on a
+            // server that sent headers and then went quiet.
+            var timedOut = new AtomicBoolean();
+            var guard = WATCHDOG.schedule(() -> {
+                timedOut.set(true);
+                try { in.close(); } catch (IOException ignored) { }
+            }, timeout.toMillis(), TimeUnit.MILLISECONDS);
+            try {
+                if (code / 100 != 2) {
+                    byte[] text = in.readNBytes(256);
+                    throw new ClientException(code, new String(text, StandardCharsets.UTF_8).strip());
+                }
+                byte[] responseBytes = in.readNBytes(MAX_BODY + 1);
+                if (responseBytes.length > MAX_BODY) throw new ClientException(code, "oversized_response");
+                var announced = res.headers().firstValueAsLong("Content-Length");
+                if (announced.isPresent() && announced.getAsLong() != responseBytes.length) {
+                    throw new ClientException(code, "incomplete_response");
+                }
+                return new Reply(code, res.headers(), responseBytes);
+            } catch (IOException e) {
+                if (timedOut.get() && !(e instanceof ClientException)) {
+                    throw new IOException("timed out reading the response body", e);
+                }
+                throw e;
+            } finally {
+                guard.cancel(false);
             }
-            byte[] responseBytes = in.readNBytes(MAX_BODY + 1);
-            if (responseBytes.length > MAX_BODY) throw new ClientException(code, "oversized_response");
-            return new Reply(code, res.headers(), responseBytes);
         }
     }
 

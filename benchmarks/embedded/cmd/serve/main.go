@@ -18,6 +18,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -33,7 +34,9 @@ func main() {
 	engine := flag.String("engine", "", "gateway, redis or nats")
 	bin := flag.String("bin", os.Getenv("BENCH_SERVER_BIN"), "server executable (default $BENCH_SERVER_BIN)")
 	flag.Parse()
-	if err := serve(*engine, serverBin(*engine, *bin, os.Getenv), os.Stdin, os.Stdout); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT) // before any start
+	defer stop()
+	if err := serve(ctx, *engine, serverBin(*engine, *bin, os.Getenv), os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)
 	}
@@ -50,17 +53,28 @@ func serverBin(engine, flagValue string, getenv func(string) string) string {
 	return getenv("BENCH_SERVER_BIN")
 }
 
-func serve(engine, bin string, stdin io.Reader, out io.Writer) (err error) {
+// serve runs one server until stdin closes or ctx is cancelled. ctx comes from main, which
+// installs the signal handling BEFORE anything is started, so a SIGTERM that arrives while the
+// server is still starting stops it instead of orphaning it (it has its own process group).
+func serve(ctx context.Context, engine, bin string, stdin io.Reader, out io.Writer) (err error) {
 	dir, err := os.MkdirTemp("", "embedded-serve-")
 	if err != nil {
 		return err
 	}
+	cleanup := func() error {
+		if dir == "" {
+			return nil
+		}
+		d := dir
+		dir = ""
+		return os.RemoveAll(d)
+	}
 	defer func() {
-		if rerr := os.RemoveAll(dir); rerr != nil && err == nil {
+		if rerr := cleanup(); rerr != nil && err == nil {
 			err = rerr
 		}
 	}()
-	s, err := servers.Start(engine, servers.Options{Bin: bin, Dir: dir})
+	s, err := servers.Start(engine, servers.Options{Ctx: ctx, Bin: bin, Home: os.Getenv("BENCH_KAFKA_HOME"), Java: os.Getenv("BENCH_JAVA_HOME"), Dir: dir})
 	if err != nil {
 		return err
 	}
@@ -70,16 +84,19 @@ func serve(engine, bin string, stdin io.Reader, out io.Writer) (err error) {
 			s.Stop()
 		}
 	}()
-	fmt.Fprintf(out, "READY addr=%s pid=%d token=%s\n", s.Addr, s.Proc.Pid(), s.Token)
+	token := s.Token
+	if token == "" {
+		token = "none" // kafka has no token
+	}
+	if _, err = fmt.Fprintf(out, "READY addr=%s pid=%d token=%s\n", s.Addr, s.Proc.Pid(), token); err != nil {
+		return fmt.Errorf("writing the READY line: %w", err)
+	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(sig)
 	closed := make(chan struct{})
 	go func() { io.Copy(io.Discard, stdin); close(closed) }()
 	select {
 	case <-closed:
-	case <-sig:
+	case <-ctx.Done():
 	}
 
 	s.Proc.Sample() // a last reading before the server is signaled
@@ -91,6 +108,12 @@ func serve(engine, bin string, stdin io.Reader, out io.Writer) (err error) {
 	if merr != nil {
 		return fmt.Errorf("server memory: %w", merr)
 	}
-	fmt.Fprintf(out, "STOPPED server_rss_KiB=%d rss_source=%s verdict=clean\n", kib, s.Proc.Source())
+	// The verdict is printed only after the server is gone AND its files are removed.
+	if err = cleanup(); err != nil {
+		return fmt.Errorf("removing the trial directory: %w", err)
+	}
+	if _, err = fmt.Fprintf(out, "STOPPED server_rss_KiB=%d rss_source=%s verdict=clean\n", kib, s.Proc.Source()); err != nil {
+		return fmt.Errorf("writing the STOPPED line: %w", err)
+	}
 	return nil
 }

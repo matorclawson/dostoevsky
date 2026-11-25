@@ -31,6 +31,13 @@ type Proc struct {
 // Start runs bin with args, in its own process group, with stdout and stderr
 // appended to logPath, and starts sampling its process tree every interval.
 func Start(bin string, args []string, env []string, logPath string, interval time.Duration) (*Proc, error) {
+	// Where memory is read with ps, every sample lists all processes on the machine (about
+	// 10 to 30 ms of CPU on macOS), so sampling every 50 ms would be a measurable load of its
+	// own. The interval is raised to 200 ms there; a short spike can be missed, which is part of
+	// why ps-sampled numbers are never compared with VmHWM.
+	if Source() == SourcePSSampled && interval < 200*time.Millisecond {
+		interval = 200 * time.Millisecond
+	}
 	// Memory is part of every server receipt, so a host that cannot report it fails the trial.
 	if err := checkMeasurable(); err != nil {
 		return nil, err

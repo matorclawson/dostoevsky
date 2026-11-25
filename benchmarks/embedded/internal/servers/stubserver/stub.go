@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,6 +22,15 @@ func Main() {
 		return
 	}
 	args := os.Args[1:]
+	if os.Getenv("SERVERS_STUB_HANG") != "" { // never listens: a server stuck starting. It leaves its pid beside its config.
+		dir := "."
+		if engine == "redis" && len(args) > 0 {
+			dir = filepath.Dir(args[0])
+		}
+		fail(os.WriteFile(filepath.Join(dir, "hang.pid"), []byte(strconv.Itoa(os.Getpid())), 0o600))
+		time.Sleep(10 * time.Minute)
+		os.Exit(0)
+	}
 	switch engine {
 	case "gateway":
 		var addr string

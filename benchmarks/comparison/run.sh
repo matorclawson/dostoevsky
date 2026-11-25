@@ -2,7 +2,8 @@
 # Compare engines on the publisher gate's workload, one trial at a time.
 # Run from the project root on the benchmark host with TMPDIR on the data disk.
 #   BENCH_ENGINES="dostoevsky jetstream sqlite redis valkey" \
-# (gateway: the control for the language client benchmarks, Dostoevsky over HTTP loopback)
+# (gateway: the control for the language client benchmarks. Chart label to use in the plots meta:
+#  label.gateway=gateway end to end (HTTP, process boundary); harness and gateway each run GOMAXPROCS=1)
 #   REDIS_BIN=/opt/bench/redis-8.12.0/src/redis-server \
 #   VALKEY_BIN=/opt/bench/valkey-9.2.0/bin/valkey-server \
 #   KAFKA_HOME=/opt/bench/kafka_2.13-4.4.0 JAVA_HOME=/opt/bench/jdk-21 \
@@ -27,6 +28,11 @@ case " $engines " in
   # The gateway binary's identity goes on record whether it was built here or overridden.
   gw="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}"
   if command -v sha256sum >/dev/null 2>&1; then gwsum=$(sha256sum "$gw" | cut -d' ' -f1); else gwsum=$(shasum -a 256 "$gw" | cut -d' ' -f1); fi
+  # A digest that could not be computed must stop the run, never print an empty one.
+  case "$gwsum" in
+   [0-9a-f]????????????????????????????????????????????????????????????????) ;;
+   *) echo "cannot compute the sha256 of $gw" >&2; exit 2 ;;
+  esac
   printf 'gateway_bin=%s sha256=%s\n' "$gw" "$gwsum" | tee .dev/embedded/gateway.sha256 >&2 ;;
 esac
 export GOMAXPROCS="${GOMAXPROCS:-2}"

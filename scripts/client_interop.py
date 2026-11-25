@@ -2,6 +2,7 @@
 import os
 import secrets
 import select
+import time
 import subprocess
 import sys
 import tempfile
@@ -11,12 +12,23 @@ from dostoevsky_client import Client, ClientError
 
 
 def startup_line(proc, timeout=30.0):
-    """The gateway's first output line, or TimeoutError after `timeout` seconds. A gateway that never
-    prints (stuck before it listens) must fail the run, not hang it."""
-    ready, _, _ = select.select([proc.stdout], [], [], timeout)
-    if not ready:
-        raise TimeoutError("the gateway printed nothing within %g s" % timeout)
-    return proc.stdout.readline().strip()
+    """The gateway's first output line, or TimeoutError after `timeout` seconds IN TOTAL. The deadline covers the
+    whole line, not just its first byte: a gateway that prints half a line and stops must fail the run too."""
+    fd = proc.stdout.fileno()
+    deadline = time.monotonic() + timeout
+    buf = b""
+    while b"\n" not in buf:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the gateway did not finish its first line within %g s (got %r)" % (timeout, buf[:80]))
+        ready, _, _ = select.select([fd], [], [], left)
+        if not ready:
+            continue  # the loop re-checks the deadline
+        chunk = os.read(fd, 4096)
+        if not chunk:  # the gateway closed its output without finishing a line
+            break
+        buf += chunk
+    return buf.split(b"\n", 1)[0].decode(errors="replace").strip()
 
 
 @contextmanager

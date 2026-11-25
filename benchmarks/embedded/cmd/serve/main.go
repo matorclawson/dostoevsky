@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -31,10 +32,20 @@ import (
 )
 
 func main() {
-	engine, bin, err := parseArgs(os.Args[1:], os.Getenv)
+	// Usage goes to stdout when it was asked for (-h, -help), to stderr when it comes with an error.
+	usage := io.Writer(os.Stderr)
+	for _, a := range os.Args[1:] {
+		if a == "-h" || a == "-help" || a == "--help" {
+			usage = os.Stdout
+		}
+	}
+	engine, bin, err := parseArgs(os.Args[1:], os.Getenv, usage)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "FAILED:", err)
-		os.Exit(2)
+		if code := exitCodeForArgs(err); code != 0 {
+			fmt.Fprintln(os.Stderr, "FAILED:", err)
+			os.Exit(code)
+		}
+		os.Exit(0) // -help is not a failure
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT) // before any start
 	defer stop()
@@ -47,14 +58,23 @@ func main() {
 // parseArgs reads the command line and resolves the server executable in the documented order:
 // -bin, else BENCH_<ENGINE>_SERVER, else BENCH_SERVER_BIN. The flag's own default is EMPTY: a
 // default taken from BENCH_SERVER_BIN would beat the engine-specific variable.
-func parseArgs(args []string, getenv func(string) string) (engine, bin string, err error) {
+func parseArgs(args []string, getenv func(string) string, usage io.Writer) (engine, bin string, err error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(usage)
 	e := fs.String("engine", "", "gateway, redis, nats or kafka")
 	b := fs.String("bin", "", "server executable; default $BENCH_<ENGINE>_SERVER (BENCH_REDIS_SERVER, BENCH_NATS_SERVER, BENCH_GATEWAY_SERVER), else $BENCH_SERVER_BIN; not used by kafka")
 	if err = fs.Parse(args); err != nil {
 		return "", "", err
 	}
 	return *e, serverBin(*e, *b, getenv), nil
+}
+
+// exitCodeForArgs: asking for help (flag.ErrHelp) is a success, any other argument error is a usage error.
+func exitCodeForArgs(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	return 2
 }
 
 // serverBin picks the server executable: the flag, else BENCH_<ENGINE>_SERVER, else BENCH_SERVER_BIN.

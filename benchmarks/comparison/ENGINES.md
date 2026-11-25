@@ -55,3 +55,11 @@ Host: production-03, Ubuntu 26.04.1 (codename resolute) arm64, 2 Neoverse-N1 vCP
 - The harness aborts a trial, as a failure, when the host's available memory falls below 300 MiB before or during the trial.
 - SQLite is measured with one writer connection and one transaction per publish (concurrent producers queue in Go), and the chart label says "single writer". Its timed reopen ends after one index-seek probe, not a table scan.
 - The comparison build runs with `-mod=readonly`. It writes to the Go module and build caches and the binaries to `.dev/embedded`.
+
+## Charts of a comparison run
+
+`go run ./cmd/plots -receipt comparison.log -section '*' -meta <meta file> -engines dostoevsky,jetstream,sqlite,redis,valkey,kafka,rabbitmq -allow-failures -out docs/img/<run>` draws the four charts for any number of engines. The meta file is `key=value` lines: the usual run description (`machine`, `os`, `go`, ...) or `footer.1`, `footer.2`, ... to replace the two default footer lines; `note.1`, `note.2`, ... for labels that must appear on every chart (RabbitMQ's "durability per vendor default, not verified" and the Erlang provenance, Kafka's "fsync per message inferred"); `label.<engine>` for the legend and winner sentences (for example `label.redis=Redis 8.12 (AOF always)`, `label.sqlite=SQLite (single writer)`); and `arch.<engine>` for where an engine ran (`in process`, `server, unix socket`, `server, loopback`).
+
+Memory is each trial's `total_rss_KiB` when the line has it (a server engine: harness plus server tree, a sum of sampled per-process peaks) and `peakRSS_KiB` otherwise. The reopen chart's meaning differs by engine (Redis and Valkey: restart-to-ready including AOF replay) and its note says so through `note.N`.
+
+A receipt with FAILED trial lines is refused unless `-allow-failures` is given. With it, every failed trial is shown: each producer count lists the engines that had failures and how many, the bar's tooltip says "median of N trials, F failed", and an engine whose trials all failed at a count has no bar there but is named in that list. Nothing is dropped and nothing is retried.

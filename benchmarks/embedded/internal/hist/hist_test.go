@@ -77,9 +77,11 @@ func TestEmptyAndSingleValueHistograms(t *testing.T) {
 // A short sample keeps its sub-microsecond precision: 1.5 us must not be reported as "1 us".
 func TestAShortSampleIsNotTruncatedToWholeMicroseconds(t *testing.T) {
 	var h H
-	h.Add(1900 * time.Nanosecond)
+	sample := 1900 * time.Nanosecond
+	h.Add(sample)
 	got := h.Quantile(0.5)
-	if got < 1900*time.Nanosecond || got > time.Duration(float64(1900*time.Nanosecond)*1.0101) {
-		t.Fatalf("1900 ns reported as %v: must be its bin's upper edge, never below the sample, within 1%%", got)
+	limit := time.Duration(float64(sample) * 1.0101) // run-time arithmetic: a constant would not convert to an integer type
+	if got < sample || got > limit {
+		t.Fatalf("%v reported as %v: must be its bin's upper edge, never below the sample, within 1%%", sample, got)
 	}
 }

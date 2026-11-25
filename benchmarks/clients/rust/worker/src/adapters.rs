@@ -105,7 +105,7 @@ fn own(addr: &str, token: &str, _workers: usize) -> Result<Arc<dyn Adapter>, Str
 // ---- rdkafka: acks=all, no retries, no idempotence, one message per batch ----
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
-use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
+use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, ThreadedProducer};
 use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
 
 type Opaque = Box<mpsc::Sender<Result<u64, bool>>>; // Err(true): the broker gave no answer in time
@@ -222,7 +222,7 @@ fn nats_error(e: &dyn std::fmt::Display, kind_if_timeout: Kind) -> EngineError {
 
 impl Adapter for Nats {
     fn publish(&self, data: &[u8]) -> Result<u64, EngineError> {
-        let bytes = async_nats::Bytes::from(data.to_vec());
+        let bytes = bytes::Bytes::from(data.to_vec());
         self.rt
             .block_on(async {
                 let ack = self.js.publish(TOPIC, bytes).await.map_err(|e| nats_error(&e, Kind::AmbiguousTimeout))?;
@@ -315,11 +315,9 @@ impl Adapter for Redis {
 
 fn redis_adapter(addr: &str, token: &str, _workers: usize) -> Result<Arc<dyn Adapter>, String> {
     let (host, port) = host_port(addr)?;
-    let info = redis::ConnectionInfo {
-        addr: redis::ConnectionAddr::Tcp(host, port),
-        redis: redis::RedisConnectionInfo { password: Some(token.to_string()), ..Default::default() },
-    };
-    let client = redis::Client::open(info).map_err(|_| "redis client".to_string())?;
+    // serve's token is hex, so nothing in it needs URL encoding; it lives only in memory, never in an argument.
+    let url = format!("redis://:{token}@{host}:{port}/");
+    let client = redis::Client::open(url.as_str()).map_err(|_| "redis client".to_string())?;
     Ok(Arc::new(Redis { client, idle: Mutex::new(Vec::new()), name: pinned("redis") }))
 }
 

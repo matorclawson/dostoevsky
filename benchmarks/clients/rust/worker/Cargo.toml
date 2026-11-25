@@ -20,6 +20,7 @@ path = "src/main.rs"
 dostoevsky-bench-core = { path = "../core" }
 dostoevsky-client = { path = "../../../../clients/rust" }
 rdkafka = { version = "=0.39.0", default-features = false }
-async-nats = { version = "=0.52.0", default-features = false, features = ["ring"] }
+async-nats = { version = "=0.52.0", default-features = false, features = ["ring", "jetstream"] }
+bytes = "=1.12.1" # the type async-nats takes as a payload; already in the lock at this version
 redis = { version = "=1.8.1", default-features = false }
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "time"] }

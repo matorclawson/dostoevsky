@@ -37,6 +37,7 @@ Host: production-03, Ubuntu 26.04.1 (codename resolute) arm64, 2 Neoverse-N1 vCP
 | SQLite (single writer) | `journal_mode=WAL`, `synchronous=FULL`, one writer connection, one transaction per publish | https://www.sqlite.org/pragma.html#pragma_synchronous and https://www.sqlite.org/wal.html ("Writers sync the WAL on every transaction commit if PRAGMA synchronous is set to FULL") | Yes |
 | Dostoevsky | fdatasync before acknowledgment (full fsync for the first write) | the crash tests in `crash_batch_test.go`, `publish_queue_test.go`, `retention_fault_test.go` and `fence_test.go` | Yes, by those tests |
 | JetStream | `SyncAlways` | the embedded server's options in `benchmarks/embedded/cmd/jet` | Yes |
+| JetStream (standalone server, language client benchmarks) | `jetstream { sync_interval: always }` in the server configuration | nats-server v2.15.3 `server/opts.go`: `case "sync", "sync_interval":` with the value `always` sets `opts.SyncAlways`, the same option the embedded row sets (https://raw.githubusercontent.com/nats-io/nats-server/v2.15.3/server/opts.go, read 25 Nov 2026). The vendor documentation site is not readable without a browser, so the source is the citation | Yes, by the source |
 
 ## Memory
 

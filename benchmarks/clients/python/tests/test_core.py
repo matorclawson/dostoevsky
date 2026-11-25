@@ -168,6 +168,13 @@ class WorkerTest(unittest.TestCase):
         self.assertIn("stop=verification-failed", text)
         self.assertIn("verified=0", text)
 
+    def test_the_window_is_finite_and_at_most_a_day(self):
+        for bad in ("86401", "1e300", "inf", "nan", "-1"):
+            self.assertEqual(self.run_main(["--engine", "memory", "--addr", "x:1", "--window=" + bad], Memory())[0], 2, bad)
+        code, text = self.run_main(["--engine", "memory", "--addr", "x:1", "--target", "3", "--window", "86400"], Memory())
+        self.assertEqual(code, 0)  # the edge itself is allowed; the run ends at its target long before
+        self.assertIn("stop=reached", text)
+
     def test_unknown_engine_and_bad_numbers_are_usage_errors(self):
         self.assertEqual(self.run_main(["--engine", "nope", "--addr", "x:1"], Memory())[0], 2)
         self.assertEqual(self.run_main(["--engine", "memory", "--addr", "x:1", "--workers", "0"], Memory())[0], 2)

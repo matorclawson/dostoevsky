@@ -15,6 +15,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import core  # noqa: E402
 
 
+MAX_WINDOW_SECONDS = 24 * 3600  # a longer window overflows the nanosecond clock arithmetic in some languages
+
+
 def main(argv, env=os.environ, out=sys.stdout, adapters=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--engine", required=True)
@@ -31,8 +34,8 @@ def main(argv, env=os.environ, out=sys.stdout, adapters=None):
     if args.engine not in adapters:
         print(f"unknown engine {args.engine!r} (have {', '.join(sorted(adapters))})", file=sys.stderr)
         return 2
-    if args.workers < 1 or args.target < 1:
-        print("workers and target must be at least 1", file=sys.stderr)
+    if args.workers < 1 or args.target < 1 or not (0 <= args.window <= MAX_WINDOW_SECONDS):  # a NaN fails the comparison
+        print("workers and target must be at least 1 and the window between 0 and %d seconds" % MAX_WINDOW_SECONDS, file=sys.stderr)
         return 2
     adapter = adapters[args.engine](args.addr, env.get("BENCH_TOKEN", ""), args.workers)
     if args.require_known_build and getattr(adapter, "client_build", "n/a") == "unknown":

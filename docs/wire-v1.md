@@ -152,6 +152,7 @@ Defaults, each configurable within the constraints given.
 | request pool, whole server | 16 MiB | at least max_body + 10 |
 | reply pool, whole server | 16 MiB | at least max_body + 10 |
 | reply pool held by one connection | 2 maximum frames | at least 1 maximum frame |
+| reads waiting for a record, whole server | 4096 | at least 1 |
 
 A server refuses to start with a configuration that breaks a constraint.
 
@@ -163,6 +164,7 @@ Only authenticated connections draw on these budgets. Intake and replies have **
 - **Request pool.** A frame's bytes are taken after its header is read and before its body is read, and given back once the server no longer holds those bytes: for PUBLISH and COMMIT after the write is durable or has failed, for READ and POSITION once the request is decoded. Nothing that holds request pool waits for any other budget.
 - **Reply pool.** Before the store is read for a READ or POSITION reply, a whole maximum frame is taken; it is given back when the reply has been written or the connection has closed. **A READ that is waiting for a record holds none**: it takes it only once the record exists. All other replies are at most 20 bytes and come from a fixed reserve of window x 20 bytes per connection.
 - Replies are written whether or not the connection is being read.
+- A READ with `wait_ms` above 0 that finds no record when every wait is taken gets ERROR `limit`; a record already stored is still returned. The connection stays open.
 - So every holder of a budget can finish: a request needs no further budget, and a reply needs only the socket to drain, which has a deadline.
 - When a connection closes, its waiting reads end and everything it holds is given back. A publish or commit already admitted still runs to completion and gives back its bytes.
 

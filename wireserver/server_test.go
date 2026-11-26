@@ -452,6 +452,43 @@ func TestAWaitingReadHoldsNoReplyBudget(t *testing.T) {
 	}
 }
 
+// awaiting reports each wait that reaches the store.
+type awaiting struct {
+	*d.Node
+	entered chan struct{}
+}
+
+func (a awaiting) Await(ctx context.Context, p d.Partition, offset int64) error {
+	a.entered <- struct{}{}
+	return a.Node.Await(ctx, p, offset)
+}
+
+func TestWaitingReadsAreBounded(t *testing.T) {
+	store := awaiting{openNode(t), make(chan struct{}, 8)}
+	_, addr := start(t, store, func(c *Config) { c.MaxWaits = 1 })
+	first, second := dial(t, addr), dial(t, addr)
+	second.call(publish(1, "jobs", "", "v"))
+	first.send(read(1, "quiet", 0, 30000))
+	<-store.entered
+	if p := second.call(read(2, "quiet", 0, 30000)); p.Type != wire.Error || p.Code != wire.Limit {
+		t.Fatal(p)
+	}
+	if p := second.call(read(3, "jobs", 0, 30000)); !p.Found {
+		t.Fatal("a stored record is served when no wait is free", p)
+	}
+	if p := second.call(read(4, "quiet", 0, 0)); p.Type != wire.ReadOK || p.Found {
+		t.Fatal(p)
+	}
+	second.call(publish(5, "quiet", "", "w"))
+	if p := first.reply(); !p.Found {
+		t.Fatal(p)
+	}
+	// The slot is free again.
+	if p := second.call(read(6, "quiet", 1, 50)); p.Type != wire.ReadOK || p.Found {
+		t.Fatal(p)
+	}
+}
+
 func TestSmallestPoolsStillMakeProgress(t *testing.T) {
 	_, addr := start(t, openNode(t), func(c *Config) {
 		c.RequestPool, c.ReplyPool, c.ConnectionReplies, c.WindowBytes = maxFrame, maxFrame, maxFrame, maxFrame
@@ -596,6 +633,7 @@ func TestConfigurationConstraints(t *testing.T) {
 		func(c *Config) { c.ReplyPool = maxFrame - 1 },
 		func(c *Config) { c.ConnectionReplies = maxFrame - 1 },
 		func(c *Config) { c.IdleTimeout = -time.Second },
+		func(c *Config) { c.MaxWaits = -1 },
 	} {
 		cfg := Config{Token: token}
 		set(&cfg)

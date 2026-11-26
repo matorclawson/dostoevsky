@@ -254,19 +254,26 @@ func (c *conn) refuse(r request, err error) {
 func (c *conn) serveRead(r request) {
 	p, offset := partition(r.q), int64(r.q.Offset)
 	empty := wire.Reply{Type: wire.ReadOK, RequestID: r.q.RequestID}
+	full := false // no slot to wait in
 	if r.q.WaitMS > 0 {
-		// Wait without holding any reply budget.
-		ctx, cancel := context.WithTimeout(c.ctx, time.Duration(r.q.WaitMS)*time.Millisecond)
-		err := c.s.store.Await(ctx, p, offset)
-		expired := errors.Is(ctx.Err(), context.DeadlineExceeded)
-		cancel()
-		if expired && errors.Is(err, context.DeadlineExceeded) {
-			c.answer(empty, r.size, false)
-			return
-		}
-		if err != nil {
-			c.refuse(r, err)
-			return
+		select {
+		case c.s.waits <- struct{}{}:
+			// Wait without holding any reply budget.
+			ctx, cancel := context.WithTimeout(c.ctx, time.Duration(r.q.WaitMS)*time.Millisecond)
+			err := c.s.store.Await(ctx, p, offset)
+			expired := errors.Is(ctx.Err(), context.DeadlineExceeded)
+			cancel()
+			<-c.s.waits
+			if expired && errors.Is(err, context.DeadlineExceeded) {
+				c.answer(empty, r.size, false)
+				return
+			}
+			if err != nil {
+				c.refuse(r, err)
+				return
+			}
+		default:
+			full = true // a record that is already there is still served
 		}
 	}
 	if !c.reserve() {
@@ -275,9 +282,12 @@ func (c *conn) serveRead(r request) {
 	rec, err := c.s.store.Read(c.ctx, p, offset, false)
 	if err != nil {
 		c.unreserve()
-		if errors.Is(err, d.ErrEmpty) {
+		switch {
+		case errors.Is(err, d.ErrEmpty) && full:
+			c.refuse(r, d.ErrLimit)
+		case errors.Is(err, d.ErrEmpty):
 			c.answer(empty, r.size, false)
-		} else {
+		default:
 			c.refuse(r, err)
 		}
 		return

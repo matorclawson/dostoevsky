@@ -41,6 +41,7 @@ type Config struct {
 	RequestPool        int // request bytes held by the whole server, 16 MiB
 	ReplyPool          int // reply bytes held by the whole server, 16 MiB
 	ConnectionReplies  int // reply pool bytes one connection may hold, 2 maximum frames
+	MaxWaits           int // reads waiting for a record, whole server, 4096
 
 	AuthTimeout  time.Duration // accept to WELCOME written, 5 s
 	FrameTimeout time.Duration // first header byte to last body byte, 40 s
@@ -62,6 +63,7 @@ func (c *Config) complete() error {
 	fill(&c.RequestPool, 16<<20)
 	fill(&c.ReplyPool, 16<<20)
 	fill(&c.ConnectionReplies, 2*maxFrame)
+	fill(&c.MaxWaits, 4096)
 	fill(&c.AuthTimeout, 5*time.Second)
 	fill(&c.FrameTimeout, 40*time.Second)
 	fill(&c.ReplyTimeout, 45*time.Second)
@@ -69,8 +71,8 @@ func (c *Config) complete() error {
 	switch {
 	case len(c.Token) < wire.MinToken || len(c.Token) > wire.MaxToken:
 		return errors.New("wireserver: the token must be 16 to 4096 bytes")
-	case c.MaxConnections < 1 || c.MaxUnauthenticated < 1:
-		return errors.New("wireserver: connection limits must be positive")
+	case c.MaxConnections < 1 || c.MaxUnauthenticated < 1 || c.MaxWaits < 1:
+		return errors.New("wireserver: connection and wait limits must be positive")
 	case c.Window < 1 || c.Window > 1<<16-1:
 		return errors.New("wireserver: window must be 1 to 65535")
 	case c.WindowBytes < maxFrame || uint64(c.WindowBytes) > 1<<32-1:
@@ -97,6 +99,7 @@ type Server struct {
 	requests pool
 	replies  pool
 	writes   sequencer
+	waits    chan struct{} // one slot for each waiting read
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -119,6 +122,7 @@ func New(store Store, c Config) (*Server, error) {
 	}
 	s := &Server{store: store, cfg: c, token: []byte(c.Token),
 		listeners: make(map[net.Listener]struct{}), conns: make(map[net.Conn]struct{})}
+	s.waits = make(chan struct{}, c.MaxWaits)
 	s.requests.free = c.RequestPool
 	s.replies.free = c.ReplyPool
 	s.ctx, s.cancel = context.WithCancel(context.Background())

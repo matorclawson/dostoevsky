@@ -14,10 +14,14 @@ import (
 const (
 	maxQueuedPublishes = 64
 	maxQueuedBytes     = 1 << 20
-	// After a group of two or more is acknowledged, the drainer waits at most this
-	// long for the callers it just released to queue their next calls before it takes
-	// the next group (see gather). A lone caller never waits.
+	// After a group is acknowledged, the drainer waits for the callers it just released
+	// to queue their next calls before it takes the next group (see gather). For the
+	// first gatherLimit it spins; a longer wait, up to half the last write and never
+	// more than maxGather, sleeps until the callers arrive. A lone caller never waits.
 	gatherLimit = 100 * time.Microsecond
+	maxGather   = 2 * time.Millisecond
+	// After long waits that ran out, this many doublings of groups skip the long wait.
+	maxGatherMisses = 6
 )
 
 type queuedPublish struct {
@@ -44,6 +48,14 @@ type publishQueue struct {
 	// so a drainer left over from another test can never race with the swap.
 	now   func() time.Time
 	yield func()
+	// want is the queue length a sleeping drainer is waiting for, or zero; ready wakes
+	// it. Both are guarded by mu.
+	want  int
+	ready chan struct{}
+	// misses and skip back the long wait off when callers do not come back. Only the
+	// one drainer touches them. cap replaces maxGather in tests.
+	misses, skip int
+	cap          time.Duration
 }
 
 func (q *publishQueue) clock() time.Time {
@@ -96,6 +108,7 @@ func (n *Node) schedulePublish(ctx context.Context, p Partition, m Message) (Rec
 	}
 	size := len(p.Topic) + len(m.ID) + len(m.Key) + len(m.Value)
 	if len(q.pending) >= maxQueuedPublishes || size > maxQueuedBytes-q.bytes {
+		q.wake() // the queue cannot grow: waiting longer would gain nothing
 		q.mu.Unlock()
 		n.mu.Lock()
 		defer n.mu.Unlock()
@@ -105,6 +118,9 @@ func (n *Node) schedulePublish(ctx context.Context, p Partition, m Message) (Rec
 	w := &queuedPublish{ctx: ctx, partition: p, msg: m, done: make(chan struct{})}
 	q.pending = append(q.pending, w)
 	q.bytes += size
+	if q.want > 0 && len(q.pending) >= q.want {
+		q.wake()
+	}
 	q.mu.Unlock()
 	<-w.done
 	return w.result, w.err
@@ -122,41 +138,112 @@ func (q *publishQueue) take() []*queuedPublish {
 func (n *Node) drainPublishes(batch []*queuedPublish) {
 	for len(batch) > 0 {
 		n.mu.Lock()
+		began := n.publishes.clock()
 		n.writeQueued(batch)
+		wrote := n.publishes.clock().Sub(began)
 		n.mu.Unlock()
 		released := len(batch)
+		// Counted before anyone is released: these queued while this group was being
+		// written, and the next group should hold them AND the released callers.
+		n.publishes.mu.Lock()
+		waiting := len(n.publishes.pending)
+		n.publishes.mu.Unlock()
 		for _, w := range batch {
 			close(w.done)
 		}
-		n.publishes.gather(released)
+		n.publishes.gather(released, waiting, wrote)
 		batch = n.publishes.take()
 	}
 }
 
 // gather gives the callers that were just acknowledged a moment to come back with
 // their next calls. With many synchronous producers every caller of a group is
-// waiting for that group, so the queue is empty the instant they are released; taking
-// it then ends the drain, and the next arrival writes alone while the rest pile up
-// behind it, so groups alternate between one and many. Waiting until about as many
-// calls are pending as were released (or gatherLimit, whichever comes first) keeps the
-// groups full. Only groups of two or more wait, so a single producer sees no delay,
-// and the wait never delays an acknowledgment: it happens after the group's callers
-// have been released.
-func (q *publishQueue) gather(released int) {
-	if released < 2 {
+// waiting for that group; taking the queue the instant they are released would write
+// the others alone and the released ones in the group after, so each caller would be
+// acknowledged only every second sync. The next group should therefore hold the
+// callers that queued during the write (waiting) and the released ones: counting only
+// as many as were released would be satisfied by the waiting half of a split at once,
+// and the two halves would alternate for ever.
+//
+// Over a network the callers take longer than gatherLimit to return, so after
+// spinning that long the drainer sleeps until they arrive, for at most half of what
+// the last write took (a slow disk makes a missed group costly, a fast one does not)
+// and at most maxGather. If they do not arrive, as with publishers that call once,
+// the long wait is skipped for a doubling number of groups. A lone caller never waits,
+// and no wait delays an acknowledgment: it happens after the group is released.
+func (q *publishQueue) gather(released, waiting int, wrote time.Duration) {
+	target := min(released+waiting, maxQueuedPublishes)
+	if target < 2 {
 		return
 	}
-	deadline := q.clock().Add(gatherLimit)
+	began := q.clock()
+	spun := began.Add(gatherLimit)
 	for {
 		q.mu.Lock()
 		pending := len(q.pending)
 		q.mu.Unlock()
-		if pending >= released || !q.clock().Before(deadline) {
+		if pending >= target {
+			q.misses, q.skip = 0, 0
 			return
+		}
+		if !q.clock().Before(spun) {
+			break
 		}
 		q.relax()
 	}
+	limit := maxGather
+	if q.cap > 0 {
+		limit = q.cap
+	}
+	limit = min(wrote/2, limit)
+	if limit <= gatherLimit {
+		return
+	}
+	if q.skip > 0 {
+		q.skip--
+		return
+	}
+	q.mu.Lock()
+	if len(q.pending) >= target {
+		q.mu.Unlock()
+		q.misses = 0
+		return
+	}
+	if q.ready == nil {
+		q.ready = make(chan struct{}, 1)
+	}
+	select { // a wake left over from an earlier wait
+	case <-q.ready:
+	default:
+	}
+	q.want = target
+	q.mu.Unlock()
+	timer := time.NewTimer(limit - gatherLimit)
+	defer timer.Stop()
+	select {
+	case <-q.ready:
+		q.misses = 0
+	case <-timer.C:
+		q.misses = min(q.misses+1, maxGatherMisses)
+		q.skip = 1<<q.misses - 1
+	}
+	q.mu.Lock()
+	q.want = 0
+	q.mu.Unlock()
 }
+
+// wake ends a drainer's sleep, if there is one. The caller holds mu.
+func (q *publishQueue) wake() {
+	if q.want == 0 {
+		return
+	}
+	q.want = 0
+	select {
+	case q.ready <- struct{}{}:
+	default:
+	}
+}
+
 func (n *Node) writeQueued(batch []*queuedPublish) {
 	n.publishes.note(len(batch))
 	if len(batch) > 1 {

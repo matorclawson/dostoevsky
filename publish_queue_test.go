@@ -299,8 +299,9 @@ func queueArrivals(q *publishQueue, count int, tag string) {
 func TestGatherDoesNotDelayALoneCaller(t *testing.T) {
 	var q publishQueue
 	yields := fakeGather(&q, func(*time.Time) { t.Error("a lone caller yielded") })
-	q.gather(1)
-	q.gather(0)
+	q.gather(1, 0, time.Hour)
+	q.gather(0, 0, time.Hour)
+	q.gather(0, 1, time.Hour)
 	if *yields != 0 {
 		t.Fatalf("%d yields for a lone caller", *yields)
 	}
@@ -310,7 +311,7 @@ func TestGatherDoesNotDelayALoneCaller(t *testing.T) {
 func TestGatherStopsWhenTheReleasedCallersHaveReturned(t *testing.T) {
 	var q publishQueue
 	yields := fakeGather(&q, func(*time.Time) { queueArrivals(&q, 1, "a") }) // one caller returns per look
-	q.gather(4)
+	q.gather(4, 0, 0)
 	if *yields != 4 || len(q.pending) != 4 {
 		t.Fatalf("%d yields, %d pending; want it to stop at 4 and 4", *yields, len(q.pending))
 	}
@@ -320,9 +321,101 @@ func TestGatherStopsWhenTheReleasedCallersHaveReturned(t *testing.T) {
 func TestGatherIsBounded(t *testing.T) {
 	var q publishQueue
 	yields := fakeGather(&q, func(now *time.Time) { *now = now.Add(gatherLimit / 4) })
-	q.gather(8)
+	q.gather(8, 0, 0)
 	if *yields < 3 || *yields > 5 || len(q.pending) != 0 {
 		t.Fatalf("%d yields, %d pending; want about four looks of gatherLimit/4 each and no arrivals", *yields, len(q.pending))
+	}
+}
+
+// Callers that queued during the write do not satisfy the wait on their own: the next
+// group should hold them and the released ones, or two halves alternate for ever.
+func TestGatherWaitsForTheReleasedOnTopOfThoseAlreadyQueued(t *testing.T) {
+	var q publishQueue
+	queueArrivals(&q, 4, "waiting")
+	yields := fakeGather(&q, func(*time.Time) { queueArrivals(&q, 1, "back") })
+	q.gather(4, 4, 0)
+	if *yields != 4 || len(q.pending) != 8 {
+		t.Fatalf("%d yields, %d pending; want 4 and 8", *yields, len(q.pending))
+	}
+	// One released caller and three waiting are a group worth waiting for too.
+	var one publishQueue
+	queueArrivals(&one, 3, "waiting")
+	yields = fakeGather(&one, func(*time.Time) { queueArrivals(&one, 1, "back") })
+	one.gather(1, 3, 0)
+	if *yields != 1 || len(one.pending) != 4 {
+		t.Fatalf("%d yields, %d pending; want 1 and 4", *yields, len(one.pending))
+	}
+}
+
+// A caller slower than the spin wakes the sleeping drainer when it arrives. The bound
+// is set far beyond the test's patience, so only the arrival can end the wait.
+func TestGatherSleepsUntilTheCallersArrive(t *testing.T) {
+	q := publishQueue{cap: time.Hour}
+	done := make(chan struct{})
+	go func() {
+		q.gather(2, 0, 4*time.Hour)
+		close(done)
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		q.mu.Lock()
+		asleep := q.want == 2
+		if asleep {
+			q.pending = append(q.pending, pending("a", "v"), pending("b", "v"))
+			q.wake()
+		}
+		q.mu.Unlock()
+		if asleep {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the drainer never slept")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the arrival did not wake the drainer")
+	}
+	if q.misses != 0 || q.skip != 0 {
+		t.Fatalf("misses=%d skip=%d after a full group", q.misses, q.skip)
+	}
+}
+
+// Callers that never come back cost a long wait only now and then.
+func TestGatherBacksOffWhenCallersDoNotReturn(t *testing.T) {
+	var q publishQueue
+	long := 0
+	for i := 0; i < 1000; i++ {
+		before := q.skip
+		q.gather(2, 0, 400*time.Microsecond) // a 200us bound
+		if before == 0 {
+			long++
+		}
+	}
+	if q.misses != maxGatherMisses || long > 25 {
+		t.Fatalf("misses=%d, %d long waits in 1000 groups", q.misses, long)
+	}
+}
+
+// A queue that cannot grow wakes the drainer instead of letting it sleep out.
+func TestGatherIsWokenByAFullQueue(t *testing.T) {
+	n := openTest(t, t.TempDir(), config())
+	q := &n.publishes
+	q.mu.Lock()
+	q.active, q.want, q.ready = true, maxQueuedPublishes+1, make(chan struct{}, 1)
+	for i := 0; i < maxQueuedPublishes; i++ {
+		q.pending = append(q.pending, pending(fmt.Sprintf("full-%d", i), "v"))
+	}
+	q.mu.Unlock()
+	if _, err := n.Publish(ctx, p.Topic, Message{ID: "over", Value: []byte("v")}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-q.ready:
+	default:
+		t.Fatal("an overflowing publish did not wake the drainer")
 	}
 }
 

@@ -112,3 +112,16 @@ func TestParseEngines(t *testing.T) {
 		}
 	}
 }
+
+func TestSummaryTreatsResultFailedAsAFailureAndFailedRowsAreNeutralForTheKind(t *testing.T) {
+	log := "trial=1 engine=a workers=1 records/s=10 p99_us=5 quantiles=bin-upper-1pct\n" +
+		"trial=1 engine=b workers=1 FAILED stop=failed detail\n" +
+		"trial=2 engine=b workers=1 result=FAILED records/s=0 p99_us=7 quantiles=bin-upper-1pct stop=failed\n"
+	out, err := summaryFor(t, log, 2, []int{1}, []string{"a", "b"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "failed=2") || strings.Contains(out, "mixes percentile kinds") {
+		t.Fatalf("summary:\n%s", out)
+	}
+}

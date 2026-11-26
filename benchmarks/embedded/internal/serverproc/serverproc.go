@@ -25,15 +25,22 @@ type Proc struct {
 	exit    chan error
 
 	mu   sync.Mutex
-	peak map[int]uint64 // pid -> highest VmHWM seen, in KiB
+	peak map[int]uint64 // pid -> highest reading seen, in KiB (see Source for what a reading is)
 }
 
 // Start runs bin with args, in its own process group, with stdout and stderr
 // appended to logPath, and starts sampling its process tree every interval.
 func Start(bin string, args []string, env []string, logPath string, interval time.Duration) (*Proc, error) {
+	// Where memory is read with ps, every sample lists all processes on the machine (about
+	// 10 to 30 ms of CPU on macOS), so sampling every 50 ms would be a measurable load of its
+	// own. The interval is raised to 200 ms there; a short spike can be missed, which is part of
+	// why ps-sampled numbers are never compared with VmHWM.
+	if Source() == SourcePSSampled && interval < 200*time.Millisecond {
+		interval = 200 * time.Millisecond
+	}
 	// Memory is part of every server receipt, so a host that cannot report it fails the trial.
-	if _, ok := vmHWM(os.Getpid()); !ok {
-		return nil, errors.New("procfs is unavailable: server memory cannot be measured")
+	if err := checkMeasurable(); err != nil {
+		return nil, err
 	}
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -49,6 +56,10 @@ func Start(bin string, args []string, env []string, logPath string, interval tim
 	}
 	p := &Proc{cmd: cmd, rootPid: cmd.Process.Pid, stop: make(chan struct{}), done: make(chan struct{}), exit: make(chan error, 1), peak: map[int]uint64{}}
 	go func() { p.exit <- cmd.Wait() }()
+	// One reading before Start returns, on this goroutine: a server that stops almost at once
+	// still has a measurement, and nothing depends on the ticker winning a race. The process has
+	// already been exec'd, so it is there to be read.
+	p.sampleOnce()
 	go p.sample(interval)
 	return p, nil
 }
@@ -113,6 +124,7 @@ const exitSIGTERM = 128 + int(syscall.SIGTERM)
 // Known limit: a leader that died by itself but whose cmd.Wait has not yet returned can still
 // accept the signal, so such a death can look like delivery.
 func (p *Proc) StopWith(grace time.Duration, cleanShutdown func() error) error {
+	p.sampleOnce() // a last reading before anything is signaled
 	pid := p.cmd.Process.Pid
 	var err error
 	exitedFirst := false
@@ -200,7 +212,7 @@ func (p *Proc) PeakKiB() (uint64, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.peak[p.rootPid] == 0 {
-		return 0, fmt.Errorf("server memory unavailable: no VmHWM was ever read for pid %d", p.rootPid)
+		return 0, fmt.Errorf("server memory unavailable: no %s reading was ever taken for pid %d", Source(), p.rootPid)
 	}
 	var sum uint64
 	for _, v := range p.peak {
@@ -224,16 +236,25 @@ func (p *Proc) sample(interval time.Duration) {
 }
 
 func (p *Proc) sampleOnce() {
-	for _, pid := range tree(p.cmd.Process.Pid) {
-		if kib, ok := vmHWM(pid); ok {
-			p.mu.Lock()
-			if kib > p.peak[pid] {
-				p.peak[pid] = kib
-			}
-			p.mu.Unlock()
+	readings, err := snapshotTree(p.rootPid, Source())
+	if err != nil {
+		return // a missed sample; PeakKiB fails if the server was never measured
+	}
+	p.mu.Lock()
+	for pid, kib := range readings {
+		if kib > p.peak[pid] {
+			p.peak[pid] = kib
 		}
 	}
+	p.mu.Unlock()
 }
+
+// Sample takes one reading now, on the caller's goroutine. Call it right after readiness and
+// right before stopping the server, so a short-lived server is never left unmeasured.
+func (p *Proc) Sample() { p.sampleOnce() }
+
+// Source names how this process's memory was measured: SourceVmHWM or SourcePSSampled.
+func (p *Proc) Source() string { return Source() }
 
 // tree returns root and all of its descendants, read from /proc.
 func tree(root int) []int {
@@ -299,15 +320,5 @@ func vmHWM(pid int) (uint64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if rest, ok := strings.CutPrefix(line, "VmHWM:"); ok {
-			f := strings.Fields(rest)
-			if len(f) >= 1 {
-				if kib, err := strconv.ParseUint(f[0], 10, 64); err == nil {
-					return kib, true
-				}
-			}
-		}
-	}
-	return 0, false
+	return parseVmHWM(string(b))
 }

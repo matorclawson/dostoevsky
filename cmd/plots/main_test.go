@@ -1,8 +1,10 @@
 package main
 
 import (
+	"html"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -108,8 +110,12 @@ func TestRunIsDeterministicAndShowsMedians(t *testing.T) {
 	if !strings.Contains(first["architecture.svg"], "ack only after sync") || !strings.Contains(first["architecture.svg"], "<desc id=\"d\">") {
 		t.Error("architecture.svg missing durability text or description")
 	}
-	if !strings.Contains(first["reopen.svg"], "JetStream wins at 1 and 8 producers.") || !strings.Contains(first["reopen.svg"], "Dostoevsky scans its journal on open.") {
-		t.Error("reopen.svg must derive and state where JetStream wins")
+	// The subtitle wraps at 100 characters, so compare the text of its lines joined with spaces,
+	// not the raw SVG: the winner sentence must be derived from the data (JetStream has the lower
+	// reopen medians in the fixture) and the observation must be present.
+	subtitle := subtitleText(first["reopen.svg"])
+	if !strings.Contains(subtitle, "JetStream wins at 1 and 8 producers.") || !strings.Contains(subtitle, "Dostoevsky replays its journal on open; where that time goes was not profiled.") {
+		t.Errorf("reopen.svg must derive and state where JetStream wins, with the observation; subtitle: %q", subtitle)
 	}
 	if strings.Contains(first["reopen.svg"], "Reopen and verify") || !strings.Contains(first["reopen.svg"], "Reopen time") {
 		t.Error("reopen.svg title must say it measures reopen time only")
@@ -343,5 +349,142 @@ func TestMissingMetricStopsThePlotterAndNeverAwardsAWin(t *testing.T) {
 	}
 	if got := winners(data, true); strings.Contains(got, "32") {
 		t.Fatalf("a winner was awarded at 32 producers without an opponent: %q", got)
+	}
+}
+
+// subtitleText joins the chart's subtitle lines (class m, font size 12) with single spaces,
+// undoing the 100-character wrap, so tests can assert on the sentences as written.
+func subtitleText(svg string) string {
+	re := regexp.MustCompile(`<text x="72" y="[0-9]+" font-size="12" class="m">([^<]*)</text>`)
+	var parts []string
+	for _, m := range re.FindAllStringSubmatch(svg, -1) {
+		parts = append(parts, html.UnescapeString(m[1]))
+	}
+	return strings.Join(parts, " ")
+}
+
+func TestAReceiptThatMixesPercentileKindsIsRefused(t *testing.T) {
+	write := func(lines ...string) string {
+		path := filepath.Join(t.TempDir(), "r.log")
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	exact := "trial=1 engine=a workers=1 records/s=10 p99_us=5"
+	binned := "trial=1 engine=b workers=1 records/s=10 p99_us=5 quantiles=bin-upper-1pct"
+	if _, err := parseTrials(write(exact, binned), "*"); err == nil || !strings.Contains(err.Error(), "mixes percentile kinds") {
+		t.Fatalf("a receipt with exact and binned lines: %v", err)
+	}
+	if got, err := parseTrials(write(exact, exact), "*"); err != nil || len(got) != 2 {
+		t.Fatalf("two exact lines (the receipts written before the histogram): %v, %d trials", err, len(got))
+	}
+	if got, err := parseTrials(write(binned, binned), "*"); err != nil || len(got) != 2 {
+		t.Fatalf("two binned lines: %v, %d trials", err, len(got))
+	}
+	if quantileKind(trial{}) != "exact" || quantileKind(trial{"quantiles": "bin-upper-1pct"}) != "bin-upper-1pct" {
+		t.Fatal("a line without the marker must count as exact")
+	}
+}
+
+// benchmarks/clients/receipt_examples*.txt hold the lines the Python, JavaScript and Java workers write
+// (their tests rebuild them byte for byte). Here the parser that draws the charts reads every one:
+// no stray token, the percentile marker present, the numbers parse.
+func TestEveryLanguageWorkerLineParses(t *testing.T) {
+	files, err := filepath.Glob("../../benchmarks/clients/receipt_examples*.txt") // one file per set of workers
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no receipt example files: %v", err)
+	}
+	var lines []string
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(string(raw), "\n") {
+			if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
+				lines = append(lines, l)
+			}
+		}
+	}
+	if len(lines) < 6 {
+		t.Fatalf("%d example lines, want one ok and one failed line for each of three engines", len(lines))
+	}
+	for _, l := range lines {
+		for _, tok := range strings.Fields(l) {
+			if !strings.Contains(tok, "=") {
+				t.Errorf("stray token %q in %.80s", tok, l)
+			}
+		}
+	}
+	path := filepath.Join(t.TempDir(), "r.log")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseTrials(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(lines) {
+		t.Fatalf("parsed %d trials from %d lines", len(got), len(lines))
+	}
+	failed := 0
+	for _, tr := range got {
+		if tr["quantiles"] != "bin-upper-1pct" {
+			t.Errorf("%s: quantiles=%q", tr["engine"], tr["quantiles"])
+		}
+		for _, k := range []string{"records/s", "p50_us", "p99_us", "p99_9_us", "p99_99_us", "client_rss_KiB"} {
+			if v, ok := tr.num(k); !ok || v < 0 {
+				t.Errorf("%s: %s=%q is not a non-negative number", tr["engine"], k, tr[k])
+			}
+		}
+		if tr["result"] != "ok" && tr["result"] != "FAILED" {
+			t.Errorf("%s: result=%q", tr["engine"], tr["result"])
+		}
+		if tr["result"] == "FAILED" {
+			failed++
+			if tr["stop"] != "failed" || tr["detail"] == "" {
+				t.Errorf("%s: a FAILED line must say stop=failed and carry a detail", tr["engine"])
+			}
+		}
+	}
+	if failed < 2 {
+		t.Fatalf("%d FAILED example lines, want at least two", failed)
+	}
+}
+
+// A run with a failed trial must still plot: the driver's FAILED row carries no percentiles, so it says
+// nothing about their kind, and a worker's result=FAILED row counts as a failure like the marker.
+func TestAFailedRowIsNeutralForThePercentileKindAndResultFailedIsAFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.log")
+	lines := []string{
+		"trial=1 engine=a workers=1 records/s=10 p99_us=5 quantiles=bin-upper-1pct",
+		"trial=1 engine=b workers=1 FAILED stop=failed publish_4:_Error:engine-error", // the driver's row: no percentiles, no marker
+		"trial=2 engine=b workers=1 result=FAILED records/s=0 p99_us=7 quantiles=bin-upper-1pct stop=failed",
+		"trial=2 engine=a workers=1 records/s=11 p99_us=6 quantiles=bin-upper-1pct",
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseTrials(path, "*")
+	if err != nil {
+		t.Fatalf("a run with a failed trial was refused as mixed: %v", err)
+	}
+	failed := 0
+	for _, tr := range got {
+		if tr["failed"] == "1" {
+			failed++
+		}
+	}
+	if len(got) != 4 || failed != 2 {
+		t.Fatalf("%d trials, %d marked failed; want 4 and 2 (the FAILED row and the result=FAILED row)", len(got), failed)
+	}
+	// An exact (unmarked) success next to a binned one is still mixed, whatever failed around them.
+	mixed := append(lines, "trial=3 engine=a workers=1 records/s=12 p99_us=6")
+	if err := os.WriteFile(path, []byte(strings.Join(mixed, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseTrials(path, "*"); err == nil || !strings.Contains(err.Error(), "mixes percentile kinds") {
+		t.Fatalf("exact and binned successes in one receipt: %v", err)
 	}
 }

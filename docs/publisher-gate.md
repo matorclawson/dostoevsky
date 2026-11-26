@@ -32,7 +32,7 @@ zeo-rt ran the same gate on production-03 (delivery 4596, commit `8b5953ac`, whi
 | 32 | dostoevsky | 7,764 | 9.69 | 10.06 | 203.78 |
 | 32 | jetstream | 815 | 75.87 | 43.62 | 15.16 |
 
-Dostoevsky is ahead on throughput, p99 and memory at every producer count. **JetStream reopens 12 to 14 times faster**: Dostoevsky replays its journal on open and the time does not depend on the number of producers. A second run with `GOMAXPROCS` unset (the wrapper then defaults to 2) gave 738 / 2,507 / 7,826 messages/s against 668 / 792 / 752 (`unset.log`).
+In this run Dostoevsky's median throughput and p99 were better, and its median peak memory lower, than embedded JetStream's (in the configuration measured here) at 1, 8 and 32 producers. **JetStream reopened 12 to 14 times faster.** Dostoevsky replays its journal when it opens, and its reopen time was about the same at 1, 8 and 32 producers in this run (each journal holds 16,000 records); where that time goes was not profiled. A second run with `GOMAXPROCS` unset (the wrapper then defaults to 2) gave 738 / 2,507 / 7,826 messages/s against 668 / 792 / 752 (`unset.log`).
 
 ![Median messages per second on production-03.](img/production-03/throughput.svg)
 

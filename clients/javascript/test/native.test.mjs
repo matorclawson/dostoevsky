@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import net from "node:net";
 import { readFileSync } from "node:fs";
 import * as wire from "../wire.js";
-import { NativeClient, ClientError, ConnectionLost } from "../native.js";
+import { NativeClient, ClientError, ConnectionLost, Overloaded } from "../native.js";
 
 const vectors = JSON.parse(readFileSync(new URL("../../../wire/testdata/vectors.json", import.meta.url)));
 const hex = (b) => Buffer.from(b).toString("hex");
@@ -205,6 +205,68 @@ test("an unacceptable WELCOME ends the connection before any request", async (t)
     await assert.rejects(NativeClient.connect(target, TOKEN), (e) => e.code === "protocol");
     assert.equal(frames, 0);
   }
+});
+
+test("the client's own ceilings refuse without sending", async (t) => {
+  let frames = 0;
+  const target = await fake(t, { window: 1 }, () => frames++);
+  const c = await NativeClient.connect(target, TOKEN, { maxRequests: 2 });
+  const held = [c.ping(), c.ping()];
+  held.forEach((p) => p.catch(() => {}));
+  await assert.rejects(c.ping(), Overloaded);
+  await settle();
+  assert.equal(frames, 1);
+  c.close();
+
+  const big = new Uint8Array(1 << 20);
+  const d = await NativeClient.connect(await fake(t, {}), TOKEN, { maxBytes: wire.MAX_BODY + wire.HEADER });
+  d.publish("events", big).catch(() => {});
+  await assert.rejects(d.publish("events", big), Overloaded);
+  d.close();
+  await assert.rejects(NativeClient.connect(target, TOKEN, { maxBytes: 1000 }), /maxBytes/);
+});
+
+test("a buffered reply cannot answer a request that was sent after it arrived", async (t) => {
+  // With a window of one, the second request is still queued when two replies arrive together.
+  const target = await fake(t, { window: 1 }, (f) => {
+    const reply = (id) => { const h = Buffer.alloc(10); h.writeUInt8(0x85, 4); h.writeUInt32LE(id, 6); return h; };
+    f.socket.write(Buffer.concat([reply(f.id), reply(f.id + 1)]));
+  });
+  const c = await NativeClient.connect(target, TOKEN);
+  const [first, second] = [c.ping(), c.ping()];
+  await first;
+  await assert.rejects(second, (e) => e instanceof ConnectionLost && e.sent === false);
+});
+
+test("reply values outside the value table are malformed", () => {
+  const u16 = (v) => { const b = Buffer.alloc(2); b.writeUInt16LE(v); return b; };
+  const u64 = (v) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(v); return b; };
+  const record = (key, id, value, at = 0n) => Buffer.concat([Buffer.from([1]), u16(0), u64(at), u64(0n), u16(key), Buffer.alloc(key, 97), u16(id), Buffer.alloc(id, 97), Buffer.alloc(value)]);
+  for (const [type, body] of [
+    [0x81, Buffer.concat([u16(0), u64(1n << 63n)])],
+    [0x82, record(0, 0, 0, 1n << 63n)],
+    [0x82, record(4097, 0, 0)],
+    [0x82, record(0, 257, 0)],
+    [0x82, record(0, 0, (1 << 20) + 1)],
+    [0x83, Buffer.concat([u64(1n << 63n)])],
+    [0x83, Buffer.concat([u64(0n), Buffer.alloc((1 << 20) + 1)])],
+    [0xff, Buffer.from([0])],
+    [0xff, Buffer.from([13])],
+  ]) {
+    assert.throws(() => wire.reply(type, body), wire.Malformed, `type ${type}, ${body.length} bytes`);
+  }
+  assert.ok(wire.reply(0x82, record(4096, 256, 1 << 20)));
+});
+
+test("a refusing WELCOME with anything else set is a protocol error", () => {
+  const welcome = (status, window) => { const b = Buffer.alloc(17); b.write("DSTV"); b.writeUInt8(status, 4); b.writeUInt16LE(window, 11); return b; };
+  assert.equal(wire.welcome(welcome(2, 0)).status, 2);
+  assert.throws(() => wire.welcome(welcome(2, 1)), wire.Malformed);
+  assert.throws(() => wire.welcome(welcome(99, 0)), wire.Malformed);
+});
+
+test("tls with a unix socket is refused", async () => {
+  await assert.rejects(NativeClient.connect({ path: "/nonexistent.sock" }, TOKEN, { tls: true }), /unix socket/);
 });
 
 test("values the protocol forbids are refused before anything is sent", async (t) => {

@@ -29,6 +29,6 @@ const acks = await Promise.all(jobs.map((job) => c.publish("jobs", job))); // in
 c.close();
 ```
 
-The methods are those of `Client`. Calls beyond the server's window wait their turn, and their bytes stay in memory until sent. Nothing is retried and there is no reconnect: after `ConnectionLost`, connect again; if `sent` is true the request may have taken effect.
+The methods are those of `Client`. Calls beyond the server's window wait their turn. The client holds at most `maxRequests` (1024) unanswered requests and `maxBytes` (8 MiB) of them; a call beyond that fails at once with `Overloaded` and is never sent, so a larger batch must be fed in as replies arrive. Nothing is retried and there is no reconnect: after `ConnectionLost`, connect again; if `sent` is true the request may have taken effect.
 
 Test (no server needed): `cd clients/javascript && npm test`

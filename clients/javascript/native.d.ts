@@ -3,8 +3,17 @@ import { ClientError, type Receipt, type StreamRecord, type Position } from "./i
 
 export { ClientError };
 export class ConnectionLost extends ClientError { readonly sent: boolean }
+/** The client's own queue is full: refused here, never sent. */
+export class Overloaded extends ClientError {}
 export type Target = { host?: string; port?: number } | { path: string };
-export interface ConnectOptions { tls?: boolean | { ca?: string | Uint8Array; servername?: string } }
+export interface ConnectOptions {
+  /** Not allowed with a unix socket. */
+  tls?: boolean | { ca?: string | Uint8Array; servername?: string };
+  /** Unanswered requests this client will hold, queued ones included (default 1024). */
+  maxRequests?: number;
+  /** Their frame bytes (default 8 MiB, at least one maximum frame). */
+  maxBytes?: number;
+}
 export class NativeClient {
   private constructor();
   static connect(target: Target, token: string, options?: ConnectOptions): Promise<NativeClient>;

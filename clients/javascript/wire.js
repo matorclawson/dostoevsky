@@ -117,10 +117,14 @@ export function welcome(b) {
     throw new Malformed("not a WELCOME");
   }
   const v = new DataView(b.buffer, b.byteOffset, b.length);
-  return {
+  const out = {
     status: v.getUint8(4), version: v.getUint16(5, true), maxBody: v.getUint32(7, true),
     window: v.getUint16(11, true), windowBytes: v.getUint32(13, true),
   };
+  if (out.status !== 0 && (!CODES[out.status] || out.version || out.maxBody || out.window || out.windowBytes)) {
+    throw new Malformed("not a refusal");
+  }
+  return out;
 }
 
 /** The header of a server frame. The length is checked here, before any body is waited for. */
@@ -151,12 +155,22 @@ class Body {
   u8() { return this.view(1).getUint8(0); }
   u16() { return this.view(2).getUint16(0, true); }
   u64() { return this.view(8).getBigUint64(0, true); }
+  offset() {
+    const v = this.u64();
+    if (v >= 1n << 63n) throw new Malformed("offset out of range");
+    return v;
+  }
   i64() { return this.view(8).getBigInt64(0, true); }
-  string() {
+  string(max) {
     const b = this.take(this.u16());
+    if (b.length > max) throw new Malformed("text too long");
     try { return decoder.decode(b); } catch { throw new Malformed("text is not UTF-8"); }
   }
-  rest() { return new Uint8Array(this.take(this.#b.length - this.#at)); } // a copy: nothing pins the receive buffer
+  rest(max) {
+    const n = this.#b.length - this.#at;
+    if (n > max) throw new Malformed("value too long");
+    return new Uint8Array(this.take(n)); // a copy: nothing pins the receive buffer
+  }
   end() { if (this.#at !== this.#b.length) throw new Malformed("bytes left over"); }
 }
 
@@ -166,20 +180,20 @@ export function reply(type, b) {
   let out;
   switch (type) {
     case REPLY | PUBLISH:
-      out = { partition: body.u16(), offset: body.u64() };
+      out = { partition: body.u16(), offset: body.offset() };
       break;
     case REPLY | READ: {
       const found = body.u8();
       if (found > 1) throw new Malformed("found is neither 0 nor 1");
       out = null;
       if (found === 1) {
-        const partition = body.u16(), at = body.u64(), time = rfc3339(body.i64()), key = body.string(), id = body.string();
-        out = { partition, offset: at, key, id, time, value: body.rest() };
+        const partition = body.u16(), at = body.offset(), time = rfc3339(body.i64()), key = body.string(MAX_KEY), id = body.string(MAX_ID);
+        out = { partition, offset: at, key, id, time, value: body.rest(MAX_VALUE) };
       }
       break;
     }
     case REPLY | POSITION:
-      out = { next: body.u64(), state: body.rest() };
+      out = { next: body.offset(), state: body.rest(MAX_VALUE) };
       break;
     case REPLY | COMMIT:
     case REPLY | PING:
@@ -187,6 +201,7 @@ export function reply(type, b) {
       break;
     case ERROR:
       out = { code: body.u8() };
+      if (!CODES[out.code]) throw new Malformed("unknown error code");
       break;
     default:
       throw new Malformed("unknown reply type");

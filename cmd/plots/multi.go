@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// maxSeries is how many series colors styleMulti defines.
+const maxSeries = 8
+
 // styleMulti extends style with eight series colors (a color-blind-safe set, one per
 // engine in engineOrder, in light and dark) and a color for failed trials.
 const styleMulti = `<style>
@@ -400,6 +403,11 @@ func countFailedLines(trials []trial) int {
 // an architecture for every engine, and the qualifiers that must never disappear from
 // a chart of those engines.
 func requireComparisonMeta(engines []string, meta map[string]string) error {
+	if len(engines) > maxSeries {
+		// styleMulti has one color per series: a ninth would be drawn unstyled, black on the dark background.
+		return fmt.Errorf("%d engines (%s) but a chart has %d series colors: chart a subset with -engines and name the rest with -ignore-engines",
+			len(engines), strings.Join(engines, ", "), maxSeries)
+	}
 	var missing []string
 	for _, e := range engines {
 		if strings.TrimSpace(meta["label."+e]) == "" {

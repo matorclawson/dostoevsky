@@ -25,10 +25,10 @@ test: dev-test ## Run the tests
 dev: dev-fmt-check dev-vet dev-test dev-race dev-build ## Run the complete development checks
 
 dev-fmt: ## Format the Go source
-	@"$(GOFMT)" -w *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go
+	@"$(GOFMT)" -w *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go
 
 dev-fmt-check: ## Check formatting without changing files
-	@files=$$("$(GOFMT)" -l *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
+	@files=$$("$(GOFMT)" -l *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
 
 dev-vet: ## Run Go static analysis
 	@"$(GO)" vet ./...

@@ -446,38 +446,82 @@ func (n *Node) Read(ctx context.Context, p Partition, offset int64, wait bool) (
 		if !wait {
 			return Record{}, ErrEmpty
 		}
-		n.mu.Lock()
-		s, e = n.stream(p)
-		if e != nil {
-			n.mu.Unlock()
-			return Record{}, e
+		if err := n.sleep(ctx, p, offset); err != nil {
+			return Record{}, err
 		}
-		if offset < s.base+s.count() {
-			n.mu.Unlock()
-			continue
-		}
-		if s.wait == nil {
-			s.wait = &streamWait{}
-		}
-		if s.wait.changed == nil {
-			s.wait.changed = make(chan struct{})
-		}
-		ch := s.wait.changed
-		s.wait.waiters++
+	}
+}
+
+// sleep waits until the partition changes or ctx ends. It returns at once when offset already exists. The caller
+// rechecks both.
+func (n *Node) sleep(ctx context.Context, p Partition, offset int64) error {
+	n.mu.Lock()
+	s, e := n.stream(p)
+	if e != nil {
 		n.mu.Unlock()
-		select {
-		case <-ctx.Done():
-		case <-ch:
+		return e
+	}
+	if offset < s.base+s.count() {
+		n.mu.Unlock()
+		return nil
+	}
+	if s.wait == nil {
+		s.wait = &streamWait{}
+	}
+	if s.wait.changed == nil {
+		s.wait.changed = make(chan struct{})
+	}
+	ch := s.wait.changed
+	s.wait.waiters++
+	n.mu.Unlock()
+	select {
+	case <-ctx.Done():
+	case <-ch:
+	}
+	n.mu.Lock()
+	s.wait.waiters--
+	if s.wait.waiters == 0 {
+		if s.count() == 0 && s.base == 0 && len(s.groups) == 0 {
+			delete(n.streams, p)
 		}
-		n.mu.Lock()
-		s.wait.waiters--
-		if s.wait.waiters == 0 {
-			if s.count() == 0 && s.base == 0 && len(s.groups) == 0 {
-				delete(n.streams, p)
+		s.wait = nil
+	}
+	n.mu.Unlock()
+	return nil
+}
+
+// Await returns nil once a Read of offset would no longer report ErrEmpty: the record exists, or retention has
+// passed it. It reads nothing, so a caller can wait without holding memory for the record.
+func (n *Node) Await(ctx context.Context, p Partition, offset int64) error {
+	if offset < 0 {
+		return ErrInvalid
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n.mu.RLock()
+		if n.closed {
+			n.mu.RUnlock()
+			return ErrClosed
+		}
+		owner, err := n.owner(p)
+		if err != nil || owner != n.cfg.Node {
+			n.mu.RUnlock()
+			if err != nil {
+				return err
 			}
-			s.wait = nil
+			return ErrOwner
 		}
-		n.mu.Unlock()
+		s := n.streams[p]
+		ready := s != nil && offset < s.base+s.count()
+		n.mu.RUnlock()
+		if ready {
+			return nil
+		}
+		if err := n.sleep(ctx, p, offset); err != nil {
+			return err
+		}
 	}
 }
 func (n *Node) Position(ctx context.Context, p Partition, g string) (Position, error) {

@@ -1,6 +1,6 @@
 // Package wire is the byte layout of the Dostoevsky wire protocol, version 1, as specified in docs/wire-v1.md.
 // It encodes and decodes the handshake and frames for both sides and enforces the protocol's bounds. It does no
-// networking apart from reading a HELLO, and it is not connected to a store: no server speaks the protocol yet.
+// networking apart from reading a HELLO; package wireserver serves a store over it.
 //
 // Decoded Value slices alias the buffer they were decoded from.
 package wire

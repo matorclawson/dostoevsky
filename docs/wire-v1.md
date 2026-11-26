@@ -1,6 +1,6 @@
 # Dostoevsky wire protocol, version 1 (draft)
 
-**Status: draft.** The [`wire`](../wire) Go package encodes and decodes it; no server speaks it yet. It describes a native binary protocol that will sit beside the [HTTP API](clients.md), which stays. It makes no speed claim; any such claim will come from a checked-in receipt.
+**Status: draft.** The [`wire`](../wire) Go package encodes and decodes it and [`wireserver`](../wireserver), with the `dostoevsky-server` command, serves it. It describes a native binary protocol that will sit beside the [HTTP API](clients.md), which stays. It makes no speed claim; any such claim will come from a checked-in receipt.
 
 Test vectors for every message are in [`wire/testdata/vectors.json`](../wire/testdata/vectors.json). The file's `note` says what a receiver does with each invalid one. Where this text and a vector disagree, that is a bug to report, not a choice for the implementer.
 

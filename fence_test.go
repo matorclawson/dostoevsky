@@ -3,10 +3,12 @@ package dostoevsky
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -63,7 +65,24 @@ func TestOpeningALegacyJournalFencesIt(t *testing.T) {
 	if ok, _ := legacyAccepts(t, path); !ok {
 		t.Fatal("test fixture is not a legacy journal")
 	}
-	// 0.3.0 opens it and writes nothing else: still must fence.
+	// Open refuses it, names the backup step and changes nothing.
+	before, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = Open(dir, config()); !errors.Is(e, ErrUpgradeRequired) || !strings.Contains(e.Error(), "back up") {
+		t.Fatalf("a legacy journal was not refused with the backup step: %v", e)
+	}
+	unchanged(t, path, before)
+	// Upgrading keeps a copy, then fences.
+	kept, e := UpgradeJournal(dir)
+	if e != nil || kept == "" {
+		t.Fatal(kept, e)
+	}
+	unchanged(t, kept, before)
+	if again, e := UpgradeJournal(dir); e != nil || again != "" {
+		t.Fatalf("a second upgrade did something: %q %v", again, e)
+	}
 	m, e := Open(dir, config())
 	if e != nil {
 		t.Fatal(e)
@@ -128,6 +147,9 @@ func TestFenceFixture(t *testing.T) {
 	n.Close()
 	// legacy: a directory written by 0.2.3 (path given), opened once by this build.
 	if dir := os.Getenv("DOST_FENCE_LEGACY"); dir != "" {
+		if _, e := UpgradeJournal(dir); e != nil {
+			t.Fatal(e)
+		}
 		m, e := Open(dir, c)
 		if e != nil {
 			t.Fatal(e)
@@ -205,9 +227,21 @@ func TestTornV2FrameDoesNotCountAsFence(t *testing.T) {
 	if ok, at := legacyAccepts(t, path); ok || at == 0 {
 		t.Fatal("fixture should already show a V2 header", ok, at)
 	}
+	// An incomplete DOST0002 frame is no upgrade: Open still asks for one and leaves even the torn tail alone.
+	torn, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = Open(dir, config()); !errors.Is(e, ErrUpgradeRequired) {
+		t.Fatal("a torn DOST0002 frame counted as an upgrade:", e)
+	}
+	unchanged(t, path, torn)
+	if _, e = UpgradeJournal(dir); e != nil {
+		t.Fatal(e)
+	}
 	m, e := Open(dir, config())
 	if e != nil {
-		t.Fatal("reopen with a torn V2 tail:", e)
+		t.Fatal("reopen after the upgrade:", e)
 	}
 	m.Close()
 	b, e := os.ReadFile(path)

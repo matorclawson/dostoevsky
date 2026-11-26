@@ -596,3 +596,101 @@ func TestCLIVerticalValueLabelsClearTheSubtitle(t *testing.T) {
 		}
 	}
 }
+
+// The width estimate uses per-character widths, so capitals and wide letters are not under-counted,
+// and wrapping breaks by measured width. An uppercase-heavy label must stay inside the canvas in the
+// legend and in the failure notes.
+func TestTextWidthCountsWideGlyphsAndWrapsByMeasuredWidth(t *testing.T) {
+	if narrow, wide := textWidth("iiiiiiiiii", 10), textWidth("WWWWWWWWWW", 10); wide < 4*narrow || wide < 95 {
+		t.Fatalf("ten W are %.1f wide and ten i %.1f: capitals are under-counted", wide, narrow)
+	}
+	if lower, upper := textWidth("rabbitmq quorum", 10), textWidth("RABBITMQ QUORUM", 10); upper < 1.15*lower {
+		t.Fatalf("an uppercase label (%.1f) is not wider than its lowercase form (%.1f)", upper, lower)
+	}
+	text := "RABBITMQ QUORUM QUEUE (SYNC NOT VERIFIED) WITH A DELIBERATELY UPPERCASE AND VERY LONG LABEL FOR A LEGEND ENTRY"
+	for _, line := range wrapWidth(text, 300, 11) {
+		if w := textWidth(line, 11); w > 300 {
+			t.Errorf("%q is %.0f wide after wrapping to 300", line, w)
+		}
+	}
+	if got := strings.Join(wrapWidth(text, 300, 11), " "); got != text {
+		t.Errorf("wrapping changed the words: %q", got)
+	}
+	if got := wrapWidth("WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW", 100, 10); len(got) < 3 {
+		t.Errorf("an over-wide single word was not split: %q", got)
+	}
+}
+
+func TestCLIUppercaseLabelsStayOnTheCanvas(t *testing.T) {
+	bin := buildPlots(t)
+	dir := t.TempDir()
+	failed := map[string]bool{}
+	for tr := 1; tr <= 5; tr++ {
+		failed["rabbitmq/32/"+string(rune('0'+tr))] = true
+	}
+	r := write(t, dir, "c.log", multiLog(multiRPS, failed))
+	up := "RABBITMQ 4.4 QUORUM QUEUE (SYNC NOT VERIFIED) UPPERCASE"
+	meta := write(t, dir, "m.txt", strings.Replace(multiMeta, "label.rabbitmq=RabbitMQ 4.4 (quorum queue)", "label.rabbitmq="+up, 1))
+	if _, stderr, code := plots(t, bin, dir, sevenArgs(r, meta, dir+"/o", "-allow-failures")...); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "o", "throughput.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := regexp.MustCompile(`<text x="([0-9.]+)" y="[0-9.]+" font-size="(11|10)"(?: class="f")?>([^<]*)</text>`).FindAllStringSubmatch(string(b), -1)
+	if len(texts) == 0 {
+		t.Fatal("no legend or failure text found")
+	}
+	for _, m := range texts {
+		x, _ := strconv.ParseFloat(m[1], 64)
+		size, _ := strconv.ParseFloat(m[2], 64)
+		line := html.UnescapeString(m[3])
+		if x+textWidth(line, size) > float64(width-right) {
+			t.Errorf("%q starts at %.0f and runs to about %.0f, past the right margin at %d", line, x, x+textWidth(line, size), width-right)
+		}
+	}
+}
+
+// A subtitle that wraps to three lines must not run into the top gridline of a one- or two-engine
+// chart: the plot starts below its last line. Charts with a two-line subtitle keep their layout.
+func TestCLILegacyChartHasHeadroomBelowAThreeLineSubtitle(t *testing.T) {
+	bin := buildPlots(t)
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	args := []string{"-out", out, "-receipt", "docs/receipts/production-03/explicit-2.log", "-section", "*", "-meta", "docs/receipts/production-03/meta.txt", "-sketch", "/nonexistent", "-architecture=false"}
+	if _, stderr, code := plots(t, bin, root, args...); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	subtitle := regexp.MustCompile(`<text x="72" y="([0-9]+)" font-size="12" class="m">`)
+	grid := regexp.MustCompile(`<line class="g" x1="72" x2="736" y1="([0-9.]+)"`)
+	for name, wantShifted := range map[string]bool{"reopen.svg": true, "throughput.svg": false} {
+		b, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		last := 0.0
+		for _, s := range subtitle.FindAllStringSubmatch(string(b), -1) {
+			y, _ := strconv.ParseFloat(s[1], 64)
+			if y > last {
+				last = y
+			}
+		}
+		topGrid := 1e9
+		for _, g := range grid.FindAllStringSubmatch(string(b), -1) {
+			y, _ := strconv.ParseFloat(g[1], 64)
+			if y < topGrid {
+				topGrid = y
+			}
+		}
+		if topGrid < last+10 {
+			t.Errorf("%s: the top gridline at y=%.0f is within 10 units of the subtitle's last line at y=%.0f", name, topGrid, last)
+		}
+		if shifted := topGrid > float64(top); shifted != wantShifted {
+			t.Errorf("%s: plot top at y=%.0f, shifted=%v, want shifted=%v", name, topGrid, shifted, wantShifted)
+		}
+	}
+}

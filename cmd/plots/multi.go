@@ -20,11 +20,90 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,san
 .d0{fill:var(--fg);stroke:var(--c0);stroke-width:1.2}.d1{fill:var(--fg);stroke:var(--c1);stroke-width:1.2}.d2{fill:var(--fg);stroke:var(--c2);stroke-width:1.2}.d3{fill:var(--fg);stroke:var(--c3);stroke-width:1.2}.d4{fill:var(--fg);stroke:var(--c4);stroke-width:1.2}.d5{fill:var(--fg);stroke:var(--c5);stroke-width:1.2}.d6{fill:var(--fg);stroke:var(--c6);stroke-width:1.2}.d7{fill:var(--fg);stroke:var(--c7);stroke-width:1.2}
 </style>`
 
-// textEm is the average glyph width in em that wrap and the tests use to estimate how wide
-// a line of text is: width = characters x font size x textEm.
-const textEm = 0.55
+// helvetica holds the advance widths, in thousandths of an em, of the printable ASCII characters
+// (32 to 126) in Helvetica. The charts use a sans-serif stack (system UI font, Segoe UI, Helvetica,
+// Arial) whose widths are close to these, so the estimate below is what wrap and the tests use to
+// decide whether a line of text fits.
+var helvetica = [95]float64{
+	278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584,
+	278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556,
+	556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722,
+	722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
+	667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278,
+	278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556,
+	556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500,
+	278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+}
 
-func textWidth(s string, size float64) float64 { return float64(len([]rune(s))) * size * textEm }
+// textSafety widens every estimate a little, so a font that is wider than Helvetica still fits.
+const textSafety = 1.06
+
+// charWidth is one character's width in em: Helvetica's for printable ASCII (capitals and wide
+// letters such as m and w included), and a conservative 0.7 for anything else.
+func charWidth(r rune) float64 {
+	if r >= 32 && r <= 126 {
+		return helvetica[r-32] / 1000
+	}
+	return 0.7
+}
+
+// textWidth estimates the width of s at the given font size, in chart units.
+func textWidth(s string, size float64) float64 {
+	w := 0.0
+	for _, r := range s {
+		w += charWidth(r)
+	}
+	return w * size * textSafety
+}
+
+// wrapWidth breaks text at spaces into lines no wider than maxW at the given size. A single word
+// wider than maxW is split between characters.
+func wrapWidth(text string, maxW, size float64) []string {
+	var lines []string
+	cur := ""
+	flush := func() {
+		if cur != "" {
+			lines = append(lines, cur)
+			cur = ""
+		}
+	}
+	for _, word := range strings.Fields(text) {
+		for textWidth(word, size) > maxW && len([]rune(word)) > 1 {
+			// split an over-wide word at the last character that fits
+			runes := []rune(word)
+			n := 1
+			for n < len(runes) && textWidth(string(runes[:n+1]), size) <= maxW {
+				n++
+			}
+			flush()
+			lines = append(lines, string(runes[:n]))
+			word = string(runes[n:])
+		}
+		switch {
+		case cur == "":
+			cur = word
+		case textWidth(cur+" "+word, size) <= maxW:
+			cur += " " + word
+		default:
+			flush()
+			cur = word
+		}
+	}
+	flush()
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+// wrapAll is wrapWidth for several paragraphs in turn.
+func wrapAll(paragraphs []string, maxW, size float64) []string {
+	var out []string
+	for _, p := range paragraphs {
+		out = append(out, wrapWidth(p, maxW, size)...)
+	}
+	return out
+}
 
 // failureLines lists, for one producer count, one line per engine with failed trials,
 // each wrapped to fit inside one group's width. An engine whose trials all failed has no
@@ -43,11 +122,10 @@ func failureLines(data []series, w int, groupW float64) []string {
 		}
 	}
 	sort.SliceStable(names, func(i, j int) bool { return engineRank(names[i]) < engineRank(names[j]) })
-	maxChars := int((groupW - 12) / (10 * textEm)) // font size 10, with a margin at each side
 	var lines []string
 	for _, e := range names {
 		if n := failedTrials[e][w]; n > 0 {
-			lines = append(lines, wrap([]string{fmt.Sprintf("%s: %d failed", label(e), n)}, maxChars)...)
+			lines = append(lines, wrapWidth(fmt.Sprintf("%s: %d failed", label(e), n), groupW-12, 10)...)
 		}
 	}
 	return lines
@@ -122,12 +200,12 @@ func legendLayout(engines []string, avail float64) (cols int, entries []legendEn
 		texts = append(texts, seriesLabel(e))
 	}
 	cols = legendColumns(texts, avail)
-	maxChars := int((avail/float64(cols) - 16 - 8) / (11 * textEm))
-	if maxChars < 8 {
-		maxChars = 8
+	textW := avail/float64(cols) - 16 - 8
+	if textW < 60 {
+		textW = 60
 	}
 	for i, e := range engines {
-		entries = append(entries, legendEntry{e, wrap([]string{texts[i]}, maxChars)})
+		entries = append(entries, legendEntry{e, wrapWidth(texts[i], textW, 11)})
 	}
 	for r := 0; r*cols < len(entries); r++ {
 		most := 1
@@ -183,10 +261,17 @@ func renderMulti(c chart, data []series, footer []string) string {
 	step, steps := ticks(maxV)
 	top1 := step * float64(steps)
 	plotW := float64(width - left - right)
+	verdict := winners(data, c.lower)
+	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", strings.TrimSpace(c.note + " " + verdict)}
+	if c.explain != "" && losing(data, c.lower) {
+		subtitle[1] += " " + c.explain
+	}
+	subLines := wrapAll(subtitle, plotW, 12)
+	lastSubtitleY := float64(46 + 15*(len(subLines)-1))
 	// The vertical value labels are written upward from above the tallest dot, so the plot area
-	// keeps headroom for the longest of them below the subtitle (whose last line is at y=76).
+	// keeps headroom for the longest of them below the subtitle's last line.
 	plotTop := float64(top)
-	if need := 92 + textWidth(format(maxV, c.decimals), 10); need > plotTop {
+	if need := lastSubtitleY + 16 + textWidth(format(maxV, c.decimals), 10); need > plotTop {
 		plotTop = need
 	}
 	plotH := float64(base) - plotTop
@@ -203,7 +288,6 @@ func renderMulti(c chart, data []series, footer []string) string {
 	for _, rh := range rowHeights {
 		legendHeight += rh
 	}
-	verdict := winners(data, c.lower)
 	// The description names the engines that have data, and says which declared engines have
 	// none, so it never claims a fixed pair.
 	var names, empty []string
@@ -221,7 +305,7 @@ func renderMulti(c chart, data []series, footer []string) string {
 	if len(empty) > 0 {
 		alt += " No valid trial: " + strings.Join(empty, ", ") + "."
 	}
-	footer = wrap(footer, 112)
+	footer = wrapAll(footer, plotW, 10.5)
 	groupW := plotW / float64(len(ws))
 	failRows := failureRows(data, ws, groupW)
 	legendY := base + 50
@@ -238,11 +322,7 @@ func renderMulti(c chart, data []series, footer []string) string {
 	}
 	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(title), html.EscapeString(alt+" "+verdict+notShownSentence()), styleMulti)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(title))
-	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", strings.TrimSpace(c.note + " " + verdict)}
-	if c.explain != "" && losing(data, c.lower) {
-		subtitle[1] += " " + c.explain
-	}
-	for i, line := range wrap(subtitle, 100) {
+	for i, line := range subLines {
 		fmt.Fprintf(&b, `<text x="%d" y="%d" font-size="12" class="m">%s</text>`+"\n", left, 46+i*15, html.EscapeString(line))
 	}
 	for i := 0; i <= steps; i++ {

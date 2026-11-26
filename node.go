@@ -148,7 +148,19 @@ type Node struct {
 	// process that opened the path before the rename cannot lock the orphaned
 	// inode and acknowledge writes into it.
 	retired *os.File
+	// truncated is what Open cut off the end of the journal.
+	truncated Truncation
 }
+
+// Truncation is an incomplete final frame that Open removed from the journal: an append that was interrupted, so was
+// not acknowledged. The zero value means nothing was removed.
+type Truncation struct {
+	At    int64 // where the journal was cut
+	Bytes int64 // how many bytes were removed
+}
+
+// Truncated reports what Open removed. Applications that want to know about interrupted writes should log it.
+func (n *Node) Truncated() Truncation { return n.truncated }
 
 func (c Config) validate() error {
 	seen := map[string]bool{}
@@ -221,6 +233,7 @@ func Open(dir string, c Config) (*Node, error) {
 		j.close()
 		return nil, e
 	}
+	n.truncated = j.torn
 	return n, nil
 }
 

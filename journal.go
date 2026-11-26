@@ -55,6 +55,7 @@ type journal struct {
 	// synced is true once the file's size and metadata were made durable with a
 	// full sync. Until then appends use full sync; afterwards fdatasync.
 	synced bool
+	torn   Truncation // the incomplete tail recover cut off, if any
 }
 
 // One file descriptor owns the advisory lock for the lifetime of the node.
@@ -228,6 +229,7 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		j.end = next
 	}
 	if j.end != info.Size() {
+		j.torn = Truncation{At: j.end, Bytes: info.Size() - j.end}
 		if err = j.file.Truncate(j.end); err != nil {
 			return err
 		}

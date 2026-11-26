@@ -49,7 +49,16 @@ A group is not a transaction. A crash can persist a prefix of it, so retry each 
 
 **What is on disk.** One append-only file per node, `journal.v1`, holds checksummed frames: a 20-byte header (signature, length, payload checksum, header checksum) and a JSON payload. A record, a consumer checkpoint, a retention seed and the topic manifest are all frames.
 
-**What happens on open.** Recovery replays every complete frame and rebuilds the index. A torn final frame is cut off. A frame that fails its checksum stops recovery with an error that names the offset, because that is corruption, not a crash. Recovery then syncs the accepted prefix before any new write is acknowledged.
+**What happens on open.** Recovery replays every complete frame and rebuilds the index. A torn final frame is cut off. A frame that fails its checksum stops recovery with an error that names the offset, because that is corruption, not a crash. Recovery then syncs the accepted prefix before any new write is acknowledged. `Node.Truncated` reports a torn frame that was cut off.
+
+**When open refuses.** A damaged frame is not removed on its own: that could discard acknowledged records. An operator decides, with `dost-repair`. Run it **on the host that holds the data directory, as the user that owns it, with the application stopped; no sudo**:
+
+```sh
+go run ./cmd/dost-repair -data /path/to/data            # inspect: changes nothing
+go run ./cmd/dost-repair -data /path/to/data -repair    # copy what follows the last good frame aside, then truncate
+```
+
+The copy is `journal.v1.damaged-<time>` in the same directory. If frames that verify follow the damage, repair refuses, because truncating would lose them: restore a [backup](../README.md), or add `-discard-later-frames` to lose them knowingly. The damaged frame itself may have been acknowledged. The tool checks frames, not their meaning: it cannot fix a journal whose intact frames contradict each other. The same is available in Go as `InspectJournal` and `RepairJournal`.
 
 **Who proves it.** These tests kill a real child process or inject a failure at each step:
 

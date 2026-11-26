@@ -113,6 +113,9 @@ func run() error {
 		return err
 	}
 	defer node.Close()
+	if cut := node.Truncated(); cut.Bytes > 0 {
+		log.Printf("journal: removed an incomplete final frame, %d bytes at offset %d", cut.Bytes, cut.At)
+	}
 	h, err := clienthttp.New(node, token)
 	if err != nil {
 		return err

@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func TestConfigIsPrivateToTheTrial(t *testing.T) {
@@ -143,5 +147,46 @@ func TestEachPollIsBoundedByTheRemainingBudget(t *testing.T) {
 		if b > 125*time.Millisecond {
 			t.Errorf("a poll was given %v although the whole wait is 120ms", b)
 		}
+	}
+}
+
+// 315700: a verification read waiting on a server that does not answer ends when the run context is cancelled.
+func TestCancellingTheRunContextEndsAWaitingRead(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c) // held open, never answered
+			mu.Unlock()
+		}
+	}()
+	opts := clientOptions("")
+	opts.Network, opts.Addr = "tcp", ln.Addr().String()
+	client := redis.NewClient(opts)
+	t.Cleanup(func() {
+		client.Close()
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := store{client: client, ctx: func() context.Context { return ctx }}
+	time.AfterFunc(50*time.Millisecond, cancel)
+	begin := time.Now()
+	if _, err := s.Read(1 << 16); !errors.Is(err, context.Canceled) || time.Since(begin) > 2*time.Second {
+		t.Fatalf("%v after %v", err, time.Since(begin))
 	}
 }

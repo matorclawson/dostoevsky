@@ -121,6 +121,8 @@ An ERROR carries a code and never a message.
 
 **What a client accepts.** The client checks a reply's length against max_body from the header, before allocating or reading the body. Each reply must answer exactly one unanswered request, by request_id, with that request's reply type or ERROR. An unknown or repeated request_id, a wrong type, nonzero flags, or a body that does not parse ends the connection: the client closes and sends nothing back. An ERROR with request_id 0 also ends it. Requests still unanswered then have unknown outcomes.
 
+**A client's own deadline.** A server's deadlines do not bound how long a client waits. A client gives every request an absolute local limit, from the moment it is written, longer than any `wait_ms` it asks for (default 40 s), measured with a monotonic clock. A partly received reply does not extend it, and a caller that stops waiting does not remove it. Passing it closes the connection: unanswered requests have unknown outcomes, and requests not yet written were never sent.
+
 ## What an acknowledgment means
 
 - PUBLISH_OK and COMMIT_OK are sent only after the disk sync that covers the write. Pipelining never changes this.
@@ -159,7 +161,7 @@ Only authenticated connections draw on these budgets. Intake and replies have **
 
 - **Window.** A request counts against its connection's window and window_bytes from its header until its reply has been written. When the next frame does not fit, the server stops reading that connection, so TCP pushes back; it is not an error.
 - **Request pool.** A frame's bytes are taken after its header is read and before its body is read, and given back once the server no longer holds those bytes: for PUBLISH and COMMIT after the write is durable or has failed, for READ and POSITION once the request is decoded. Nothing that holds request pool waits for any other budget.
-- **Reply pool.** Before the store is read for a READ or POSITION reply, a whole maximum frame is taken; it is given back when the reply has been written or the connection has closed. **A READ that is waiting for a record holds none**: it takes it only once the record exists. All other replies are at most 20 bytes and come from a fixed reserve of window x 20 bytes per connection.
+- **Reply pool.** Before the store is read for a READ or POSITION reply, a whole maximum frame is taken; it is given back when the reply has been written or the connection has closed. **A READ that is waiting for a record holds none**: it takes it only once the record exists. Reply pool is granted **in the order it is asked for**, across all connections: nothing asked later is granted while an earlier request is still waiting for pool. A connection already at its own cap does not ask until one of its replies has been written, so it holds nobody up. All other replies are at most 20 bytes and come from a fixed reserve of window x 20 bytes per connection.
 - Replies are written whether or not the connection is being read.
 - So every holder of a budget can finish: a request needs no further budget, and a reply needs only the socket to drain, which has a deadline.
 - When a connection closes, its waiting reads end and everything it holds is given back. A publish or commit already admitted still runs to completion and gives back its bytes.
@@ -172,7 +174,7 @@ Every deadline is absolute: it is set once and **receiving or sending part of th
 |---|---|---|---|
 | authentication | accept | WELCOME fully written, TLS handshake and HELLO included, a refusal too | 5 s |
 | one request frame | its first header byte | its last body byte, time waiting for admission included | 40 s |
-| one reply | the reply is ready | its last byte written | 45 s |
+| one reply | the reply is ready (for a READ, the record exists; waiting for reply pool counts) | its last byte written | 45 s |
 | idle | nothing unanswered and no partial frame | the next frame's first byte | 60 s |
 
 Passing one of the first three closes the connection; after the idle one the server may close it. A connection takes its slot at accept. With no slot free, either overall or among the unauthenticated, the server closes it at once without reading or writing. A server holds no unsent output for a closed connection.

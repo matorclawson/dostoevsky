@@ -13,6 +13,10 @@ import (
 	"github.com/rodriveracom/dostoevsky/wire"
 )
 
+// reuseGrace is how long a frame that reuses the id of a reply being written waits for that write to return. A client
+// holding the whole reply may reuse the id before the server's write has returned; one that cannot have it yet may not.
+const reuseGrace = time.Second
+
 // request is what a connection holds for one admitted frame until its reply is written.
 type request struct {
 	q    wire.Request
@@ -45,12 +49,12 @@ type conn struct {
 	inFrame bool // part of a frame has arrived
 	count   int  // unanswered requests
 	bytes   int  // their frame bytes
-	ids     map[uint32]struct{}
+	ids     map[uint32]bool // unanswered ids; true while the reply is being written
 	queue   []outgoing
 }
 
 func newConn(s *Server, raw, nc net.Conn) *conn {
-	c := &conn{s: s, raw: raw, nc: nc, wake: make(chan struct{}, 1), freed: make(chan struct{}, 1), ids: make(map[uint32]struct{})}
+	c := &conn{s: s, raw: raw, nc: nc, wake: make(chan struct{}, 1), freed: make(chan struct{}, 1), ids: make(map[uint32]bool)}
 	c.replies.free = s.cfg.ConnectionReplies
 	c.ctx, c.cancel = context.WithCancel(s.ctx)
 	return c
@@ -165,24 +169,34 @@ func (c *conn) frame(br *bufio.Reader, header []byte, deadline time.Time) error 
 	return nil
 }
 
-// admit waits until the frame fits the window.
+// admit waits until the frame fits the window. An id stays taken until its reply has been written.
 func (c *conn) admit(ctx context.Context, id uint32, size int) error {
+	var grace <-chan time.Time
 	for {
 		c.mu.Lock()
-		if _, used := c.ids[id]; used {
+		writing, used := c.ids[id]
+		if used && !writing {
 			c.mu.Unlock()
 			return &connError{wire.Protocol}
 		}
-		if c.count < c.s.cfg.Window && c.bytes+size <= c.s.cfg.WindowBytes {
-			c.ids[id] = struct{}{}
+		if !used && c.count < c.s.cfg.Window && c.bytes+size <= c.s.cfg.WindowBytes {
+			c.ids[id] = false
 			c.count++
 			c.bytes += size
 			c.mu.Unlock()
 			return nil
 		}
 		c.mu.Unlock()
+		switch {
+		case !used:
+			grace = nil
+		case grace == nil:
+			grace = time.After(reuseGrace)
+		}
 		select {
 		case <-c.freed:
+		case <-grace:
+			return &connError{wire.Protocol}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -359,8 +373,9 @@ func (c *conn) write() {
 		o := c.queue[0]
 		c.queue[0] = outgoing{}
 		c.queue = c.queue[1:]
-		// The client may reuse the id as soon as it has the reply, so free it before writing.
-		delete(c.ids, o.id)
+		if o.size > 0 {
+			c.ids[o.id] = true
+		}
 		c.mu.Unlock()
 		err := c.nc.SetWriteDeadline(o.ready.Add(c.s.cfg.ReplyTimeout))
 		if err == nil {
@@ -390,6 +405,7 @@ func (c *conn) written(o outgoing) {
 		return
 	}
 	c.mu.Lock()
+	delete(c.ids, o.id)
 	c.count--
 	c.bytes -= o.size
 	if c.count == 0 {

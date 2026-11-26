@@ -387,6 +387,45 @@ func TestConnectionErrors(t *testing.T) {
 	}
 }
 
+// A pipe has no buffer, so the server's write of a reply stays in progress until the whole reply is read.
+func TestAnIDIsTakenUntilItsReplyIsWritten(t *testing.T) {
+	srv, _ := start(t, openNode(t), nil)
+	near, far := net.Pipe()
+	defer near.Close()
+	if err := near.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	srv.accept(far)
+	c := client{t, near}
+	if w, err := c.hello(1, token); err != nil || w.Status != wire.OK {
+		t.Fatal(w, err)
+	}
+	ping := wire.Request{Type: wire.Ping, RequestID: 1}
+	c.send(ping)
+	first := make([]byte, wire.HeaderSize)
+	if _, err := io.ReadFull(near, first[:1]); err != nil {
+		t.Fatal(err)
+	}
+	c.send(ping)
+	time.Sleep(reuseGrace + 500*time.Millisecond)
+	if _, err := io.ReadFull(near, first[1:]); err != nil {
+		t.Fatal(err)
+	}
+	if p := c.reply(); p.Type != wire.Error || p.RequestID != 0 || p.Code != wire.Protocol {
+		t.Fatal(p)
+	}
+}
+
+func TestAnAnsweredIDMayBeReusedAtOnce(t *testing.T) {
+	_, addr := start(t, openNode(t), nil)
+	c := dial(t, addr)
+	for range 2000 {
+		if p := c.call(wire.Request{Type: wire.Ping, RequestID: 1}); p.Type != wire.PingOK {
+			t.Fatal(p)
+		}
+	}
+}
+
 func TestLongPoll(t *testing.T) {
 	_, addr := start(t, openNode(t), nil)
 	reader, writer := dial(t, addr), dial(t, addr)

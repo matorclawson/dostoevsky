@@ -16,7 +16,7 @@ A TCP or unix-domain stream connection. One connection carries many requests at 
 
 The two plaintext cases are a choice to trust the local machine: a process that can listen at that address or path before the server does receives the token. A server refuses to listen in plaintext anywhere else. A client never falls back from TLS to plaintext.
 
-**Unix socket.** The server creates it inside a directory that only the server's user can enter (mode 0700), so that no other user can reach it at any moment, and gives the socket mode 0600. It does not follow a symbolic link. If anything already exists at the path it refuses to start, except that it may remove a socket owned by its own user while it holds the lock of its data directory.
+**Unix socket.** The server creates it inside a directory that only the server's user can enter (mode 0700), so that no other user can reach it at any moment, and gives the socket mode 0600. It does not follow a symbolic link. If anything already exists at the path it refuses to start, except that it may remove a socket owned by its own user, on which nothing answers, while it holds a lock for that path.
 
 ## Handshake
 

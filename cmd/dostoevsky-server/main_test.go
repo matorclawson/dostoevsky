@@ -75,11 +75,41 @@ func TestAStaleSocketOfOursIsReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Leave the file behind, as a killed process would.
-	first.(*net.UnixListener).SetUnlinkOnClose(false)
+	first.(*unixListener).SetUnlinkOnClose(false)
 	first.Close()
 	second, err := listenUnix(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	second.Close()
+}
+
+func TestALiveSocketIsNotDisplaced(t *testing.T) {
+	path := filepath.Join(shortDir(t), "run", "s")
+	first, err := listenUnix(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if second, err := listenUnix(path); err == nil {
+		second.Close()
+		t.Fatal("a second server took a live socket path")
+	}
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal("the first listener was disturbed:", err)
+	}
+	c.Close()
+
+	// A listener that holds no lock is not displaced either.
+	other := filepath.Join(filepath.Dir(path), "o")
+	foreign, err := net.Listen("unix", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer foreign.Close()
+	if second, err := listenUnix(other); err == nil {
+		second.Close()
+		t.Fatal("a foreign listener was displaced")
+	}
 }

@@ -196,7 +196,13 @@ func (c *conn) admit(ctx context.Context, id uint32, size int) error {
 		select {
 		case <-c.freed:
 		case <-grace:
-			return &connError{wire.Protocol}
+			// The write may have returned as the timer fired.
+			c.mu.Lock()
+			_, used = c.ids[id]
+			c.mu.Unlock()
+			if used {
+				return &connError{wire.Protocol}
+			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}

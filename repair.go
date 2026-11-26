@@ -181,25 +181,7 @@ func RepairJournal(dir string, o RepairOptions) (JournalReport, error) {
 		return r, ErrLaterFrames
 	}
 	name := filepath.Join(dir, fmt.Sprintf("journal.v1.damaged-%d", time.Now().UnixNano()))
-	out, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return r, err
-	}
-	_, err = io.Copy(out, io.NewSectionReader(j.file, r.GoodBytes, r.Size-r.GoodBytes))
-	if err == nil {
-		err = out.Sync()
-	}
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		var d *os.File
-		if d, err = os.Open(dir); err == nil {
-			err = d.Sync()
-			d.Close()
-		}
-	}
-	if err != nil {
+	if err := copyDurably(dir, name, io.NewSectionReader(j.file, r.GoodBytes, r.Size-r.GoodBytes)); err != nil {
 		return r, fmt.Errorf("journal left unchanged, the copy of the removed bytes failed: %w", err)
 	}
 	r.Quarantine = name
@@ -207,4 +189,28 @@ func RepairJournal(dir string, o RepairOptions) (JournalReport, error) {
 		return r, err
 	}
 	return r, syncFile(j.file)
+}
+
+// copyDurably writes src to a new file in dir and syncs the file and the directory.
+func copyDurably(dir, name string, src io.Reader) error {
+	out, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, src)
+	if err == nil {
+		err = out.Sync()
+	}
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

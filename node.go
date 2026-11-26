@@ -202,6 +202,14 @@ func Open(dir string, c Config) (*Node, error) {
 		return nil, e
 	}
 	n := &Node{cfg: own, j: j, streams: make(map[Partition]*stream), topology: fmt.Sprintf("%x", sha256.Sum256(b))}
+	// Before recovery, which writes: a journal that needs an upgrade is not touched.
+	if old, e := legacyOnly(j.file); e != nil || old {
+		j.close()
+		if e != nil {
+			return nil, e
+		}
+		return nil, upgradeRequired(dir)
+	}
 	var declared int
 	e = j.recover(func(ev entry, loc location) error {
 		if ev.Config != nil {

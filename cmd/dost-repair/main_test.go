@@ -42,6 +42,8 @@ func TestInspectThenRepair(t *testing.T) {
 		{[]string{"-data", dir}, 0, "damage=none"},
 		{[]string{"-data", filepath.Join(dir, "no")}, 2, "no journal"},
 		{[]string{"-data", dir, "-discard-later-frames"}, 2, "usage"},
+		{[]string{"-data", dir, "-upgrade"}, 0, "no upgrade needed"},
+		{[]string{"-data", dir, "-upgrade", "-repair"}, 2, "usage"},
 		{nil, 2, "usage"},
 	} {
 		var out, errOut bytes.Buffer

@@ -60,6 +60,14 @@ go run ./cmd/dost-repair -data /path/to/data -repair    # copy what follows the 
 
 The copy is `journal.v1.damaged-<time>` in the same directory. If frames that verify follow the damage, repair refuses, because truncating would lose them: restore a [backup](../README.md), or add `-discard-later-frames` to lose them knowingly. The damaged frame itself may have been acknowledged. The tool checks frames, not their meaning: it cannot fix a journal whose intact frames contradict each other. The same is available in Go as `InspectJournal` and `RepairJournal`.
 
+**A directory written by 0.2.x** is not opened as it is: `Open` returns `ErrUpgradeRequired` and changes nothing, because upgrading is one way. On the host that holds the directory, as its owner, with the application stopped, no sudo: copy the directory somewhere safe, then
+
+```sh
+go run ./cmd/dost-repair -data /path/to/data -upgrade
+```
+
+It keeps `journal.v1.pre-upgrade-<time>` as well, so the directory needs free space for a second copy of the journal; delete it once the upgraded directory has been opened and checked and you will not go back. To go back, restore your copy and run the old version. A directory that 0.3.0 or later has already opened needs nothing.
+
 **Who proves it.** These tests kill a real child process or inject a failure at each step:
 
 | Test file | What it establishes |

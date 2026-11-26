@@ -3,10 +3,12 @@ package dostoevsky
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -63,7 +65,24 @@ func TestOpeningALegacyJournalFencesIt(t *testing.T) {
 	if ok, _ := legacyAccepts(t, path); !ok {
 		t.Fatal("test fixture is not a legacy journal")
 	}
-	// 0.3.0 opens it and writes nothing else: still must fence.
+	// Open refuses it, names the backup step and changes nothing.
+	before, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = Open(dir, config()); !errors.Is(e, ErrUpgradeRequired) || !strings.Contains(e.Error(), "back up") {
+		t.Fatalf("a legacy journal was not refused with the backup step: %v", e)
+	}
+	unchanged(t, path, before)
+	// Upgrading keeps a copy, then fences.
+	kept, e := UpgradeJournal(dir)
+	if e != nil || kept == "" {
+		t.Fatal(kept, e)
+	}
+	unchanged(t, kept, before)
+	if again, e := UpgradeJournal(dir); e != nil || again != "" {
+		t.Fatalf("a second upgrade did something: %q %v", again, e)
+	}
 	m, e := Open(dir, config())
 	if e != nil {
 		t.Fatal(e)
@@ -128,6 +147,9 @@ func TestFenceFixture(t *testing.T) {
 	n.Close()
 	// legacy: a directory written by 0.2.3 (path given), opened once by this build.
 	if dir := os.Getenv("DOST_FENCE_LEGACY"); dir != "" {
+		if _, e := UpgradeJournal(dir); e != nil {
+			t.Fatal(e)
+		}
 		m, e := Open(dir, c)
 		if e != nil {
 			t.Fatal(e)
@@ -205,9 +227,21 @@ func TestTornV2FrameDoesNotCountAsFence(t *testing.T) {
 	if ok, at := legacyAccepts(t, path); ok || at == 0 {
 		t.Fatal("fixture should already show a V2 header", ok, at)
 	}
+	// An incomplete DOST0002 frame is no upgrade: Open still asks for one and leaves even the torn tail alone.
+	torn, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = Open(dir, config()); !errors.Is(e, ErrUpgradeRequired) {
+		t.Fatal("a torn DOST0002 frame counted as an upgrade:", e)
+	}
+	unchanged(t, path, torn)
+	if _, e = UpgradeJournal(dir); e != nil {
+		t.Fatal(e)
+	}
 	m, e := Open(dir, config())
 	if e != nil {
-		t.Fatal("reopen with a torn V2 tail:", e)
+		t.Fatal("reopen after the upgrade:", e)
 	}
 	m.Close()
 	b, e := os.ReadFile(path)
@@ -225,5 +259,60 @@ func TestTornV2FrameDoesNotCountAsFence(t *testing.T) {
 	r, e := openTest(t, dir, config()).Read(ctx, p, 0, false)
 	if e != nil || r.ID != "old" {
 		t.Fatal(r, e)
+	}
+}
+
+// A journal that holds only an interrupted first write by 0.2.x says nothing complete about its format. Open must not
+// cut it and write current frames over it: that is the one-way step nobody asked for.
+func TestAnInterruptedFirstFrameIsNotUpgradedUnasked(t *testing.T) {
+	restore := withLegacyWriter(t)
+	frame, err := encodeFrame(entry{Fence: 1})
+	restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, length := range map[string]int{"payload cut": len(frame) - 2, "header cut": 12, "signature cut": 5} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "journal.v1")
+			write(t, path, frame[:length])
+			if _, err := Open(dir, config()); !errors.Is(err, ErrUpgradeRequired) {
+				t.Fatal(err)
+			}
+			unchanged(t, path, frame[:length])
+			kept, err := UpgradeJournal(dir)
+			if err != nil || kept == "" {
+				t.Fatal(kept, err)
+			}
+			unchanged(t, kept, frame[:length])
+			n := openTest(t, dir, config())
+			publish(t, n, "first")
+		})
+	}
+}
+
+// A current version's interrupted first write opens as before: its signature says who wrote it. So does an empty file.
+func TestAnInterruptedFirstFrameOfACurrentJournalStillOpens(t *testing.T) {
+	frame, err := encodeFrame(entry{Fence: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, length := range []int{0, 8, 12, len(frame) - 2} {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "journal.v1"), frame[:length])
+		n, err := Open(dir, config())
+		if err != nil {
+			t.Fatalf("%d bytes: %v", length, err)
+		}
+		n.Close()
+	}
+}
+
+// A header that cannot be read is damage, not "no upgrade needed".
+func TestUpgradeReportsDamage(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "journal.v1"), make([]byte, 64))
+	if kept, err := UpgradeJournal(dir); err == nil || kept != "" || !strings.Contains(err.Error(), "damaged") {
+		t.Fatalf("%q %v", kept, err)
 	}
 }

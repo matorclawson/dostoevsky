@@ -47,6 +47,16 @@ func sampleState(t testing.TB) *logState {
 	return st
 }
 
+// cloneLog returns an independent copy of a state, through a checkpoint of it.
+func cloneLog(t testing.TB, st *logState) *logState {
+	t.Helper()
+	c := newLogState()
+	if err := c.load(st.snapshot(1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
 func cpEqual(t testing.TB, a, b checkpoint3) {
 	t.Helper()
 	if a.ID != b.ID || a.Segment != b.Segment || !bytes.Equal(a.Config, b.Config) ||

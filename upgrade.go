@@ -17,9 +17,11 @@ import (
 // ErrUpgradeRequired is returned by Open for a journal that only 0.2.x has written. The journal is not modified.
 var ErrUpgradeRequired = errors.New("journal upgrade required")
 
-// legacyOnly reports whether the journal holds complete frames and none signed DOST0002. It reads headers only, stops
-// at the first DOST0002 frame (a journal born under a current version starts with one), and says no for a header it
-// cannot read, leaving that to recovery to report.
+// legacyOnly reports whether the journal must not be written to without an upgrade: it holds complete frames and none
+// signed DOST0002, or it is not empty, holds no complete frame, and does not begin as a current version writes. Opening
+// the latter would cut the bytes and write DOST0002 frames into what may be a 0.2.x directory. It reads headers only,
+// stops at the first DOST0002 frame (a journal born under a current version starts with one), and says no for a header
+// it cannot read, leaving that to recovery to report (which changes nothing then).
 func legacyOnly(f *os.File) (bool, error) {
 	info, err := f.Stat()
 	if err != nil {
@@ -53,27 +55,39 @@ func legacyOnly(f *os.File) (bool, error) {
 		at += 20 + int64(n)
 		frames++
 	}
-	return frames > 0, nil
+	if frames > 0 || size == 0 {
+		return frames > 0, nil
+	}
+	// Only an interrupted first write. A current version's begins with its whole signature; anything less does not say
+	// which version wrote it.
+	var first [8]byte
+	if size < int64(len(first)) {
+		return true, nil
+	}
+	if _, err := f.ReadAt(first[:], 0); err != nil {
+		return false, err
+	}
+	return string(first[:]) != "DOST0002", nil
 }
 
 func upgradeRequired(dir string) error {
-	return fmt.Errorf("%w: %s was written by 0.2.x and upgrading is one way (0.2.x cannot open it afterwards). "+
+	return fmt.Errorf("%w: %s was written by 0.2.x (or holds only an interrupted first write, which does not say), and upgrading is one way (0.2.x cannot open it afterwards). "+
 		"Stop the application, back up the directory by copying it, then run: dost-repair -data %s -upgrade", ErrUpgradeRequired, dir, dir)
 }
 
 // UpgradeJournal marks a journal written by 0.2.x as upgraded, after which Open accepts it and 0.2.x refuses it. It
-// first copies the journal to a new file beside it and returns that file's name; keep your own backup as well. A
-// journal that needs no upgrade is left alone and "" is returned. The directory must not be open.
+// first copies the journal to a new file beside it and returns that file's name, also when a later step fails; keep your
+// own backup as well. The copy is as large as the journal, so the directory needs that much free space; it may be
+// deleted once the upgraded directory has been opened and checked, and you no longer intend to go back. A journal that
+// needs no upgrade is left alone and "" is returned. A damaged journal is refused: repair it first. The directory must
+// not be open.
 func UpgradeJournal(dir string) (string, error) {
 	j, err := openForRepair(dir)
 	if err != nil {
 		return "", err
 	}
 	defer j.close()
-	old, err := legacyOnly(j.file)
-	if err != nil || !old {
-		return "", err
-	}
+	// Damage first: a header that cannot be read must not pass for "no upgrade needed".
 	r, err := inspect(j.file)
 	if err != nil {
 		return "", err
@@ -81,13 +95,22 @@ func UpgradeJournal(dir string) (string, error) {
 	if r.Damage != DamageNone && r.Damage != DamageTornTail {
 		return "", fmt.Errorf("the journal is damaged (%s at %d): repair it before upgrading", r.Damage, r.GoodBytes)
 	}
+	old, err := legacyOnly(j.file)
+	if err != nil || !old {
+		return "", err
+	}
 	name := filepath.Join(dir, fmt.Sprintf("journal.v1.pre-upgrade-%d", time.Now().UnixNano()))
 	if err := copyDurably(dir, name, io.NewSectionReader(j.file, 0, r.Size)); err != nil {
 		return "", fmt.Errorf("journal left unchanged, the copy before upgrading failed: %w", err)
 	}
 	if err := j.recover(func(entry, location) error { return nil }); err != nil {
-		return name, err
+		return name, fmt.Errorf("upgrade stopped while reading the journal, after the copy: %w", err)
 	}
-	_, err = j.append(entry{Fence: 1})
-	return name, err
+	if j.end == 0 { // there was only an interrupted first write: the journal is empty now and opens as new
+		return name, nil
+	}
+	if _, err := j.append(entry{Fence: 1}); err != nil {
+		return name, fmt.Errorf("upgrade stopped while writing the marker, after the copy: %w", err)
+	}
+	return name, nil
 }

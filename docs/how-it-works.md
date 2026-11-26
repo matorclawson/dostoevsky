@@ -66,7 +66,7 @@ The copy is `journal.v1.damaged-<time>` in the same directory. If frames that ve
 go run ./cmd/dost-repair -data /path/to/data -upgrade
 ```
 
-It keeps `journal.v1.pre-upgrade-<time>` as well. To go back, restore your copy and run the old version. A directory that 0.3.0 or later has already opened needs nothing.
+It keeps `journal.v1.pre-upgrade-<time>` as well, so the directory needs free space for a second copy of the journal; delete it once the upgraded directory has been opened and checked and you will not go back. To go back, restore your copy and run the old version. A directory that 0.3.0 or later has already opened needs nothing.
 
 **Who proves it.** These tests kill a real child process or inject a failure at each step:
 

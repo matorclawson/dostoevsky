@@ -427,6 +427,9 @@ test("an on-time join does not end the budget while run() is still pending: run 
 test("when startup and join both finish in time the timer is stopped (nothing fires later)", async () => {
   const c = fakeConsumer();
   const watch = joinWatcher(c, 40);
+  let expired = false;
+  watch.expiry.catch(() => { expired = true; });
   await startAndJoin(async () => { c.fire("join", { memberAssignment: {} }); }, watch);
-  await new Promise((r) => setTimeout(r, 120)); // an armed timer would have rejected by now: still nothing unhandled
+  await new Promise((r) => setTimeout(r, 120)); // three budgets: a timer left armed would have rejected expiry
+  assert.equal(expired, false);
 });

@@ -71,7 +71,7 @@ It keeps `journal.v1.pre-upgrade-<time>` as well, so the directory needs free sp
 **Bounding the history.** The journal, the in-memory index and the time `Open` takes all grow with the records and checkpoints that are kept; `Open` replays the whole file. The index holds a file position for every retained record (16 bytes on a 64-bit host, before allocator overhead) plus a map entry for each record with an ID. `Node.JournalSize` reports the file's size. Two tools bound it:
 
 - `Node.Retain` removes records every consumer group has committed past. It rewrites the journal, so it needs free disk space for the copy.
-- `Node.SetJournalCap` (gateway: `-max-journal-mib`) refuses publishes with `ErrJournalFull` instead of letting the file pass the cap. Commits get a further reserve (an eighth of the cap, at least 4 MiB) so that consumers can still advance and `Retain` can then make room. The cap is per process: set it after each `Open`. There is no cap by default.
+- `Node.SetJournalCap` (gateway: `-max-journal-mib`) refuses publishes with `ErrJournalFull` instead of letting the file pass the cap. Commits get a further reserve (an eighth of the cap, at least 4 MiB) so that consumers can still advance and `Retain` can then make room. The cap is per process: set it after each `Open`. There is no cap by default. If a lagging group or large states use up the commit reserve too, commits are refused: raise the cap, let the groups catch up, then `Retain`. Over HTTP a full journal is 507 `journal_full`; from another node of a `Mesh` it arrives as `ErrLimit`.
 
 **Who proves it.** These tests kill a real child process or inject a failure at each step:
 

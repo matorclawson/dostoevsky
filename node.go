@@ -426,6 +426,10 @@ func (n *Node) publishLocked(ctx context.Context, p Partition, m Message) (Recor
 	if e == nil {
 		s.addRecord(&r, loc)
 		s.signal()
+	} else if s.count() == 0 && s.wait == nil && s.base == 0 && len(s.groups) == 0 {
+		// The lookup above may have created this entry. A refused write keeps no memory: otherwise publishing to ever new
+		// topics while the journal is full would grow the index without bound.
+		delete(n.streams, p)
 	}
 	return r, e
 }

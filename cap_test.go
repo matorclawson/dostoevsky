@@ -2,6 +2,7 @@ package dostoevsky
 
 import (
 	"errors"
+	"math"
 	"strconv"
 	"testing"
 )
@@ -134,5 +135,40 @@ func TestConcurrentPublishersStayUnderTheCap(t *testing.T) {
 	}
 	if refused == 0 || n.JournalSize() > capAt {
 		t.Fatalf("refused %d, size %d of %d", refused, n.JournalSize(), capAt)
+	}
+}
+
+// A refused write keeps nothing in memory either: ever new topics on a full journal must not grow the index.
+func TestARefusedPublishLeavesNoStreamBehind(t *testing.T) {
+	n := openTest(t, t.TempDir(), Config{"a", []string{"a"}, map[string]int{"*": 1}})
+	if err := n.SetJournalCap(n.JournalSize()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		if _, err := n.Publish(ctx, "new-"+strconv.Itoa(i), Message{Value: []byte("v")}); !errors.Is(err, ErrJournalFull) {
+			t.Fatal(err)
+		}
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if len(n.streams) != 0 {
+		t.Fatalf("%d streams kept after refused publishes", len(n.streams))
+	}
+}
+
+// The largest cap does not overflow into "no ceiling".
+func TestTheCommitCeilingDoesNotOverflow(t *testing.T) {
+	n := openTest(t, t.TempDir(), config())
+	if err := n.SetJournalCap(math.MaxInt64); err != nil {
+		t.Fatal(err)
+	}
+	n.mu.RLock()
+	got := n.commitCeiling()
+	n.mu.RUnlock()
+	if got != math.MaxInt64 {
+		t.Fatal(got)
+	}
+	if _, err := value(t, n, "x"); err != nil {
+		t.Fatal(err)
 	}
 }

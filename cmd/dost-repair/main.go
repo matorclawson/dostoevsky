@@ -39,6 +39,9 @@ func run(args []string, out, errOut io.Writer) int {
 	if *upgrade {
 		kept, err := d.UpgradeJournal(*dir)
 		switch {
+		case err != nil && kept != "":
+			fmt.Fprintf(errOut, "dost-repair: %v\nthe journal as it was is in %s; inspect the directory before opening it\n", err, kept)
+			return 2
 		case err != nil:
 			fmt.Fprintln(errOut, "dost-repair:", err)
 			return 2

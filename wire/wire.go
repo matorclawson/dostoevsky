@@ -76,6 +76,9 @@ const (
 	UnsupportedVersion
 )
 
+// known reports whether c is an error code of version 1.
+func (c Code) known() bool { return c >= Invalid && c <= UnsupportedVersion }
+
 var codeNames = [...]string{"ok", "invalid", "unauthorized", "conflict", "wrong_owner", "expired", "limit", "closed",
 	"timeout", "canceled", "storage_failure", "protocol", "unsupported_version"}
 
@@ -351,13 +354,13 @@ func DecodeReply(h Header, b []byte) (Reply, error) {
 		}
 	case CommitOK, PingOK:
 	case Error:
-		if p.Code = Code(r.u8()); p.Code == OK {
+		if p.Code = Code(r.u8()); !p.Code.known() {
 			return p, ErrProtocol
 		}
 	default:
 		return p, ErrProtocol
 	}
-	if !r.done() {
+	if !r.done() || p.Offset >= 1<<63 {
 		return p, ErrProtocol
 	}
 	return p, nil
@@ -365,7 +368,7 @@ func DecodeReply(h Header, b []byte) (Reply, error) {
 
 // AppendReply appends p as a frame. It refuses what DecodeReply would reject.
 func AppendReply(dst []byte, p Reply) ([]byte, error) {
-	if p.RequestID == 0 && p.Type != Error {
+	if (p.RequestID == 0 && p.Type != Error) || p.Offset >= 1<<63 {
 		return dst, ErrProtocol
 	}
 	if len(p.Key) > MaxKey || len(p.MessageID) > MaxID || len(p.Value) > MaxValue || !utf8.ValidString(p.Key) || !utf8.ValidString(p.MessageID) {
@@ -390,7 +393,7 @@ func AppendReply(dst []byte, p Reply) ([]byte, error) {
 		out = append(binary.LittleEndian.AppendUint64(out, p.Offset), p.Value...)
 	case CommitOK, PingOK:
 	case Error:
-		if p.Code == OK {
+		if !p.Code.known() {
 			return dst, ErrProtocol
 		}
 		out = append(out, byte(p.Code))
@@ -480,10 +483,14 @@ func ParseWelcome(b []byte) (Welcome, error) {
 		binary.LittleEndian.Uint16(b[11:]), binary.LittleEndian.Uint32(b[13:])}, nil
 }
 
-// Accept is the client's validation of a WELCOME, given the highest version it offered. A refusal by the server is a
-// *RequestError with its status; any other unacceptable WELCOME is ErrProtocol. Both end the connection.
+// Accept is the client's validation of a WELCOME, given the highest version it offered. A refusal by the server (a
+// known status with every later field zero) is a *RequestError with that status; any other unacceptable WELCOME is
+// ErrProtocol. Both end the connection.
 func (w Welcome) Accept(offered uint16) error {
 	if w.Status != OK {
+		if !w.Status.known() || w != (Welcome{Status: w.Status}) {
+			return ErrProtocol
+		}
 		return refuse(w.Status)
 	}
 	if w.Version < 1 || w.Version > offered || w.MaxBody != MaxBody || w.Window < 1 || w.WindowBytes < MaxBody+HeaderSize {

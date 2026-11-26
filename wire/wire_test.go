@@ -254,6 +254,11 @@ func TestAClientAcceptsOnlyAUsableWelcome(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	for _, w := range []Welcome{{Status: 99}, {Status: Unauthorized, Window: 1}} {
+		if err := w.Accept(1); !errors.Is(err, ErrProtocol) {
+			t.Errorf("%+v: %v", w, err)
+		}
+	}
 	var refused *RequestError
 	if err := (Welcome{Status: Unauthorized}).Accept(1); !errors.As(err, &refused) || refused.Code != Unauthorized {
 		t.Errorf("refusal: %v", err)
@@ -274,6 +279,40 @@ func TestTheLargestLegalFramesFit(t *testing.T) {
 	b, err := AppendReply(nil, Reply{Type: ReadOK, RequestID: 1, Found: true, Key: string(bytes.Repeat([]byte("k"), MaxKey)), MessageID: string(bytes.Repeat([]byte("i"), MaxID)), Value: make([]byte, MaxValue)})
 	if err != nil || len(b)-HeaderSize > MaxBody {
 		t.Fatalf("reply: %d bytes, %v", len(b), err)
+	}
+}
+
+// Replies outside the value table are rejected, and cannot be encoded either.
+func TestReplyBounds(t *testing.T) {
+	for name, p := range map[string]Reply{
+		"publish offset": {Type: PublishOK, RequestID: 1, Offset: 1 << 63},
+		"read offset":    {Type: ReadOK, RequestID: 1, Found: true, Offset: 1 << 63},
+		"next position":  {Type: PositionOK, RequestID: 1, Offset: 1 << 63},
+		"code zero":      {Type: Error, RequestID: 1},
+		"unknown code":   {Type: Error, RequestID: 1, Code: UnsupportedVersion + 1},
+		"key too long":   {Type: ReadOK, RequestID: 1, Found: true, Key: string(bytes.Repeat([]byte("k"), MaxKey+1))},
+		"state too long": {Type: PositionOK, RequestID: 1, Value: make([]byte, MaxValue+1)},
+	} {
+		if _, err := AppendReply(nil, p); err == nil {
+			t.Errorf("%s: encoded", name)
+		}
+	}
+	frame := func(typ Type, body []byte) error {
+		h := Header{Length: uint32(len(body)), Type: typ, RequestID: 1}
+		_, err := DecodeReply(h, body)
+		return err
+	}
+	huge := []byte{0, 0, 0, 0, 0, 0, 0, 0x80} // 2^63
+	for name, err := range map[string]error{
+		"publish offset": frame(PublishOK, append([]byte{0, 0}, huge...)),
+		"next position":  frame(PositionOK, huge),
+		"state too long": frame(PositionOK, make([]byte, 8+MaxValue+1)),
+		"code zero":      frame(Error, []byte{0}),
+		"unknown code":   frame(Error, []byte{13}),
+	} {
+		if !errors.Is(err, ErrProtocol) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 

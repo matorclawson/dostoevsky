@@ -68,6 +68,11 @@ go run ./cmd/dost-repair -data /path/to/data -upgrade
 
 It keeps `journal.v1.pre-upgrade-<time>` as well. To go back, restore your copy and run the old version. A directory that 0.3.0 or later has already opened needs nothing.
 
+**Bounding the history.** The journal, the in-memory index and the time `Open` takes all grow with the records and checkpoints that are kept; `Open` replays the whole file. The index holds a file position for every retained record (16 bytes on a 64-bit host, before allocator overhead) plus a map entry for each record with an ID. `Node.JournalSize` reports the file's size. Two tools bound it:
+
+- `Node.Retain` removes records every consumer group has committed past. It rewrites the journal, so it needs free disk space for the copy.
+- `Node.SetJournalCap` (gateway: `-max-journal-mib`) refuses publishes with `ErrJournalFull` instead of letting the file pass the cap. Commits get a further reserve (an eighth of the cap, at least 4 MiB) so that consumers can still advance and `Retain` can then make room. The cap is per process: set it after each `Open`. There is no cap by default.
+
 **Who proves it.** These tests kill a real child process or inject a failure at each step:
 
 | Test file | What it establishes |

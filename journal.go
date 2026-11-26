@@ -100,7 +100,10 @@ func openJournal(dir string) (*journal, error) {
 	return &journal{path: path, file: f, lock: lock}, nil
 }
 
-func (j *journal) append(e entry) (location, error) {
+func (j *journal) append(e entry) (location, error) { return j.appendWithin(e, 0) }
+
+// appendWithin appends e unless that would take the journal past ceiling bytes (zero: no ceiling).
+func (j *journal) appendWithin(e entry, ceiling int64) (location, error) {
 	var loc location
 	if j.failed != nil {
 		return loc, j.failed
@@ -112,6 +115,9 @@ func (j *journal) append(e entry) (location, error) {
 	// Avoid retaining unusually large payloads for the lifetime of the node.
 	if cap(frame) <= 16<<10 {
 		j.frame = frame[:0]
+	}
+	if ceiling > 0 && j.end+int64(len(frame)) > ceiling {
+		return loc, ErrJournalFull
 	}
 	loc = location{j.end + 20, len(frame) - 20}
 	return loc, j.writeFrames(frame)

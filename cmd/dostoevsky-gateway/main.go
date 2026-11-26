@@ -87,6 +87,7 @@ func run() error {
 	parts := flag.Int("partitions", 1, "partitions per dynamic topic; fixed for directory lifetime")
 	cert := flag.String("tls-cert", "", "TLS certificate file (PEM)")
 	key := flag.String("tls-key", "", "TLS private key file (PEM)")
+	capMiB := flag.Int64("max-journal-mib", 0, "cap the journal at this size; publishes are refused when it is reached (0: no cap)")
 	gen := flag.Bool("gen-token", false, "print a new random token (32 bytes, base64url) and exit")
 	flag.Parse()
 	if *gen {
@@ -115,6 +116,12 @@ func run() error {
 	defer node.Close()
 	if cut := node.Truncated(); cut.Bytes > 0 {
 		log.Printf("journal: removed an incomplete final frame, %d bytes at offset %d", cut.Bytes, cut.At)
+	}
+	if *capMiB < 0 || *capMiB > 1<<40 {
+		return fmt.Errorf("-max-journal-mib must be between 0 and %d", int64(1)<<40)
+	}
+	if err := node.SetJournalCap(*capMiB << 20); err != nil {
+		return err
 	}
 	h, err := clienthttp.New(node, token)
 	if err != nil {

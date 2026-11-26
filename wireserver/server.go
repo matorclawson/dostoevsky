@@ -32,7 +32,7 @@ type Store interface {
 type Config struct {
 	Token string
 	// TLS, when set, is required of every connection. Without it Serve accepts only loopback and unix listeners.
-	TLS   *tls.Config
+	TLS *tls.Config
 
 	MaxConnections     int // 1024
 	MaxUnauthenticated int // 64

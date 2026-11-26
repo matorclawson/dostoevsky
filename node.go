@@ -150,6 +150,8 @@ type Node struct {
 	retired *os.File
 	// truncated is what Open cut off the end of the journal.
 	truncated Truncation
+	// maxBytes caps the journal; see SetJournalCap.
+	maxBytes int64
 }
 
 // Truncation is an incomplete final frame that Open removed from the journal: an append that was interrupted, so was
@@ -420,10 +422,14 @@ func (n *Node) publishLocked(ctx context.Context, p Partition, m Message) (Recor
 	}
 	r := Record{Partition: p, Message: m, Offset: s.base + s.count(), Time: time.Now().UTC()}
 	ev := entry{Record: &r}
-	loc, e := n.j.append(ev)
+	loc, e := n.j.appendWithin(ev, n.maxBytes)
 	if e == nil {
 		s.addRecord(&r, loc)
 		s.signal()
+	} else if s.count() == 0 && s.wait == nil && s.base == 0 && len(s.groups) == 0 {
+		// The lookup above may have created this entry. A refused write keeps no memory: otherwise publishing to ever new
+		// topics while the journal is full would grow the index without bound.
+		delete(n.streams, p)
 	}
 	return r, e
 }
@@ -549,7 +555,7 @@ func (n *Node) CommitBatch(ctx context.Context, p Partition, g string, offset, n
 	if next != offset+1 {
 		ev.Check.Expected = &offset
 	}
-	loc, e := n.j.append(ev)
+	loc, e := n.j.appendWithin(ev, n.commitCeiling())
 	if e != nil {
 		return e
 	}

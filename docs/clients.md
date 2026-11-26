@@ -110,7 +110,7 @@ The prefix is `/dostoevsky/client/v1/`. Send `Authorization: Bearer <token>`. En
 
 Publish and commit bodies are limited to 1 MiB. An optional ID deduplicates an identical publish within its partition while the record is retained. After an ambiguous publish outcome, retry with the same topic, key, ID and bytes. After an ambiguous commit outcome, reread the position before retrying. An external side effect performed before commit needs its own idempotency strategy.
 
-API failures have a short machine-readable body: 400 invalid, 401 unauthorized, 409 conflict or wrong_owner, 410 expired, 413 limit, 503 closed, 504 timeout, 500 storage_failure. Transport failures are distinct from an HTTP acknowledgement. A long poll holds one open request per waiting client. These clients cross HTTP; their speed is not the embedded Go engine's speed, and no throughput claim here applies to them.
+API failures have a short machine-readable body: 400 invalid, 401 unauthorized, 409 conflict or wrong_owner, 410 expired, 413 limit, 503 closed, 504 timeout, 500 storage_failure, 507 journal_full (the journal is at its size cap: retention or a larger cap is needed, retrying alone will not help). Transport failures are distinct from an HTTP acknowledgement. A long poll holds one open request per waiting client. These clients cross HTTP; their speed is not the embedded Go engine's speed, and no throughput claim here applies to them.
 
 ## Verify interoperability
 

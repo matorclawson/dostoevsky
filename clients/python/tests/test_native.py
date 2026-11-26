@@ -1,7 +1,7 @@
 import asyncio, json, os, socket, struct, sys, threading, time, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from dostoevsky_client import ClientError, Position, Receipt, Record, _wire  # noqa: E402
+from dostoevsky_client import ClientError, Position, Receipt, Record, _wire, native  # noqa: E402
 from dostoevsky_client.native import AsyncNativeClient, ConnectionLost, NativeClient, Overloaded  # noqa: E402
 
 with open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "wire", "testdata", "vectors.json"), encoding="utf-8") as f:
@@ -93,6 +93,37 @@ class ReplyBounds(unittest.TestCase):
     def test_tls_with_a_unix_socket_is_refused(self):
         with self.assertRaisesRegex(ValueError, "unix socket"):
             NativeClient("/nonexistent.sock", TOKEN, tls=True)
+
+
+def shortened(test, name, seconds):
+    old = getattr(native, name)
+    setattr(native, name, seconds)
+    test.addCleanup(setattr, native, name, old)
+
+
+class SyncDeadlines(unittest.TestCase):
+    def test_a_reply_that_trickles_does_not_postpone_the_deadline(self):
+        shortened(self, "_REQUEST_SECONDS", 0.2)
+
+        def trickle(fake, conn, kind, request_id, body):
+            for byte in frame(0x85, request_id):
+                time.sleep(0.05)  # 10 bytes: half a second, every pump makes progress
+                conn.sendall(bytes([byte]))
+
+        fake = Fake(self, trickle)
+        with NativeClient(fake.address, TOKEN) as c:
+            with self.assertRaises(ConnectionLost) as lost:
+                c.ping()
+            self.assertTrue(lost.exception.sent)
+
+    def test_the_handshake_has_one_deadline(self):
+        shortened(self, "_HANDSHAKE_SECONDS", 0.2)
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        began = time.monotonic()
+        with self.assertRaises(ConnectionLost):
+            NativeClient(("127.0.0.1", listener.getsockname()[1]), TOKEN)  # accepted by the kernel, never answered
+        self.assertLess(time.monotonic() - began, 2)
 
 
 def two_replies_at_once(fake, conn, kind, request_id, body):
@@ -298,6 +329,19 @@ class Async(unittest.IsolatedAsyncioTestCase):
         first, second = await asyncio.gather(c.ping(), c.ping(), return_exceptions=True)
         self.assertIsNone(first)
         self.assertIsInstance(second, ConnectionLost)
+        await c.close()
+
+    async def test_a_cancelled_caller_does_not_remove_the_deadline(self):
+        shortened(self, "_REQUEST_SECONDS", 0.2)
+        fake = Fake(self, window=1)  # answers nothing
+        c = await AsyncNativeClient.connect(fake.address, TOKEN)
+        first = asyncio.create_task(c.ping())
+        await asyncio.sleep(0.05)
+        first.cancel()
+        with self.assertRaises(ConnectionLost) as lost:
+            await asyncio.wait_for(c.ping(), 3)  # waiting for the window; never sent
+        self.assertFalse(lost.exception.sent)
+        self.assertEqual((c._calls, c._held), (0, 0))
         await c.close()
 
     async def test_a_lost_connection(self):

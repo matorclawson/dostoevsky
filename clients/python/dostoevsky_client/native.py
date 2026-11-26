@@ -102,6 +102,31 @@ def _result(kind: int, value):
     return None
 
 
+def _left(deadline: float) -> float:
+    """Seconds until the deadline; once it has passed, nothing more is done."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("deadline passed")
+    return left
+
+
+def _connect_tcp(address, deadline: float) -> socket.socket:
+    """Tries each address of the host within the ONE deadline (name resolution itself is not bounded)."""
+    last = OSError("no address")
+    for family, kind, proto, _, target in socket.getaddrinfo(address[0], address[1], type=socket.SOCK_STREAM):
+        sock = None
+        try:
+            sock = socket.socket(family, kind, proto)
+            sock.settimeout(_left(deadline))
+            sock.connect(target)
+            return sock
+        except OSError as error:
+            last = error
+            if sock is not None:
+                sock.close()
+    raise last
+
+
 class _Ids:
     def __init__(self):
         self.last = 0
@@ -135,23 +160,27 @@ class Pending:
 
 class NativeClient:
     """Synchronous. One lock serializes its use: a thread waiting in `read` holds up the others, so give each thread
-    its own client, or use `AsyncNativeClient`."""
+    its own client, or use `AsyncNativeClient`.
+
+    A reply is accepted only if this client reads it within 40 s of the request. It reads only during its calls, so
+    collect `publish_nowait` results (or `drain()`) within that time."""
 
     def __init__(self, address, token: str, *, tls: bool = False, cafile: str | None = None):
         first = _build(_wire.hello, token)
         _check_target(address, tls, cafile)
         deadline = time.monotonic() + _HANDSHAKE_SECONDS
-        sock = self._open(address, tls, cafile)
+        sock = self._open(address, tls, cafile, deadline)
         try:
-            sock.settimeout(max(deadline - time.monotonic(), 0.001))
+            sock.settimeout(_left(deadline))
             sock.sendall(first)
             data = b""
             while len(data) < _wire.WELCOME_BYTES:
-                sock.settimeout(max(deadline - time.monotonic(), 0.001))
+                sock.settimeout(_left(deadline))
                 chunk = sock.recv(_wire.WELCOME_BYTES - len(data))
                 if not chunk:
                     raise ConnectionLost(False)
                 data += chunk
+            _left(deadline)  # a WELCOME that arrives late is not accepted
             self._window, self._window_bytes = _accept(data)
             sock.setblocking(False)
         except OSError:
@@ -172,17 +201,18 @@ class NativeClient:
         self._dead = False
 
     @staticmethod
-    def _open(address, tls, cafile):
+    def _open(address, tls, cafile, deadline):
         sock = None
         try:
             if isinstance(address, str):
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                sock.settimeout(_HANDSHAKE_SECONDS)
+                sock.settimeout(_left(deadline))
                 sock.connect(address)
                 return sock
-            sock = socket.create_connection(address, timeout=_HANDSHAKE_SECONDS)
+            sock = _connect_tcp(address, deadline)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             if tls:
+                sock.settimeout(_left(deadline))
                 return _context(cafile).wrap_socket(sock, server_hostname=address[0])
         except OSError:
             if sock is not None:
@@ -253,6 +283,8 @@ class NativeClient:
         request = self._pending.get(request_id)
         if request is None or request._start + request._size > arrived or kind not in (_wire.ERROR, _wire.REPLY | request._kind):
             raise _wire.Malformed("a reply that answers nothing")
+        if time.monotonic() >= request._deadline:
+            return self._fail()  # a late reply is not accepted
         value = _wire.reply(kind, body)
         del self._pending[request_id]
         self._unanswered -= request._size
@@ -261,19 +293,24 @@ class NativeClient:
         else:
             request._finish(_result(request._kind, value))
 
+    def _expired(self) -> bool:
+        """Fails the connection if the oldest request is past its deadline, however busy the socket is."""
+        if self._pending and time.monotonic() >= next(iter(self._pending.values()))._deadline:
+            self._fail()
+            return True
+        return False
+
     def _pump(self):
         """Moves bytes both ways, waiting if there is nothing to do. Replies are read while requests are written."""
-        if self._dead:
+        if self._dead or self._expired():
             return
         received = self._receive()
         sent = self._send()
-        if received or sent or self._dead:
+        if received or sent or self._dead or self._expired():
             return
         wait = None
         if self._pending:
-            wait = next(iter(self._pending.values()))._deadline - time.monotonic()
-            if wait <= 0:
-                return self._fail()
+            wait = max(next(iter(self._pending.values()))._deadline - time.monotonic(), 0)
         events = selectors.EVENT_READ | (selectors.EVENT_WRITE if self._out else 0)
         self._selector.modify(self._sock, events)
         self._selector.select(wait)
@@ -361,6 +398,8 @@ class AsyncNativeClient:
         self._dead = False
         self._turn = asyncio.Lock()  # first come, first served: requests leave in call order
         self._room = asyncio.Event()
+        self._timer = None  # one, for the oldest unanswered request
+        self._deadlines = {}  # request id -> loop time, oldest first
         self._task = asyncio.get_running_loop().create_task(self._receive())
 
     @classmethod
@@ -434,7 +473,10 @@ class AsyncNativeClient:
         if request is None or request[3] > arrived or kind not in (_wire.ERROR, _wire.REPLY | request[0]):
             raise _wire.Malformed("a reply that answers nothing")
         value = _wire.reply(kind, body)
+        if asyncio.get_running_loop().time() >= self._deadlines[request_id]:
+            raise _wire.Malformed("a reply after its deadline")
         del self._pending[request_id]
+        del self._deadlines[request_id]
         wanted, size, future, _ = request
         self._unanswered -= size
         self._room.set()
@@ -449,12 +491,27 @@ class AsyncNativeClient:
         if self._dead:
             return
         self._dead = True
-        self._writer.close()
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        self._writer.transport.abort()  # at once: a peer that is not reading must not keep a drain waiting
         for _, _, future, _ in self._pending.values():
             if not future.done():
                 future.set_exception(ConnectionLost(True))
         self._pending.clear()
+        self._deadlines.clear()
         self._room.set()
+
+    def _arm(self):
+        if self._timer is None and self._deadlines and not self._dead:
+            self._timer = asyncio.get_running_loop().call_at(next(iter(self._deadlines.values())), self._expire)
+
+    def _expire(self):
+        self._timer = None
+        if self._deadlines and asyncio.get_running_loop().time() >= next(iter(self._deadlines.values())):
+            self._fail()  # unanswered requests have unknown outcomes; waiting calls were never sent
+        else:
+            self._arm()
 
     async def _call(self, kind, frame):
         size = len(frame)
@@ -464,46 +521,48 @@ class AsyncNativeClient:
             raise Overloaded()
         self._calls += 1
         self._held += size
-        try:
-            future = await self._write(kind, frame)
-        except BaseException:
-            self._release(size)
-            raise
-        # The place is held until the reply (or the loss of the connection), not until the caller stops waiting.
-        future.add_done_callback(lambda _: self._release(size))
-        return await self._wait(future)
+        future = await self._write(kind, frame)
+        # Waiting this way never cancels the future: a caller that gives up unsends nothing.
+        await asyncio.wait((future,))
+        return future.result()
 
     def _release(self, size):
         self._calls -= 1
         self._held -= size
 
     async def _write(self, kind, frame):
-        async with self._turn:
-            while not self._dead and (len(self._pending) >= self._window or self._unanswered + len(frame) > self._window_bytes):
-                self._room.clear()
-                await self._room.wait()
-            if self._dead:
-                raise ConnectionLost(False)
-            request_id = self._ids.next(self._pending)
-            future = asyncio.get_running_loop().create_future()
-            # A caller that gives up must not leave an "exception was never retrieved" warning behind.
-            future.add_done_callback(lambda f: f.cancelled() or f.exception())
-            self._sent += 1
-            self._pending[request_id] = (kind, len(frame), future, self._sent)
-            self._unanswered += len(frame)
-            self._writer.write(_wire.set_id(frame, request_id))
-        return future
-
-    async def _wait(self, future):
-        # Shielded: cancelling the caller does not unsend the request, whose reply still frees its place in the window.
+        """Sends in turn and returns the reply's future. The place counted in `_call` is held until that future is
+        done, or given back here if the request was never written."""
+        size = len(frame)
+        written = False
         try:
-            await asyncio.wait_for(self._writer.drain(), _REQUEST_SECONDS)
-            return await asyncio.wait_for(asyncio.shield(future), _REQUEST_SECONDS)
-        except (OSError, asyncio.TimeoutError):
-            # No answer in time, or the connection broke while writing. A reply that did arrive still stands.
-            if not future.done():
-                self._fail()
-            return future.result()
+            async with self._turn:
+                while not self._dead and (len(self._pending) >= self._window or self._unanswered + size > self._window_bytes):
+                    self._room.clear()
+                    await self._room.wait()
+                if self._dead:
+                    raise ConnectionLost(False)
+                loop = asyncio.get_running_loop()
+                request_id = self._ids.next(self._pending)
+                future = loop.create_future()
+                # A caller that gives up must not leave an "exception was never retrieved" warning behind.
+                future.add_done_callback(lambda f: f.cancelled() or f.exception())
+                future.add_done_callback(lambda _: self._release(size))
+                written = True
+                self._sent += 1
+                self._pending[request_id] = (kind, size, future, self._sent)
+                self._deadlines[request_id] = loop.time() + _REQUEST_SECONDS
+                self._unanswered += size
+                self._arm()
+                self._writer.write(_wire.set_id(frame, request_id))
+                try:
+                    await self._writer.drain()  # one drainer at a time; an aborted transport ends the wait
+                except OSError:
+                    self._fail()
+                return future
+        finally:
+            if not written:
+                self._release(size)
 
     async def publish(self, topic: str, value: bytes, *, key: str = "", id: str = "") -> Receipt:
         return await self._call(_wire.PUBLISH, _build(_wire.publish, topic, value, key, id))

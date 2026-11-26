@@ -45,10 +45,10 @@ type conn struct {
 
 	mu      sync.Mutex
 	closed  bool
-	failed  bool // a connection error is queued; nothing may follow it
-	inFrame bool // part of a frame has arrived
-	count   int  // unanswered requests
-	bytes   int  // their frame bytes
+	failed  bool            // a connection error is queued; nothing may follow it
+	inFrame bool            // part of a frame has arrived
+	count   int             // unanswered requests
+	bytes   int             // their frame bytes
 	ids     map[uint32]bool // unanswered ids; true while the reply is being written
 	queue   []outgoing
 }

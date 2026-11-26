@@ -143,3 +143,27 @@ func TestLongPollReturnsWhenARecordArrives(t *testing.T) {
 		t.Fatal("the long poll did not return when a record was published")
 	}
 }
+
+// A journal at its cap is told apart from a request that is too large.
+func TestAFullJournalIsNotAnOversizedRequest(t *testing.T) {
+	n, err := d.Open(t.TempDir(), d.Config{Node: "n", Nodes: []string{"n"}, Topics: map[string]int{"jobs": 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	if err := n.SetJournalCap(n.JournalSize()); err != nil {
+		t.Fatal(err)
+	}
+	const token = "a-test-token-with-entropy"
+	h, err := New(n, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", Prefix+"publish?topic=jobs", strings.NewReader("v"))
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != 507 || strings.TrimSpace(w.Body.String()) != "journal_full" {
+		t.Fatalf("%d %q", w.Code, w.Body.String())
+	}
+}

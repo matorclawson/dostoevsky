@@ -1,6 +1,9 @@
 package dostoevsky
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // The journal and the in-memory index grow with the history that is kept, and Open replays all of it. A size cap bounds
 // all three: when the journal is at its cap, publishing is refused until Retain has made room (or the cap is raised).
@@ -16,7 +19,8 @@ const minCommitReserve = 4 << 20
 
 // SetJournalCap bounds the journal: publishing fails with ErrJournalFull rather than let it exceed maxBytes, and
 // commits rather than let it exceed maxBytes plus a reserve of an eighth of maxBytes, at least 4 MiB. Zero, the default,
-// is no cap. The cap belongs to this Node, not to the directory: set it after every Open. A journal already past the cap
+// is no cap. If the reserve is used up too (a group far behind, or large states), commits are refused as well: raise the
+// cap, let the groups catch up, and Retain. The cap belongs to this Node, not to the directory: set it after every Open. A journal already past the cap
 // opens and can be read, committed to within the reserve, and compacted with Retain.
 func (n *Node) SetJournalCap(maxBytes int64) error {
 	if maxBytes < 0 {
@@ -43,5 +47,9 @@ func (n *Node) commitCeiling() int64 {
 	if n.maxBytes == 0 {
 		return 0
 	}
-	return n.maxBytes + max(n.maxBytes/8, minCommitReserve)
+	reserve := max(n.maxBytes/8, minCommitReserve)
+	if n.maxBytes > math.MaxInt64-reserve { // an overflowed ceiling would be negative, which means none
+		return math.MaxInt64
+	}
+	return n.maxBytes + reserve
 }

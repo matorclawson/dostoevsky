@@ -109,6 +109,10 @@ func run() error {
 	if len(token) < 16 {
 		return fmt.Errorf("set DOSTOEVSKY_TOKEN to at least 16 bytes; make one with -gen-token")
 	}
+	// Checked before Open, which may create or recover the journal.
+	if *capMiB < 0 || *capMiB > 1<<40 {
+		return fmt.Errorf("-max-journal-mib must be between 0 and %d", int64(1)<<40)
+	}
 	node, err := d.Open(*dir, d.Config{Node: "local", Nodes: []string{"local"}, Topics: map[string]int{"*": *parts}})
 	if err != nil {
 		return err
@@ -116,9 +120,6 @@ func run() error {
 	defer node.Close()
 	if cut := node.Truncated(); cut.Bytes > 0 {
 		log.Printf("journal: removed an incomplete final frame, %d bytes at offset %d", cut.Bytes, cut.At)
-	}
-	if *capMiB < 0 || *capMiB > 1<<40 {
-		return fmt.Errorf("-max-journal-mib must be between 0 and %d", int64(1)<<40)
 	}
 	if err := node.SetJournalCap(*capMiB << 20); err != nil {
 		return err

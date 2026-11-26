@@ -208,6 +208,15 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		loc := location{j.end + 20, size}
 		next := loc.at + int64(size)
 		if next > info.Size() {
+			// An interrupted append cannot have complete frames inside what it announced. If there are some, the length
+			// is wrong, not the write unfinished: cutting here would discard them.
+			later, err := laterFrames(j.file, j.end+1, info.Size())
+			if err != nil {
+				return err
+			}
+			if later > 0 {
+				return fmt.Errorf("frame at %d announces more bytes than remain, yet %d frames that verify follow: not truncating", j.end, later)
+			}
 			break
 		}
 		if cap(payload) < size {

@@ -2,7 +2,9 @@ package dostoevsky
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,6 +131,30 @@ func TestRepairRefusesToDiscardLaterFramesUnasked(t *testing.T) {
 	unchanged(t, path, broken)
 	if r, err = RepairJournal(dir, RepairOptions{DiscardLaterFrames: true}); err != nil || r.GoodBytes != int64(starts[1]) {
 		t.Fatalf("%+v %v", r, err)
+	}
+	records(t, dir, "one")
+}
+
+// A verified header whose length runs past the end looks like a torn tail. With frames that verify inside what it claims,
+// it is a wrong length: Open must not cut there, and repair must not do so unasked.
+func TestAWrongLengthIsNotMistakenForATornTail(t *testing.T) {
+	dir, path, data, starts := threeRecords(t)
+	broken := bytes.Clone(data)
+	h := broken[starts[1] : starts[1]+20]
+	binary.BigEndian.PutUint32(h[8:], uint32(len(broken))) // past the end, within maxFrame
+	binary.BigEndian.PutUint32(h[16:], crc32.Checksum(h[:16], crcTable))
+	write(t, path, broken)
+	if _, err := Open(dir, config()); err == nil {
+		t.Fatal("Open cut off frames that verify")
+	}
+	unchanged(t, path, broken)
+	r, err := RepairJournal(dir, RepairOptions{})
+	if !errors.Is(err, ErrLaterFrames) || r.Damage != DamageTornTail || r.LaterFrames != 1 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	unchanged(t, path, broken)
+	if _, err := RepairJournal(dir, RepairOptions{DiscardLaterFrames: true}); err != nil {
+		t.Fatal(err)
 	}
 	records(t, dir, "one")
 }

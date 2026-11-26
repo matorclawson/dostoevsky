@@ -1,6 +1,6 @@
 # Dostoevsky wire protocol, version 1 (draft)
 
-**Status: draft. Nothing implements this yet.** It describes a native binary protocol that will sit beside the [HTTP API](clients.md), which stays. It makes no speed claim; any such claim will come from a checked-in receipt.
+**Status: draft.** The [`wire`](../wire) Go package encodes and decodes it; no server speaks it yet. It describes a native binary protocol that will sit beside the [HTTP API](clients.md), which stays. It makes no speed claim; any such claim will come from a checked-in receipt.
 
 Test vectors for every message are in [`wire/testdata/vectors.json`](../wire/testdata/vectors.json). The file's `note` says what a receiver does with each invalid one. Where this text and a vector disagree, that is a bug to report, not a choice for the implementer.
 
@@ -93,6 +93,8 @@ The same rules as the Go API and the HTTP API:
 | value, state | any bytes, at most 1 MiB |
 | offset, next, expected | below 2^63 |
 | wait_ms | at most 30000; above that is `invalid` |
+
+A topic or group outside its rule is `invalid`, whatever its length, as in the HTTP API.
 
 A COMMIT whose `expected` is 2^63 - 1 has no representable next position: it is `limit`, and nothing is changed.
 

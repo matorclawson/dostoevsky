@@ -144,13 +144,15 @@ func inspect(f *os.File) (JournalReport, error) {
 		r.GoodBytes += total
 		r.Frames++
 	}
-	if r.Damage != DamageNone && r.Damage != DamageTornTail {
+	if r.Damage != DamageNone { // also behind a torn tail: a wrong length looks like one
 		r.LaterFrames, err = laterFrames(f, r.GoodBytes+1, r.Size)
 	}
 	return r, err
 }
 
-// InspectJournal reports on the journal in dir without changing it. The directory must not be open.
+// InspectJournal reports on the journal in dir without changing the journal. The directory must not be open. Like Open it
+// takes the directory's lock, so it needs write permission there: it creates journal.lock if missing and syncs the
+// directory.
 func InspectJournal(dir string) (JournalReport, error) {
 	j, err := openForRepair(dir)
 	if err != nil {
@@ -185,10 +187,15 @@ func RepairJournal(dir string, o RepairOptions) (JournalReport, error) {
 		return r, fmt.Errorf("journal left unchanged, the copy of the removed bytes failed: %w", err)
 	}
 	r.Quarantine = name
-	if err := j.file.Truncate(r.GoodBytes); err != nil {
-		return r, err
+	err = j.file.Truncate(r.GoodBytes)
+	if err == nil {
+		err = syncFile(j.file)
 	}
-	return r, syncFile(j.file)
+	if err != nil {
+		// The copy is complete and synced; whether the cut is durable is not known.
+		return r, fmt.Errorf("truncating at %d after copying the removed bytes to %s: %w", r.GoodBytes, name, err)
+	}
+	return r, nil
 }
 
 // copyDurably writes src to a new file in dir and syncs the file and the directory.

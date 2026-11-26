@@ -78,7 +78,7 @@ func UpgradeJournal(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if r.Damage != DamageNone && r.Damage != DamageTornTail {
+	if r.Damage != DamageNone && (r.Damage != DamageTornTail || r.LaterFrames > 0) {
 		return "", fmt.Errorf("the journal is damaged (%s at %d): repair it before upgrading", r.Damage, r.GoodBytes)
 	}
 	name := filepath.Join(dir, fmt.Sprintf("journal.v1.pre-upgrade-%d", time.Now().UnixNano()))

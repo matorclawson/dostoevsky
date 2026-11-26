@@ -6,7 +6,8 @@
 //	dost-repair -data DIR -upgrade                       upgrade a journal written by 0.2.x (one way)
 //
 // Run it on the host that holds DIR, as the user that owns it, with the application stopped. It needs no root.
-// Exit status: 0 the journal is sound (or was repaired), 1 damaged and not repaired, 2 it could not be examined.
+// Inspecting also needs write permission on DIR (it takes the same lock as Open).
+// Exit status: 0 every frame verifies (or the journal was repaired), 1 damaged and not repaired, 2 it could not be examined.
 package main
 
 import (
@@ -55,6 +56,10 @@ func run(args []string, out, errOut io.Writer) int {
 	} else {
 		report, err = d.InspectJournal(*dir)
 	}
+	if err != nil && report.Quarantine != "" {
+		fmt.Fprintf(errOut, "dost-repair: failed after the copy: %v\nthe removed bytes are kept in %s; inspect again before opening\n", err, report.Quarantine)
+		return 2
+	}
 	if err != nil && !errors.Is(err, d.ErrLaterFrames) && !errors.Is(err, d.ErrNotRepairable) {
 		fmt.Fprintln(errOut, "dost-repair:", err)
 		return 2
@@ -67,6 +72,7 @@ func run(args []string, out, errOut io.Writer) int {
 		damage, report.Size, report.GoodBytes, report.Frames, report.LaterFrames)
 	switch {
 	case report.Damage == d.DamageNone:
+		fmt.Fprintln(out, "every frame verifies; the journal was not replayed, so this does not promise that it opens")
 		return 0
 	case report.Quarantine != "":
 		fmt.Fprintf(out, "repaired: removed %d bytes, kept in %s\n", report.Size-report.GoodBytes, report.Quarantine)
@@ -75,7 +81,7 @@ func run(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(out, "not repaired: good frames follow the damage and truncating would discard them; restore a backup, or add -discard-later-frames to lose them")
 	case errors.Is(err, d.ErrNotRepairable):
 		fmt.Fprintln(out, "not repaired: the frame is intact but its content is not understood; truncating is not the answer")
-	case report.Damage == d.DamageTornTail:
+	case report.Damage == d.DamageTornTail && report.LaterFrames == 0:
 		fmt.Fprintln(out, "an incomplete final frame: opening the directory removes it by itself")
 	default:
 		fmt.Fprintln(out, "not changed: add -repair to remove the bytes after the last good frame (a copy is kept)")

@@ -39,7 +39,7 @@ func TestInspectThenRepair(t *testing.T) {
 	}{
 		{[]string{"-data", dir}, 1, "damage=checksum"},
 		{[]string{"-data", dir, "-repair"}, 0, "repaired: removed"},
-		{[]string{"-data", dir}, 0, "damage=none"},
+		{[]string{"-data", dir}, 0, "was not replayed"},
 		{[]string{"-data", filepath.Join(dir, "no")}, 2, "no journal"},
 		{[]string{"-data", dir, "-discard-later-frames"}, 2, "usage"},
 		{[]string{"-data", dir, "-upgrade"}, 0, "no upgrade needed"},

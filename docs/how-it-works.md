@@ -58,7 +58,7 @@ go run ./cmd/dost-repair -data /path/to/data            # inspect: changes nothi
 go run ./cmd/dost-repair -data /path/to/data -repair    # copy what follows the last good frame aside, then truncate
 ```
 
-The copy is `journal.v1.damaged-<time>` in the same directory. If frames that verify follow the damage, repair refuses, because truncating would lose them: restore a [backup](../README.md), or add `-discard-later-frames` to lose them knowingly. The damaged frame itself may have been acknowledged. The tool checks frames, not their meaning: it cannot fix a journal whose intact frames contradict each other. The same is available in Go as `InspectJournal` and `RepairJournal`.
+The copy is `journal.v1.damaged-<time>` in the same directory. If frames that verify follow the damage, repair refuses, because truncating would lose them: restore a [backup](../README.md), or add `-discard-later-frames` to lose them knowingly. The damaged frame itself may have been acknowledged. Inspecting needs write permission too, because it takes the directory's lock. The tool checks frames, not their meaning: it cannot fix a journal whose intact frames contradict each other. The same is available in Go as `InspectJournal` and `RepairJournal`.
 
 **A directory written by 0.2.x** is not opened as it is: `Open` returns `ErrUpgradeRequired` and changes nothing, because upgrading is one way. On the host that holds the directory, as its owner, with the application stopped, no sudo: copy the directory somewhere safe, then
 

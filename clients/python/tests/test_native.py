@@ -2,7 +2,7 @@ import asyncio, json, os, socket, struct, sys, threading, time, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from dostoevsky_client import ClientError, Position, Receipt, Record, _wire  # noqa: E402
-from dostoevsky_client.native import AsyncNativeClient, ConnectionLost, NativeClient  # noqa: E402
+from dostoevsky_client.native import AsyncNativeClient, ConnectionLost, NativeClient, Overloaded  # noqa: E402
 
 with open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "wire", "testdata", "vectors.json"), encoding="utf-8") as f:
     VECTORS = json.load(f)
@@ -65,6 +65,38 @@ class Vectors(unittest.TestCase):
             with self.assertRaises(_wire.Malformed, msg=v["name"]):
                 _, kind, _ = _wire.header(data)
                 _wire.reply(kind, data[_wire.HEADER:])
+
+
+class ReplyBounds(unittest.TestCase):
+    def test_reply_values_outside_the_value_table_are_malformed(self):
+        def record(key=0, ident=0, value=0, offset=0):
+            return (struct.pack("<BHQq", 1, 0, offset, 0) + struct.pack("<H", key) + b"a" * key
+                    + struct.pack("<H", ident) + b"a" * ident + bytes(value))
+
+        high = struct.pack("<Q", 1 << 63)
+        for kind, body in ((0x81, bytes(2) + high), (0x82, record(offset=1 << 63)), (0x82, record(key=4097)),
+                           (0x82, record(ident=257)), (0x82, record(value=(1 << 20) + 1)), (0x83, high),
+                           (0x83, bytes(8 + (1 << 20) + 1)), (0xFF, b"\0"), (0xFF, b"\x0d")):
+            with self.assertRaises(_wire.Malformed, msg=f"{kind:#x}, {len(body)} bytes"):
+                _wire.reply(kind, body)
+        self.assertIsNotNone(_wire.reply(0x82, record(4096, 256, 1 << 20)))
+
+    def test_a_refusing_welcome_with_anything_else_set_is_malformed(self):
+        def welcome(status, window):
+            return b"DSTV" + struct.pack("<BHIHI", status, 0, 0, window, 0)
+
+        self.assertEqual(_wire.welcome(welcome(2, 0))[0], 2)
+        for data in (welcome(2, 1), welcome(99, 0)):
+            with self.assertRaises(_wire.Malformed):
+                _wire.welcome(data)
+
+    def test_tls_with_a_unix_socket_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "unix socket"):
+            NativeClient("/nonexistent.sock", TOKEN, tls=True)
+
+
+def two_replies_at_once(fake, conn, kind, request_id, body):
+    conn.sendall(frame(0x85, request_id) + frame(0x85, request_id + 1))
 
 
 def exactly(conn, n):
@@ -211,6 +243,14 @@ class Sync(unittest.TestCase):
                 self.assertEqual(refused.exception.code, code)
         self.assertEqual(fake.frames, [])
 
+    def test_a_buffered_reply_cannot_answer_a_request_sent_after_it_arrived(self):
+        fake = Fake(self, two_replies_at_once, window=1)
+        with NativeClient(fake.address, TOKEN) as c:
+            c.ping()
+            # The second reply came before the second ping existed: the connection is already lost or is now.
+            with self.assertRaises(ConnectionLost):
+                c.ping()
+
     def test_no_plaintext_off_loopback(self):
         for host in ("192.0.2.1", "example.com"):
             with self.assertRaisesRegex(ValueError, "without TLS"):
@@ -238,6 +278,27 @@ class Async(unittest.IsolatedAsyncioTestCase):
             await asyncio.get_running_loop().run_in_executor(None, until, lambda: len(fake.frames) == 2)
             fake.conns[0].sendall(frame(0x81, fake.frames[1][1], publish_ok(1)))
             self.assertEqual((await second).offset, 1)
+
+    async def test_the_clients_own_ceiling_refuses_without_sending(self):
+        fake = Fake(self, window=1)
+        c = await AsyncNativeClient.connect(fake.address, TOKEN, max_requests=2)
+        held = [asyncio.create_task(c.ping()) for _ in range(2)]
+        await asyncio.sleep(0.05)
+        with self.assertRaises(Overloaded):
+            await c.ping()
+        self.assertEqual(len(fake.frames), 1)
+        await c.close()
+        await asyncio.gather(*held, return_exceptions=True)
+        with self.assertRaisesRegex(ValueError, "max_bytes"):
+            await AsyncNativeClient.connect(fake.address, TOKEN, max_bytes=1000)
+
+    async def test_a_buffered_reply_cannot_answer_a_later_request(self):
+        fake = Fake(self, two_replies_at_once, window=1)
+        c = await AsyncNativeClient.connect(fake.address, TOKEN)
+        first, second = await asyncio.gather(c.ping(), c.ping(), return_exceptions=True)
+        self.assertIsNone(first)
+        self.assertIsInstance(second, ConnectionLost)
+        await c.close()
 
     async def test_a_lost_connection(self):
         fake = Fake(self, lambda fake, conn, *a: conn.shutdown(socket.SHUT_RDWR))

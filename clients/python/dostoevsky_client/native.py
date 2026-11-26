@@ -21,8 +21,11 @@ import time
 from . import ClientError, Position, Receipt, Record
 from . import _wire
 
-__all__ = ["NativeClient", "AsyncNativeClient", "ClientError", "ConnectionLost"]
+__all__ = ["NativeClient", "AsyncNativeClient", "ClientError", "ConnectionLost", "Overloaded"]
 
+# The client's own ceilings. The server's window can only lower what is in flight, never raise it above these.
+_MAX_IN_FLIGHT = 256
+_MAX_IN_FLIGHT_BYTES = 4 << 20
 _HANDSHAKE_SECONDS = 5.0
 _REQUEST_SECONDS = 40.0
 _CHUNK = 65536
@@ -34,6 +37,13 @@ class ConnectionLost(ClientError):
     def __init__(self, sent: bool):
         super().__init__(0, "connection_lost")
         self.sent = sent
+
+
+class Overloaded(ClientError):
+    """The client's own queue is full: the request was refused here and never sent."""
+
+    def __init__(self):
+        super().__init__(0, "client_overloaded")
 
 
 def _failure(code: int) -> ClientError:
@@ -56,7 +66,9 @@ def _is_loopback_address(text: str) -> bool:
     return (getattr(ip, "ipv4_mapped", None) or ip).is_loopback
 
 
-def _check_target(address, tls: bool) -> None:
+def _check_target(address, tls: bool, cafile=None) -> None:
+    if isinstance(address, str) and (tls or cafile is not None):
+        raise ValueError("tls does not apply to a unix socket: remove one of the two")
     if not isinstance(address, str) and not tls and address[0] != "localhost" and not _is_loopback_address(address[0]):
         raise ValueError("refusing to send the token without TLS to a non-loopback address; use tls=True")
 
@@ -77,7 +89,7 @@ def _accept(data: bytes):
         raise _failure(status)
     if not _wire.acceptable(version, max_body, window, window_bytes):
         raise _failure(11)
-    return window, window_bytes
+    return min(window, _MAX_IN_FLIGHT), min(window_bytes, _MAX_IN_FLIGHT_BYTES)
 
 
 def _result(kind: int, value):
@@ -127,7 +139,7 @@ class NativeClient:
 
     def __init__(self, address, token: str, *, tls: bool = False, cafile: str | None = None):
         first = _build(_wire.hello, token)
-        _check_target(address, tls)
+        _check_target(address, tls, cafile)
         deadline = time.monotonic() + _HANDSHAKE_SECONDS
         sock = self._open(address, tls, cafile)
         try:
@@ -156,6 +168,7 @@ class NativeClient:
         self._queued = self._written = self._unanswered = 0  # byte counts
         self._pending = {}  # request id -> Pending, oldest first
         self._ids = _Ids()
+        self._carried = 0  # bytes written when the first byte of a partly received reply arrived
         self._dead = False
 
     @staticmethod
@@ -197,8 +210,9 @@ class NativeClient:
                 self._fail()
                 break
             progressed = True
+            arrived = self._carried if self._in else self._written
             self._in += chunk
-            self._parse()
+            self._parse(arrived)
         return progressed
 
     def _send(self) -> bool:
@@ -216,26 +230,28 @@ class NativeClient:
             progressed = True
         return progressed
 
-    def _parse(self):
+    def _parse(self, arrived):
         try:
             while not self._dead and len(self._in) >= _wire.HEADER:
                 length, kind, request_id = _wire.header(self._in)
                 if len(self._in) < _wire.HEADER + length:
-                    return
+                    break
                 body = bytes(self._in[_wire.HEADER:_wire.HEADER + length])
                 del self._in[:_wire.HEADER + length]
-                self._answer(kind, request_id, body)
+                self._answer(kind, request_id, body, arrived)
+                arrived = self._written  # nothing is written while a batch is parsed
+            self._carried = arrived
         except _wire.Malformed:
             self._fail()
 
-    def _answer(self, kind, request_id, body):
+    def _answer(self, kind, request_id, body, arrived):
         if request_id == 0:  # a connection error: the server closes after it
             if kind != _wire.ERROR:
                 raise _wire.Malformed("request id 0")
             _wire.reply(kind, body)
             return self._fail()
         request = self._pending.get(request_id)
-        if request is None or kind not in (_wire.ERROR, _wire.REPLY | request._kind):
+        if request is None or request._start + request._size > arrived or kind not in (_wire.ERROR, _wire.REPLY | request._kind):
             raise _wire.Malformed("a reply that answers nothing")
         value = _wire.reply(kind, body)
         del self._pending[request_id]
@@ -333,10 +349,13 @@ class NativeClient:
 class AsyncNativeClient:
     """asyncio. Make one with `await AsyncNativeClient.connect(address, token)`; use it from one event loop."""
 
-    def __init__(self, reader, writer, window, window_bytes):
+    def __init__(self, reader, writer, window, window_bytes, max_requests, max_bytes):
         self._reader, self._writer = reader, writer
+        self._max_requests, self._max_bytes = max_requests, max_bytes
+        self._calls = self._held = 0  # unanswered requests and their frame bytes, waiting ones included
+        self._sent = 0  # requests written
         self._window, self._window_bytes = window, window_bytes
-        self._pending = {}  # request id -> (type, size, future)
+        self._pending = {}  # request id -> (type, size, future, sequence)
         self._unanswered = 0
         self._ids = _Ids()
         self._dead = False
@@ -345,9 +364,14 @@ class AsyncNativeClient:
         self._task = asyncio.get_running_loop().create_task(self._receive())
 
     @classmethod
-    async def connect(cls, address, token: str, *, tls: bool = False, cafile: str | None = None):
+    async def connect(cls, address, token: str, *, tls: bool = False, cafile: str | None = None,
+                      max_requests: int = 1024, max_bytes: int = 8 << 20):
+        """`max_requests` and `max_bytes` bound what is unanswered here, calls waiting for the window included; a call
+        beyond them raises `Overloaded`. `max_bytes` is at least one maximum frame."""
+        if max_requests < 1 or max_bytes < _wire.MAX_BODY + _wire.HEADER:
+            raise ValueError("max_requests must be at least 1 and max_bytes at least one maximum frame")
         first = _build(_wire.hello, token)
-        _check_target(address, tls)
+        _check_target(address, tls, cafile)
         writer = None
 
         async def handshake():
@@ -372,49 +396,88 @@ class AsyncNativeClient:
             if writer is not None:
                 writer.close()
             raise
-        return cls(reader, writer, window, window_bytes)
+        return cls(reader, writer, window, window_bytes, max_requests, max_bytes)
 
     async def _receive(self):
+        buffer = bytearray()
+        carried = 0  # self._sent when the first byte of a partly received reply arrived
         try:
             while True:
-                length, kind, request_id = _wire.header(await self._reader.readexactly(_wire.HEADER))
-                body = await self._reader.readexactly(length)
-                if request_id == 0:
-                    if kind != _wire.ERROR:
-                        raise _wire.Malformed("request id 0")
-                    _wire.reply(kind, body)
+                chunk = await self._reader.read(_CHUNK)
+                if not chunk:
                     return
-                request = self._pending.get(request_id)
-                if request is None or kind not in (_wire.ERROR, _wire.REPLY | request[0]):
-                    raise _wire.Malformed("a reply that answers nothing")
-                value = _wire.reply(kind, body)
-                del self._pending[request_id]
-                wanted, size, future = request
-                self._unanswered -= size
-                self._room.set()
-                if future.done():
-                    continue
-                if kind == _wire.ERROR:
-                    future.set_exception(_failure(value))
-                else:
-                    future.set_result(_result(wanted, value))
+                # A reply may only answer a request written before its first byte arrived. There is no await while a
+                # batch is parsed, so no request can be sent between two replies of it.
+                arrived = carried if buffer else self._sent
+                buffer += chunk
+                while len(buffer) >= _wire.HEADER:
+                    length, kind, request_id = _wire.header(buffer)
+                    if len(buffer) < _wire.HEADER + length:
+                        break
+                    body = bytes(buffer[_wire.HEADER:_wire.HEADER + length])
+                    del buffer[:_wire.HEADER + length]
+                    if request_id == 0:
+                        if kind != _wire.ERROR:
+                            raise _wire.Malformed("request id 0")
+                        _wire.reply(kind, body)
+                        return
+                    self._answer(kind, request_id, body, arrived)
+                    arrived = self._sent
+                carried = arrived
         except (OSError, EOFError, _wire.Malformed):
             pass
         finally:
             self._fail()
+
+    def _answer(self, kind, request_id, body, arrived):
+        request = self._pending.get(request_id)
+        if request is None or request[3] > arrived or kind not in (_wire.ERROR, _wire.REPLY | request[0]):
+            raise _wire.Malformed("a reply that answers nothing")
+        value = _wire.reply(kind, body)
+        del self._pending[request_id]
+        wanted, size, future, _ = request
+        self._unanswered -= size
+        self._room.set()
+        if future.done():
+            return
+        if kind == _wire.ERROR:
+            future.set_exception(_failure(value))
+        else:
+            future.set_result(_result(wanted, value))
 
     def _fail(self):
         if self._dead:
             return
         self._dead = True
         self._writer.close()
-        for _, _, future in self._pending.values():
+        for _, _, future, _ in self._pending.values():
             if not future.done():
                 future.set_exception(ConnectionLost(True))
         self._pending.clear()
         self._room.set()
 
     async def _call(self, kind, frame):
+        size = len(frame)
+        if self._dead:
+            raise ConnectionLost(False)
+        if self._calls >= self._max_requests or self._held + size > self._max_bytes:
+            raise Overloaded()
+        self._calls += 1
+        self._held += size
+        try:
+            future = await self._write(kind, frame)
+        except BaseException:
+            self._release(size)
+            raise
+        # The place is held until the reply (or the loss of the connection), not until the caller stops waiting.
+        future.add_done_callback(lambda _: self._release(size))
+        return await self._wait(future)
+
+    def _release(self, size):
+        self._calls -= 1
+        self._held -= size
+
+    async def _write(self, kind, frame):
         async with self._turn:
             while not self._dead and (len(self._pending) >= self._window or self._unanswered + len(frame) > self._window_bytes):
                 self._room.clear()
@@ -425,9 +488,13 @@ class AsyncNativeClient:
             future = asyncio.get_running_loop().create_future()
             # A caller that gives up must not leave an "exception was never retrieved" warning behind.
             future.add_done_callback(lambda f: f.cancelled() or f.exception())
-            self._pending[request_id] = (kind, len(frame), future)
+            self._sent += 1
+            self._pending[request_id] = (kind, len(frame), future, self._sent)
             self._unanswered += len(frame)
             self._writer.write(_wire.set_id(frame, request_id))
+        return future
+
+    async def _wait(self, future):
         # Shielded: cancelling the caller does not unsend the request, whose reply still frees its place in the window.
         try:
             await asyncio.wait_for(self._writer.drain(), _REQUEST_SECONDS)

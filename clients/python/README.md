@@ -36,6 +36,6 @@ async with await AsyncNativeClient.connect(("127.0.0.1", 8788), token) as c:
     acks = await asyncio.gather(*(c.publish("jobs", job) for job in jobs))
 ```
 
-The methods are those of `Client`. `NativeClient` starts no thread, so bytes move only during its calls. Nothing is retried and there is no reconnect: after `ConnectionLost`, connect again; if `sent` is true the request may have taken effect.
+The methods are those of `Client`. `NativeClient` starts no thread, so bytes move only during its calls. `AsyncNativeClient` holds at most `max_requests` (1024) unanswered calls and `max_bytes` (8 MiB) of them; a call beyond that raises `Overloaded` and is never sent, so feed a larger batch in as replies arrive. Nothing is retried and there is no reconnect: after `ConnectionLost`, connect again; if `sent` is true the request may have taken effect.
 
 Test (no server needed, uses a local stub): `python3 -m unittest discover -s clients/python/tests`

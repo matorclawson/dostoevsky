@@ -118,10 +118,13 @@ def ping() -> bytearray:
 
 
 def welcome(data: bytes):
-    """(status, version, max_body, window, window_bytes)"""
+    """(status, version, max_body, window, window_bytes). A refusal is a known status with every later field zero."""
     if len(data) != WELCOME_BYTES or data[:4] != b"DSTV":
         raise Malformed("not a WELCOME")
-    return struct.unpack_from("<BHIHI", data, 4)
+    fields = struct.unpack_from("<BHIHI", data, 4)
+    if fields[0] and (fields[0] not in CODES or any(fields[1:])):
+        raise Malformed("not a refusal")
+    return fields
 
 
 def acceptable(version: int, max_body: int, window: int, window_bytes: int) -> bool:
@@ -161,14 +164,26 @@ class _Body:
     def number(self, fmt: str) -> int:
         return struct.unpack(fmt, self.take(struct.calcsize(fmt)))[0]
 
-    def string(self) -> str:
+    def offset(self) -> int:
+        value = self.number("<Q")
+        if value >= 1 << 63:
+            raise Malformed("offset out of range")
+        return value
+
+    def string(self, limit: int) -> str:
+        n = self.number("<H")
+        if n > limit:
+            raise Malformed("text too long")
         try:
-            return self.take(self.number("<H")).decode()
+            return self.take(n).decode()
         except UnicodeError:
             raise Malformed("text is not UTF-8") from None
 
-    def rest(self) -> bytes:
-        return self.take(len(self.data) - self.at)
+    def rest(self, limit: int) -> bytes:
+        n = len(self.data) - self.at
+        if n > limit:
+            raise Malformed("value too long")
+        return self.take(n)
 
 
 def reply(kind: int, data: bytes):
@@ -177,19 +192,21 @@ def reply(kind: int, data: bytes):
     body = _Body(bytes(data))
     out = None
     if kind == REPLY | PUBLISH:
-        out = (body.number("<H"), body.number("<Q"))
+        out = (body.number("<H"), body.offset())
     elif kind == REPLY | READ:
         found = body.number("<B")
         if found > 1:
             raise Malformed("found is neither 0 nor 1")
         if found:
-            partition, offset, when = body.number("<H"), body.number("<Q"), _rfc3339(body.number("<q"))
-            key, ident = body.string(), body.string()
-            out = (partition, offset, key, ident, when, body.rest())
+            partition, offset, when = body.number("<H"), body.offset(), _rfc3339(body.number("<q"))
+            key, ident = body.string(MAX_KEY), body.string(MAX_ID)
+            out = (partition, offset, key, ident, when, body.rest(MAX_VALUE))
     elif kind == REPLY | POSITION:
-        out = (body.number("<Q"), body.rest())
+        out = (body.offset(), body.rest(MAX_VALUE))
     elif kind == ERROR:
         out = body.number("<B")
+        if out not in CODES:
+            raise Malformed("unknown error code")
     elif kind not in (REPLY | COMMIT, REPLY | PING):
         raise Malformed("unknown reply type")
     if body.at != len(body.data):

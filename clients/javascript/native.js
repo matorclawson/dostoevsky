@@ -211,7 +211,7 @@ export class NativeClient {
       if (this.#pending.size >= this.#limits.window || this.#unanswered + request.bytes > this.#limits.windowBytes) break;
       this.#queue.shift();
       do { this.#nextId = this.#nextId === 0xffffffff ? 1 : this.#nextId + 1; } while (this.#pending.has(this.#nextId));
-      request.deadline = Date.now() + REQUEST_TIMEOUT_MS;
+      request.deadline = performance.now() + REQUEST_TIMEOUT_MS; // not the wall clock, which can step
       this.#pending.set(this.#nextId, request);
       this.#unanswered += request.bytes;
       if (!this.#corked) { // one write for everything sent in this turn
@@ -233,7 +233,7 @@ export class NativeClient {
       this.#sweep = null;
     } else if (this.#sweep === null) {
       this.#sweep = setInterval(() => {
-        const now = Date.now();
+        const now = performance.now();
         for (const request of this.#pending.values()) if (now > request.deadline) return this.#fail();
       }, 1000);
     }

@@ -331,7 +331,11 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 	}
 	if comparisonMode(expectedEngines) {
 		if err := requireComparisonMeta(expectedEngines, meta); err != nil {
-			return fmt.Errorf("%s: %w", metaPath, err)
+			from := metaPath
+			if len(expectedEngines) > maxSeries { // the selection is at fault, not the metadata
+				from = "-engines"
+			}
+			return fmt.Errorf("%s: %w", from, err)
 		}
 	}
 	notShown = leftOut(trials, expectedEngines, ignoredEngines)

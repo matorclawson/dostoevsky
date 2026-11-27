@@ -25,10 +25,10 @@ test: dev-test ## Run the tests
 dev: dev-fmt-check dev-vet dev-test dev-race dev-build ## Run the complete development checks
 
 dev-fmt: ## Format the Go source
-	@"$(GOFMT)" -w *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go
+	@"$(GOFMT)" -w *.go examples/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go
 
 dev-fmt-check: ## Check formatting without changing files
-	@files=$$("$(GOFMT)" -l *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
+	@files=$$("$(GOFMT)" -l *.go examples/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
 
 dev-vet: ## Run Go static analysis
 	@"$(GO)" vet ./...
@@ -251,3 +251,19 @@ dev-test-sync-modes: ## Compare Linux synchronous write modes on the target volu
 
 dev-test-sockets: ## Exercise Unix socket permissions and stale and active listeners
 	@"$(GO)" test -v -count=1 -run '^(TestUnixSocketIsPrivate|TestAStaleSocketOfOursIsReplaced|TestALiveSocketIsNotDisplaced)$$' ./cmd/dostoevsky-server
+
+.PHONY: dev-test-workflows dev-bench-workflows dev-test-ephemeral
+dev-test-workflows: ## Check workflow conformance, crash recovery and competing leases
+	@"$(GO)" test -race -count=1 ./workflow
+
+dev-bench-workflows: ## Measure complete three-activity workflows on a disposable volume
+	@test -d "$(DOST_WORKFLOW_BENCH_DIR)" || { echo "Set DOST_WORKFLOW_BENCH_DIR to a disposable directory"; exit 2; }
+	@"$(GO)" test -count=3 -v -run '^TestWorkflowCost$$' ./workflow
+
+dev-test-ephemeral: ## Run the same public-API scenarios against a vendored SQLite reference
+	@sh scripts/workflow-conformance.sh
+
+.PHONY: dev-bench-workflow-reopen
+dev-bench-workflow-reopen: ## Measure fresh-process reopen memory versus retained closed runs
+	@test -d "$(DOST_WORKFLOW_BENCH_DIR)" || { echo "Set DOST_WORKFLOW_BENCH_DIR to a disposable directory"; exit 2; }
+	@"$(GO)" test -count=1 -v -run '^TestWorkflowReopenFootprint$$' ./workflow

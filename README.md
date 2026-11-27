@@ -347,3 +347,7 @@ Run `make dev-bench-publish-gate` on Linux to compare synchronous publishers at 
 ### High-cardinality workloads
 
 Go consumers can use `sketch.HotTopics` to rank recent activity with a fixed resident budget. Segmented nodes can enable frequency-based cache admission for historical producer-ID retries. See the [usage examples and benchmark results](benchmarks/admission/README.md).
+
+### Embedded workflows (experimental)
+
+Use a dedicated segmented directory for durable sequential activities. The [workflow guide](docs/workflow-lifecycle.md) covers leases, retries, history, crash behavior and the release boundary.

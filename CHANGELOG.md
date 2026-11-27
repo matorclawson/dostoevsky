@@ -4,6 +4,12 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — experimental embedded workflow lifecycle
+
+- Added a separate segmented workflow store with immutable sequential activity definitions, exact-input StartOnce, leased Poll, successful or failed Finish, bounded attempts, fixed backoff and paginated History.
+- Added bounded group validation, post-sync replies, replay and fail-closed handling of uncertain writes. Preserved independent stream-only builds.
+- Added shared SQLite conformance cases, abrupt-exit and damaged-tail tests, a runnable Go example, development Make targets and per-completion measurements. See the [workflow guide](docs/workflow-lifecycle.md).
+
 ## Unreleased — fresh durable publishing
 
 - Reduced allocation during segmented publication through bounded frame-buffer reuse, frame size reservation and fewer intermediate batch allocations.

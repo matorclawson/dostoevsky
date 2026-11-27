@@ -328,6 +328,9 @@ impl Client {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(transport)?;
         stream.set_read_timeout(Some(self.timeout)).map_err(transport)?;
         stream.set_write_timeout(Some(self.timeout)).map_err(transport)?;
+        // The head and the body are written separately: without this, the body can wait for the
+        // server's delayed acknowledgment of the head.
+        stream.set_nodelay(true).map_err(transport)?;
         Ok(BufReader::new(stream))
     }
 
@@ -502,6 +505,13 @@ mod tests {
             seen
         });
         (url, handle)
+    }
+    #[test]
+    fn connections_send_without_delay() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let conn = Client::new(&url, "token").connect().unwrap();
+        assert!(conn.get_ref().nodelay().unwrap());
     }
     /// One connection per response, each told to close after its reply.
     fn one_each(responses: Vec<Vec<u8>>) -> Vec<Vec<Vec<u8>>> {

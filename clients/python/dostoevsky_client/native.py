@@ -212,8 +212,9 @@ class NativeClient:
             sock = _connect_tcp(address, deadline)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             if tls:
+                context = _context(cafile)  # loading the trust roots takes from the one deadline too
                 sock.settimeout(_left(deadline))
-                return _context(cafile).wrap_socket(sock, server_hostname=address[0])
+                return context.wrap_socket(sock, server_hostname=address[0])
         except OSError:
             if sock is not None:
                 sock.close()

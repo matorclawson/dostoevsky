@@ -2,8 +2,10 @@ package dostoevsky
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 )
 
@@ -49,3 +51,32 @@ func TestOpenSyncsEveryDirectoryAboveTheData(t *testing.T) {
 		}
 	}
 }
+
+// A directory this user can write but not read refuses the sync every time. Open must not
+// take the second attempt for a durable one just because the directories now exist.
+func TestOpenKeepsFailingWhileAWritableParentCannotBeSynced(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := syncParent
+	syncParent = func(dir string) error {
+		if dir == base {
+			return &os.PathError{Op: "open", Path: dir, Err: syscall.EACCES}
+		}
+		return original(dir)
+	}
+	defer func() { syncParent = original }()
+	cfg := Config{Node: "n", Nodes: []string{"n"}, Topics: map[string]int{"events": 1}}
+	for attempt := 1; attempt <= 2; attempt++ {
+		n, err := Open(filepath.Join(base, "a"), cfg)
+		if err == nil {
+			n.Close()
+			t.Fatalf("attempt %d: Open succeeded without syncing a writable parent", attempt)
+		}
+		if !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+}
+

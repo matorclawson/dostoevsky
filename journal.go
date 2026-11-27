@@ -63,9 +63,10 @@ var syncParent = syncDir
 // mkdirDurable creates dir and any missing parents, then syncs every directory above dir
 // on the same file system, so that a host crash cannot lose the entry of a directory that
 // holds acknowledged data. All levels are synced on every call, not only new ones: an
-// earlier start may have stopped, or failed a sync, part of the way. A directory this
-// call did not need to create an entry in is skipped when it may not be opened or is on a
-// read-only mount.
+// earlier start may have stopped, or failed a sync, part of the way, so that a directory
+// exists says nothing about its durability. A failed sync is passed over only where this
+// user could not have created the entry: an older directory on a read-only mount, or one
+// it may neither open nor write.
 func mkdirDurable(dir string) error {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -112,11 +113,21 @@ func mkdirDurable(dir string) error {
 			break // a mount point: nothing above it was created for this directory
 		}
 		err = syncParent(parent)
-		if err != nil && (level < created || !(errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EROFS))) {
+		if err != nil && (level < created || !cannotHaveCreated(parent, err)) {
 			return err
 		}
 	}
 	return nil
+}
+
+// cannotHaveCreated reports whether the failure to sync dir can be passed over: this user
+// cannot create entries in it, so no earlier start of this program left one unsynced.
+func cannotHaveCreated(dir string, err error) bool {
+	if errors.Is(err, syscall.EROFS) {
+		return true
+	}
+	const writable = 2 // W_OK
+	return errors.Is(err, os.ErrPermission) && syscall.Access(dir, writable) != nil
 }
 
 // One file descriptor owns the advisory lock for the lifetime of the node.

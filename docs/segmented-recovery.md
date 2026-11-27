@@ -14,7 +14,7 @@ Each sealed segment can have a rebuildable index. Random reads locate a segment 
 
 A workload whose retained IDs exceed the filter budget, for example one scanning from newest to oldest, can reload the same filters repeatedly; how much that costs has not been measured.
 
-**Keep consumer group state small.** Every segment starts with a checkpoint holding all groups' state, and records must fit in the first 4 GiB of a segment. A store whose checkpoint leaves no room refuses publishes with the limit error. Commits are still accepted, but this version cannot delete a group: the checkpoint shrinks only when groups commit smaller state, and only from the next rollover on, which commits alone must then fill a segment to reach. That recovery has not been tested. Stay far below the limit.
+**Keep consumer group state small.** Every segment starts with a checkpoint holding all groups' state, and records must fit in the first 4 GiB of a segment. A store whose checkpoint leaves no room refuses publishes with the limit error. Commits are still accepted, but this version cannot delete a group, and a group that has reached the end of its partition cannot commit again while publishes are refused. **There is no tested way out of this state in place.** Stay far below the limit.
 
 **Do not run `dost-repair` or the upgrade tool of an earlier release on a segmented directory.** An old repair can remove the format marker and leave the segment data behind.
 

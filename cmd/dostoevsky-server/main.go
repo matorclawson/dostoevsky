@@ -146,7 +146,11 @@ func listenUnix(path string) (net.Listener, error) {
 	if above == "" {
 		above = "."
 	}
-	if own == "" || own == "." || own == ".." || name == "" {
+	// A bare socket name lives in the working directory, which is then checked itself.
+	if given == "." {
+		above, own = ".", ""
+	}
+	if (own == "" && given != ".") || own == "." || own == ".." || name == "" {
 		return nil, fmt.Errorf("socket path %s must name a socket inside its own directory", path)
 	}
 	parent, err := trustedDir(above)

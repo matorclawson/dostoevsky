@@ -76,6 +76,7 @@ type stream struct {
 
 type recordTail struct {
 	records []location
+	packed  *locationIndex
 	ids     map[string]int64
 }
 
@@ -91,12 +92,18 @@ func (s *stream) count() int64 {
 	if s.tail == nil {
 		return 1
 	}
+	if s.tail.packed != nil {
+		return 1 + s.tail.packed.count
+	}
 	return 1 + int64(len(s.tail.records))
 }
 
 func (s *stream) location(index int64) location {
 	if index == 0 {
 		return s.first
+	}
+	if s.tail.packed != nil {
+		return s.tail.packed.location(index - 1)
 	}
 	return s.tail.records[index-1]
 }
@@ -111,7 +118,19 @@ func (s *stream) addRecordFields(id string, offset int64, loc location) {
 	if s.tail == nil {
 		s.tail = &recordTail{}
 	}
-	s.tail.records = append(s.tail.records, loc)
+	t := s.tail
+	if t.packed == nil && len(t.records) == locationStride {
+		t.packed = new(locationIndex)
+		for _, old := range t.records {
+			t.packed.append(old)
+		}
+		t.records = nil
+	}
+	if t.packed != nil {
+		t.packed.append(loc)
+	} else {
+		t.records = append(t.records, loc)
+	}
 	if id != "" {
 		if s.tail.ids == nil {
 			s.tail.ids = make(map[string]int64)

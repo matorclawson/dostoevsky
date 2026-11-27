@@ -3,6 +3,7 @@
 //
 // The methods and results are those of the HTTP Client. Nothing is retried and there is no reconnect: after the
 // connection is lost every call fails, and a request that had been sent has an unknown outcome (ConnectionLost.sent).
+import { webcrypto } from "node:crypto";
 import net from "node:net";
 import tls from "node:tls";
 import { ClientError } from "./index.js";
@@ -92,7 +93,7 @@ export class NativeClient {
   #blocked = false; // the socket asked us to wait for "drain"
   #maxRequests;
   #maxBytes;
-  #nextId = 0;
+  #word = new Uint32Array(1); // for the next request id
   #dead = false;
   #sweep = null;
   #corked = false;
@@ -204,15 +205,21 @@ export class NativeClient {
     this.#queue = [];
   }
 
+  // Random, so that a server cannot answer a request before it has received that request's header.
+  #unusedId() {
+    do { webcrypto.getRandomValues(this.#word); } while (this.#word[0] === 0 || this.#pending.has(this.#word[0]));
+    return this.#word[0];
+  }
+
   // Sends from the head of the queue while the window allows; nothing overtakes, so publishes keep call order.
   #send() {
     while (!this.#dead && !this.#blocked && this.#queue.length > 0) {
       const request = this.#queue[0];
       if (this.#pending.size >= this.#limits.window || this.#unanswered + request.bytes > this.#limits.windowBytes) break;
       this.#queue.shift();
-      do { this.#nextId = this.#nextId === 0xffffffff ? 1 : this.#nextId + 1; } while (this.#pending.has(this.#nextId));
+      const id = this.#unusedId();
       request.deadline = performance.now() + REQUEST_TIMEOUT_MS; // not the wall clock, which can step
-      this.#pending.set(this.#nextId, request);
+      this.#pending.set(id, request);
       this.#unanswered += request.bytes;
       if (!this.#corked) { // one write for everything sent in this turn
         this.#corked = true;
@@ -220,7 +227,7 @@ export class NativeClient {
         process.nextTick(() => { this.#corked = false; this.#socket.uncork(); });
       }
       request.seq = ++this.#sent;
-      this.#blocked = !this.#socket.write(wire.setId(request.frame, this.#nextId));
+      this.#blocked = !this.#socket.write(wire.setId(request.frame, id));
       request.frame = null;
     }
     this.#watch();

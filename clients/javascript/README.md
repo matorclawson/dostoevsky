@@ -29,6 +29,8 @@ const acks = await Promise.all(jobs.map((job) => c.publish("jobs", job))); // in
 c.close();
 ```
 
-The methods are those of `Client`. Calls beyond the server's window wait their turn. The client holds at most `maxRequests` (1024) unanswered requests and `maxBytes` (8 MiB) of them; a call beyond that fails at once with `Overloaded` and is never sent, so a larger batch must be fed in as replies arrive. Nothing is retried and there is no reconnect: after `ConnectionLost`, connect again; if `sent` is true the request may have taken effect.
+The methods are those of `Client`. Calls beyond the server's window wait their turn. The client holds at most `maxRequests` (1024) unanswered requests and `maxBytes` (8 MiB) of them; a call beyond that fails at once with `Overloaded` and is never sent, so a larger batch must be fed in as replies arrive. **A limit of reply matching.** Request ids are random, so a server cannot answer a request whose header it has not received. A server that has received part of a request can still answer it early and be believed, for example with a publish receipt for a record it never had in full. Only a server that is broken or hostile does this, and such a server holds the token and can return any answer anyway.
+
+Nothing is retried and there is no reconnect: after `ConnectionLost`, connect again; if `sent` is true the request may have taken effect.
 
 Test (no server needed): `cd clients/javascript && npm test`

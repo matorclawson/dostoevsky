@@ -1,0 +1,19 @@
+ok  	github.com/rodriveracom/dostoevsky	16.265s
+?   	github.com/rodriveracom/dostoevsky/benchmarks/catalog	[no test files]
+?   	github.com/rodriveracom/dostoevsky/benchmarks/history	[no test files]
+?   	github.com/rodriveracom/dostoevsky/benchmarks/idpublish	[no test files]
+ok  	github.com/rodriveracom/dostoevsky/clienthttp	1.254s
+ok  	github.com/rodriveracom/dostoevsky/cmd/dost-repair	1.019s
+?   	github.com/rodriveracom/dostoevsky/cmd/dost-storage	[no test files]
+ok  	github.com/rodriveracom/dostoevsky/cmd/dostoevsky-gateway	1.013s
+ok  	github.com/rodriveracom/dostoevsky/cmd/dostoevsky-server	1.011s
+ok  	github.com/rodriveracom/dostoevsky/cmd/plots	3.683s
+?   	github.com/rodriveracom/dostoevsky/cmd/sketchreport	[no test files]
+?   	github.com/rodriveracom/dostoevsky/examples/burst	[no test files]
+?   	github.com/rodriveracom/dostoevsky/examples/mesh	[no test files]
+ok  	github.com/rodriveracom/dostoevsky/examples/openai	1.016s
+ok  	github.com/rodriveracom/dostoevsky/examples/taskqueue	1.042s
+?   	github.com/rodriveracom/dostoevsky/examples/wordcount	[no test files]
+ok  	github.com/rodriveracom/dostoevsky/sketch	5.256s
+ok  	github.com/rodriveracom/dostoevsky/wire	1.119s
+ok  	github.com/rodriveracom/dostoevsky/wireserver	5.715s

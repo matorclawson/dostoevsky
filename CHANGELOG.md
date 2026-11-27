@@ -4,6 +4,11 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — fresh durable publishing
+
+- Reduced allocation during segmented publication through bounded frame-buffer reuse, frame size reservation and fewer intermediate batch allocations.
+- Added paired fresh-publish benchmarks, single-producer storage timing, a Linux sync comparison, and process-kill recovery tests for one and 32 segmented publishers. See the [benchmark report](benchmarks/fresh/README.md).
+
 ## Unreleased — cache admission and hot-topic analytics
 
 - Added optional frequency-based admission for verified sealed indexes, charged to the ID-table budget. FIFO remains the default. A duplicate receipt can reuse the index already decoded during lookup.

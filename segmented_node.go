@@ -237,17 +237,18 @@ func (n *Node) segmentBatch(ctx context.Context, items []Publication) ([]Record,
 		p  Partition
 		id string
 	}
-	seen := make(map[identity]int)
+	var seen map[identity]int
 	type step struct {
 		i, at int
 		pid   uint32
 	}
-	var steps []step
+	var inlineStep [1]step
+	steps := inlineStep[:0]
 	pids := make(map[Partition]uint32)
 	counts := make(map[Partition]int64)
 	nextPID := l.state.nextPID
 	out := make([]Record, len(items))
-	var buf []byte
+	buf := l.publishBuf[:0]
 	var inputBytes int
 	for i, item := range items {
 		if err := ctx.Err(); err != nil {
@@ -293,7 +294,12 @@ func (n *Node) segmentBatch(ctx context.Context, items []Publication) ([]Record,
 				out[i] = *prior
 				continue
 			}
-			seen[key] = i
+			if len(items) > 1 {
+				if seen == nil {
+					seen = make(map[identity]int, len(items))
+				}
+				seen[key] = i
+			}
 		}
 		pid, exists := l.state.byPart[p]
 		var base int64
@@ -313,6 +319,9 @@ func (n *Node) segmentBatch(ctx context.Context, items []Publication) ([]Record,
 		}
 		r := Record{Partition: p, Message: m, Time: time.Now().UTC(), Offset: base + counts[p]}
 		counts[p]++
+		if len(steps) == 0 && len(items) > 1 {
+			steps = make([]step, 0, len(items))
+		}
 		steps = append(steps, step{i, len(buf), pid})
 		out[i] = r
 		buf, e = appendRecord3(buf, record3{Partition: pid, Offset: uint64(r.Offset), Time: r.Time.UnixNano(), Key: []byte(m.Key), ID: []byte(m.ID), Value: m.Value})
@@ -334,6 +343,10 @@ func (n *Node) segmentBatch(ctx context.Context, items []Publication) ([]Record,
 			l.failed = err
 			return nil, err
 		}
+	}
+	// Large bursts use transient storage. Keep a small working buffer only.
+	if cap(buf) <= 64<<10 {
+		l.publishBuf = buf[:0]
 	}
 	start := l.active.end - int64(len(buf))
 	for _, s := range steps {

@@ -521,6 +521,7 @@ var (
 const idxCacheSize = 32
 
 type segLog struct {
+	publishBuf []byte         // bounded frame encoding scratch, protected by the node writer lock
 	filters    *idFilterCache // only used by the public node under its write lock
 	idProbes   uint64         // exact sealed ID lookups under the node write lock
 	indexLoads uint64         // cold index loads under indexLoad lock

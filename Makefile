@@ -235,3 +235,19 @@ dev-bench-admission: ## Compare the original and candidate index policies on the
 
 dev-bench-hot-topics: ## Measure topic tracker accuracy, memory and observation cost
 	@"$(GO)" test -run HotTopic -v -bench HotTopics -benchmem -count=3 ./sketch
+
+.PHONY: dev-bench-fresh
+dev-bench-fresh: ## Compare fresh segmented durable publishes against 8e410b7
+	@sh scripts/fresh-publish-bench.sh
+
+.PHONY: dev-profile-fresh dev-test-sync-modes dev-test-sockets
+dev-profile-fresh: ## Time single-publisher writes and syncs on a disposable segmented fixture
+	@test -n "$(DOST_FRESH_PROFILE_DIR)" || { echo "Set DOST_FRESH_PROFILE_DIR to a disposable data directory"; exit 2; }
+	@"$(GO)" test -v -count=1 -run '^TestFreshDurableStages$$' .
+
+dev-test-sync-modes: ## Compare Linux synchronous write modes on the target volume
+	@test -d "$(DOST_SYNC_MODE_DIR)" || { echo "Set DOST_SYNC_MODE_DIR to an existing directory"; exit 2; }
+	@"$(GO)" test -v -count=1 -run '^TestFreshSyncModes$$' .
+
+dev-test-sockets: ## Exercise Unix socket permissions and stale and active listeners
+	@"$(GO)" test -v -count=1 -run '^(TestUnixSocketIsPrivate|TestAStaleSocketOfOursIsReplaced|TestALiveSocketIsNotDisplaced)$$' ./cmd/dostoevsky-server

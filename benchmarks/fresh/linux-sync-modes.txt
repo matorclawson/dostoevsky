@@ -1,0 +1,18 @@
+=== RUN   TestFreshSyncModes
+    fresh_sync_linux_test.go:77: pair=1 dsync=false rate=2047.8 p99_us=2953.4
+    fresh_sync_linux_test.go:77: pair=1 dsync=true rate=2039.9 p99_us=2451.9
+    fresh_sync_linux_test.go:77: pair=2 dsync=true rate=2301.2 p99_us=1555.9
+    fresh_sync_linux_test.go:77: pair=2 dsync=false rate=1923.7 p99_us=2134.4
+    fresh_sync_linux_test.go:77: pair=3 dsync=false rate=1964.1 p99_us=2880.2
+    fresh_sync_linux_test.go:77: pair=3 dsync=true rate=1739.6 p99_us=1415.6
+    fresh_sync_linux_test.go:77: pair=4 dsync=true rate=2005.3 p99_us=1688.7
+    fresh_sync_linux_test.go:77: pair=4 dsync=false rate=1847.4 p99_us=2194.5
+    fresh_sync_linux_test.go:77: pair=5 dsync=false rate=2134.7 p99_us=1157.3
+    fresh_sync_linux_test.go:77: pair=5 dsync=true rate=2055.8 p99_us=1408.1
+    fresh_sync_linux_test.go:77: pair=6 dsync=true rate=1772.9 p99_us=2370.6
+    fresh_sync_linux_test.go:77: pair=6 dsync=false rate=1727.9 p99_us=2791.2
+    fresh_sync_linux_test.go:77: pair=7 dsync=false rate=1825.3 p99_us=2758.4
+    fresh_sync_linux_test.go:77: pair=7 dsync=true rate=1419.7 p99_us=3707.5
+--- PASS: TestFreshSyncModes (7.68s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky	7.683s

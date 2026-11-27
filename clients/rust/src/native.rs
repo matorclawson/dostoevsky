@@ -1186,7 +1186,8 @@ mod tests {
     fn a_reply_for_an_id_not_yet_sent_ends_the_connection() {
         let (address, server) = scripted(WELCOME, |conn| {
             conn.write_all(&published(1, 0)).unwrap();
-            conn.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            conn.set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
             assert!(matches!(conn.read(&mut [0; 64]), Ok(0)));
         });
         let client = NativeClient::connect(&address, TOKEN).unwrap();

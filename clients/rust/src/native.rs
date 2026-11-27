@@ -478,6 +478,61 @@ struct Waiting {
     slot: Arc<Slot>,
 }
 
+/// Request ids from the operating system's randomness, so that a server cannot answer a request
+/// before it has received that request's header.
+#[derive(Default)]
+struct Ids {
+    pool: Vec<u32>,
+    #[cfg(unix)]
+    source: Option<std::fs::File>,
+}
+
+impl Ids {
+    #[cfg(unix)]
+    fn random(&mut self, bytes: &mut [u8]) -> io::Result<()> {
+        if self.source.is_none() {
+            self.source = Some(std::fs::File::open("/dev/urandom")?);
+        }
+        match &mut self.source {
+            Some(source) => source.read_exact(bytes),
+            None => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+
+    // Elsewhere the standard library offers no random bytes directly. `RandomState` is keyed
+    // from the operating system's generator; its keyed hash of a counter is used.
+    #[cfg(not(unix))]
+    fn random(&mut self, bytes: &mut [u8]) -> io::Result<()> {
+        use std::hash::{BuildHasher, Hasher};
+        let keys = std::collections::hash_map::RandomState::new();
+        for (i, part) in bytes.chunks_mut(8).enumerate() {
+            let mut hasher = keys.build_hasher();
+            hasher.write_usize(i);
+            part.copy_from_slice(&hasher.finish().to_le_bytes()[..part.len()]);
+        }
+        Ok(())
+    }
+
+    /// A random id that is not 0 and not `used`.
+    fn unused(&mut self, used: impl Fn(u32) -> bool) -> io::Result<u32> {
+        loop {
+            match self.pool.pop() {
+                Some(id) if id != 0 && !used(id) => return Ok(id),
+                Some(_) => {}
+                None => {
+                    let mut bytes = [0u8; 256];
+                    self.random(&mut bytes)?;
+                    self.pool.extend(
+                        bytes
+                            .chunks_exact(4)
+                            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     dead: bool,
@@ -487,7 +542,7 @@ struct State {
     reserved: u64,  // the latest number given out
     finishing: u64, // the latest request whose last write call has been made
     completed: u64, // the latest request written in full
-    last_id: u32,
+    ids: Ids,
 }
 
 impl State {
@@ -797,14 +852,12 @@ impl NativeClient {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .0;
         }
-        let mut request_id = state.last_id;
-        loop {
-            request_id = request_id.checked_add(1).unwrap_or(1);
-            if !state.pending.contains_key(&request_id) {
-                break;
-            }
-        }
-        state.last_id = request_id;
+        let State { ids, pending, .. } = &mut *state;
+        let Ok(request_id) = ids.unused(|id| pending.contains_key(&id)) else {
+            drop(state);
+            self.shared.fail(); // no randomness: nothing more can be sent safely
+            return Err(NOT_SENT);
+        };
         data[6..HEADER].copy_from_slice(&request_id.to_le_bytes());
         // Reserved before the first byte is written: from here the outcome of a lost connection is
         // unknown. A reply is accepted only once `send` has reached the last write call.
@@ -1115,7 +1168,7 @@ mod tests {
             let (address, server) = scripted(WELCOME, move |conn| {
                 let (_, id) = next_frame(conn);
                 let reply = if wrong == "id" {
-                    published(id + 1, 0)
+                    published(id.wrapping_add(1), 0)
                 } else {
                     with_id(ping_frame().unwrap(), id) // a request type, not a reply
                 };
@@ -1127,6 +1180,32 @@ mod tests {
             assert_eq!(client.ping().unwrap_err(), NOT_SENT);
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn a_reply_for_an_id_not_yet_sent_ends_the_connection() {
+        let (address, server) = scripted(WELCOME, |conn| {
+            conn.write_all(&published(1, 0)).unwrap();
+            conn.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            assert!(matches!(conn.read(&mut [0; 64]), Ok(0)));
+        });
+        let client = NativeClient::connect(&address, TOKEN).unwrap();
+        server.join().unwrap(); // the client ended it without sending anything
+        assert_eq!(client.ping().unwrap_err(), NOT_SENT);
+    }
+
+    #[test]
+    fn request_ids_are_not_predictable() {
+        let mut ids = Ids::default();
+        let drawn: Vec<u32> = (0..200).map(|_| ids.unused(|_| false).unwrap()).collect();
+        assert!(drawn.iter().all(|&id| id != 0));
+        assert!(drawn.windows(2).any(|w| w[1] != w[0].wrapping_add(1)));
+        assert!(drawn.windows(2).any(|w| w[1] != w[0].wrapping_sub(1)));
+        let other = Ids::default().unused(|_| false).unwrap();
+        assert_ne!(other, drawn[0]);
+        // An id in use is not given out.
+        let taken = ids.pool.last().copied();
+        assert_ne!(Some(ids.unused(|id| Some(id) == taken).unwrap()), taken);
     }
 
     #[test]

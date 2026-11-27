@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
+import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as wire from "../wire.js";
 import { NativeClient, ClientError, ConnectionLost, Overloaded } from "../native.js";
@@ -179,7 +180,7 @@ test("a request error keeps the connection; the value is copied before it waits 
 
 test("a bad reply ends the connection", async (t) => {
   for (const [name, answer] of [
-    ["unknown id", (f) => send(f.socket, 0x85, f.id + 1)],
+    ["unknown id", (f) => send(f.socket, 0x85, (f.id % 0xffffffff) + 1)],
     ["wrong type", (f) => send(f.socket, 0x84, f.id)],
     ["bytes left over", (f) => send(f.socket, 0x85, f.id, Buffer.from([0]))],
     ["connection error", (f) => send(f.socket, 0xff, 0, Buffer.from([11]))],
@@ -226,8 +227,23 @@ test("the client's own ceilings refuse without sending", async (t) => {
   await assert.rejects(NativeClient.connect(target, TOKEN, { maxBytes: 1000 }), /maxBytes/);
 });
 
+test("request ids are random and not 0", async (t) => {
+  const ids = [];
+  const target = await fake(t, {}, (f) => { ids.push(f.id); send(f.socket, 0x85, f.id); });
+  const c = await NativeClient.connect(target, TOKEN);
+  t.after(() => c.close());
+  await Promise.all(Array.from({ length: 100 }, () => c.ping()));
+  assert.equal(ids.length, 100);
+  assert.ok(ids.every((id) => id > 0));
+  assert.ok(ids.some((id, i) => i > 0 && id !== ids[i - 1] + 1));
+  assert.ok(new Set(ids).size > 95);
+});
+
 test("a buffered reply cannot answer a request that was sent after it arrived", async (t) => {
-  // With a window of one, the second request is still queued when two replies arrive together.
+  // With a window of one, the second request is still queued when two replies arrive together. The script has to name
+  // its id before it is sent, so ids are made predictable here; the client's own are random.
+  let next = 0;
+  t.mock.method(webcrypto, "getRandomValues", (word) => { word[0] = ++next; return word; });
   const target = await fake(t, { window: 1 }, (f) => {
     const reply = (id) => { const h = Buffer.alloc(10); h.writeUInt8(0x85, 4); h.writeUInt32LE(id, 6); return h; };
     f.socket.write(Buffer.concat([reply(f.id), reply(f.id + 1)]));

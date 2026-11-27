@@ -103,6 +103,7 @@ Integrates the post-0.3.0 publishing work (ZIP SHA-256 `fb422713f1b5550fa8c30ae9
 
 ## 0.5.0 (unreleased)
 
+- **TypeScript/JavaScript native client: random request ids.** A server is now very unlikely to guess a request's id before receiving its header. The README states what remains.
 - **Breaking: upgrading a 0.2.x directory is explicit.** Until now `Open` marked such a journal on sight, after which 0.2.x refused it. `Open` now returns `ErrUpgradeRequired` and changes nothing; back up the directory, then run `dost-repair -data DIR -upgrade` (or call `UpgradeJournal`). Directories already opened by 0.3.0 or later, and new ones, are unaffected.
 - **Repairing a damaged journal.** `Open` still stops at a frame that does not verify. New: `InspectJournal`, `RepairJournal` and the `dost-repair` command, which truncate after the last good frame only when asked, keep a copy of what they remove, and refuse to discard good frames that follow the damage without a second flag. `Node.Truncated` reports the torn final frame that `Open` removes, and the gateway logs it. `Open` no longer cuts a final frame whose announced length hides frames that verify: it refuses, as for other damage.
 - **A cap on the journal.** `Node.SetJournalCap` and the gateway's `-max-journal-mib` refuse publishes with `ErrJournalFull` (also `ErrLimit`) rather than let the file pass a size, with a reserve for commits so `Retain` can make room. Off by default. `Node.JournalSize` reports the size.

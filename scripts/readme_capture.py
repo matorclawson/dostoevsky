@@ -109,11 +109,11 @@ def capture():
 
     gateway = Gateway(env)
     try:
-        lines.append(("note", "# `make dev-gateway &` is running in the background"))
+        lines.append(("note", "# `make dev-gateway &` is running in the background (started by the capture script)"))
         step(WORKER)
         first = step(PUBLISH)
         gateway.kill()
-        lines.append(("note", "# kill -9 %1, then `make dev-gateway &` again"))
+        lines.append(("note", "# the gateway is force-killed (SIGKILL), then started again"))
         gateway = Gateway(env)
         again = step(PUBLISH)
         value = step(READ)

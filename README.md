@@ -15,7 +15,7 @@ Dostoevsky keeps topics, idempotent publish and consumer checkpoints in one fsyn
 <img src="docs/img/quickstart.svg" alt="Terminal: a job is published and read, the gateway is killed with SIGKILL and restarted, and publishing the same ID again returns the same offset.">
 </p>
 
-<sub>A real run of the quick start below, captured by <code>scripts/readme_capture.py</code>.</sub>
+<sub>A real, scripted run of the quick start below: <code>scripts/readme_capture.py</code> runs the same commands, and starts and kills the gateway itself.</sub>
 
 ## Quick start
 
@@ -36,17 +36,31 @@ PY='import os; from dostoevsky_client import Client; c = Client("http://127.0.0.
 python3 -c "$PY; print(c.publish('jobs', b'paid', id='order-1'))"
 ```
 
-Now kill the gateway with `kill -9 %1`, start it again with `make dev-gateway &`, and run the last line once more. It returns the same offset: the record survived, and the repeated ID did not create a second one. `kill %1` stops the gateway when you are done.
+Now force-kill the gateway and start it again. `'%?dev-gateway'` names that background job, whatever else your shell is running:
+
+```sh
+kill -9 '%?dev-gateway'
+make dev-gateway &            # wait for the "listening" line again
+```
+
+Publish the same thing once more, then read it:
+
+```sh
+python3 -c "$PY; print(c.publish('jobs', b'paid', id='order-1'))"   # the same offset as before
+python3 -c "$PY; print(c.read('jobs', 0, 1).value)"                 # b'paid'
+```
+
+The record survived, and the repeated publish did not create a second one. Stop the gateway with `kill '%?dev-gateway'` when you are done.
 
 JavaScript, TypeScript, Java and Rust: [client guide](docs/clients.md). In Go, [embed the library](#embed-it-in-go) instead.
 
 ## What makes it different
 
 * **Acknowledged means synced.** A publish returns after the journal is synced to disk. Concurrent writers share a sync.
-* **Retries are safe.** Publishing again with the same ID returns the original offset, until retention removes the record.
+* **Retries are safe.** A retry with the same key, ID and value returns the original offset, until retention removes the record. IDs are scoped to a partition; reusing one there with different content is refused.
 * **State and offset commit together.** A consumer's checkpoint and its processor state are one journal entry.
 * **Library or server.** The same journal runs inside a Go program or behind a gateway with clients for Python, JavaScript, TypeScript, Java and Rust.
-* **Small.** Standard library only. On the published [publisher gate](docs/publisher-gate.md) it peaked at 11.1 MiB where embedded JetStream used 43.6 MiB.
+* **Small.** Standard library only. In the published [publisher gate](docs/publisher-gate.md) on Linux AMD64, median peak memory at 32 producers was 11.1 MiB, against 43.6 MiB for embedded JetStream.
 
 **Choose something else if** you need replication or automatic failover (each partition has one durable copy), the highest server throughput (Redis Streams was ahead in every cell [we measured](#measured-results-language-clients)), or a fast restart over a long history (Dostoevsky replays its whole journal when it opens).
 

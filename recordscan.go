@@ -2,6 +2,7 @@ package dostoevsky
 
 import (
 	"bytes"
+	"encoding/binary"
 	"unicode/utf8"
 )
 
@@ -21,7 +22,8 @@ import (
 // base64 decode of every value is most of the cost it removes). A frame only passes
 // its CRC if a writer produced it, and the writer marshals typed values. Read decodes
 // a frame completely and fails there. The scanner keeps one cheap structural check:
-// the value length is a multiple of four and any '=' padding is only at the end.
+// the value length is a multiple of four and any '=' padding is only at the end. A control byte in the value, which
+// would make the frame invalid JSON, is declined.
 type recordScanner struct {
 	topic string // the previous frame's topic, so a repeated topic allocates nothing
 }
@@ -48,6 +50,25 @@ func plainString(b []byte, i int) (s []byte, next int, ok bool) {
 		}
 	}
 	return nil, 0, false
+}
+
+// hasControl reports whether b holds a byte below 0x20, which JSON does not allow unescaped in a string. It looks at
+// eight bytes at a time because it runs over every value (the subtraction borrows into a byte's top bit only if some
+// byte is below 0x20).
+func hasControl(b []byte) bool {
+	const ones = 0x0101010101010101
+	for ; len(b) >= 8; b = b[8:] {
+		x := binary.LittleEndian.Uint64(b)
+		if (x-ones*0x20)&^x&(ones*0x80) != 0 {
+			return true
+		}
+	}
+	for _, c := range b {
+		if c < 0x20 {
+			return true
+		}
+	}
+	return false
 }
 
 // canonicalUint reads a non-negative integer written the way encoding/json writes
@@ -110,7 +131,7 @@ func (s *recordScanner) scan(b []byte) (p Partition, offset int64, id string, ok
 			return p, 0, "", false
 		}
 		value := b[i : i+end]
-		if end%4 != 0 || bytes.IndexByte(value, '\\') >= 0 {
+		if end%4 != 0 || bytes.IndexByte(value, '\\') >= 0 || hasControl(value) {
 			return p, 0, "", false
 		}
 		if pad := bytes.IndexByte(value, '='); pad >= 0 && (pad < end-2 || bytes.Count(value[pad:], []byte("=")) != end-pad) {

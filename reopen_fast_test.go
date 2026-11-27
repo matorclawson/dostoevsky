@@ -111,6 +111,8 @@ func TestScanRecordDeclinesWhatItDoesNotFullyUnderstand(t *testing.T) {
 		"not json":         `Record`,
 		"invalid utf8 id":  strings.Replace(good, `"ID":"i"`, "\"ID\":\"\xff\"", 1),
 		"control in key":   strings.Replace(good, `"Key":"k"`, "\"Key\":\"\x01\"", 1),
+		"control in value": strings.Replace(good, `"Value":"aGVsbG8="`, "\"Value\":\"\x00000\"", 1), // found by FuzzScanRecord
+		"control late":     strings.Replace(good, `"Value":"aGVsbG8="`, "\"Value\":\"aGVsbG8aGVs\x1f\"", 1),
 		"nested record":    `{"Record":{"Topic":"a","Number":0,"Key":"","Value":null,"ID":"","Offset":0,"Time":"x"}}garbage`,
 		"config frame":     `{"Config":{"Node":"a","Nodes":["a"],"Topics":{"t":1}}}`,
 		"record is a list": `{"Record":[]}`,
@@ -148,6 +150,24 @@ func FuzzScanRecord(f *testing.F) {
 	}
 	f.Add([]byte(`{"Fence":1}`))
 	f.Fuzz(func(t *testing.T, b []byte) { checkScanAgainstJSON(t, b) })
+}
+
+// hasControl agrees with the byte-by-byte answer for every byte value at every position of a short value.
+func TestHasControl(t *testing.T) {
+	for length := 0; length <= 19; length++ {
+		for at := 0; at < length; at++ {
+			for c := 0; c < 256; c++ {
+				b := bytes.Repeat([]byte{'A'}, length)
+				b[at] = byte(c)
+				if got := hasControl(b); got != (c < 0x20) {
+					t.Fatalf("length %d, byte %#x at %d: %v", length, c, at, got)
+				}
+			}
+		}
+		if hasControl(bytes.Repeat([]byte{0x20}, length)) || hasControl(bytes.Repeat([]byte{0xff}, length)) {
+			t.Fatalf("length %d: a value with no control byte was refused", length)
+		}
+	}
 }
 
 // ----- replay equivalence: the scanner path and the encoding/json path build the same node -----

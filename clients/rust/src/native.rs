@@ -478,8 +478,8 @@ struct Waiting {
     slot: Arc<Slot>,
 }
 
-/// Request ids from the operating system's randomness, so that a server cannot answer a request
-/// before it has received that request's header.
+/// Request ids from the operating system's randomness, so that a server is very unlikely to guess
+/// a request's id before it has received that request's header.
 #[derive(Default)]
 struct Ids {
     pool: Vec<u32>,

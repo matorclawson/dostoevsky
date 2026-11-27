@@ -76,7 +76,7 @@ Until publication, install from this checkout as shown above.
 
 ## Security: read this before exposing the gateway
 
-**Native protocol clients (preview).** They trust the server they send the token to. The Rust client picks random request ids, so a server cannot answer a request whose header it has not received, but one that has received only part of a request can answer it early and be believed. Such a server holds the token and could return any answer anyway.
+**Native protocol clients (preview).** They trust the server they send the token to. The Rust client picks random request ids, so a server is very unlikely to answer a request whose header it has not received (each guess succeeds at about pending / 2^32, and a wrong one ends the connection), but one that has received only part of a request can answer it early and be believed. Such a server holds the token and could return any answer anyway.
 
 The token grants access to **every** topic and operation. So:
 

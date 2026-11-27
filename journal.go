@@ -60,39 +60,59 @@ type journal struct {
 // syncParent is syncDir, replaceable so a test can see which directories are synced.
 var syncParent = syncDir
 
-// mkdirDurable creates dir and any missing parents, and syncs the parent of each
-// directory it created, so that a host crash cannot lose the entry of a directory that
-// holds acknowledged data. The parent of dir is synced even when dir already exists: an
-// earlier start may have stopped between creating it and syncing. A parent that may not
-// be opened for reading is skipped in that case only.
+// mkdirDurable creates dir and any missing parents, then syncs every directory above dir
+// on the same file system, so that a host crash cannot lose the entry of a directory that
+// holds acknowledged data. All levels are synced on every call, not only new ones: an
+// earlier start may have stopped, or failed a sync, part of the way. A directory this
+// call did not need to create an entry in is skipped when it may not be opened or is on a
+// read-only mount.
 func mkdirDurable(dir string) error {
-	var missing []string
-	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	created := 0
+	for p := abs; p != filepath.Dir(p); p = filepath.Dir(p) {
 		if _, err := os.Stat(p); err == nil {
 			break
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		missing = append(missing, p)
-		if filepath.Dir(p) == p {
-			break
-		}
+		created++
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err = os.MkdirAll(abs, 0700); err != nil {
 		return err
 	}
-	if len(missing) == 0 {
-		abs, err := filepath.Abs(dir)
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return err
+	}
+	device := func(p string) (uint64, error) {
+		info, err := os.Stat(p)
+		if err != nil {
+			return 0, err
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return 0, fmt.Errorf("no device number for %s", p)
+		}
+		return uint64(st.Dev), nil
+	}
+	home, err := device(real)
+	if err != nil {
+		return err
+	}
+	for level, p := 0, real; p != filepath.Dir(p); level, p = level+1, filepath.Dir(p) {
+		parent := filepath.Dir(p)
+		on, err := device(parent)
 		if err != nil {
 			return err
 		}
-		if err = syncParent(filepath.Dir(abs)); err != nil && !errors.Is(err, os.ErrPermission) {
-			return err
+		if on != home {
+			break // a mount point: nothing above it was created for this directory
 		}
-		return nil
-	}
-	for i := len(missing) - 1; i >= 0; i-- {
-		if err := syncParent(filepath.Dir(missing[i])); err != nil {
+		err = syncParent(parent)
+		if err != nil && (level < created || !(errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EROFS))) {
 			return err
 		}
 	}

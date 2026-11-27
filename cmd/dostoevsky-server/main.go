@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 
@@ -59,48 +58,103 @@ func lockPath(path string) (*os.File, error) {
 	return f, nil
 }
 
-// trustedAncestry refuses a socket directory that another user could replace or
-// redirect. Every directory above it, along the path as written and along its resolved
-// form, must belong to root or to this user and must not be writable by group or others
-// unless it is sticky (as /tmp is). A symbolic link on the way must belong to root or to
-// this user. Clients send the token to this path, so it must not be someone else's to move.
-func trustedAncestry(dir string) error {
-	if slices.Contains(strings.Split(dir, string(filepath.Separator)), "..") {
-		return fmt.Errorf("socket directory %s: a path with .. is refused", dir)
-	}
-	written, err := filepath.Abs(dir)
-	if err != nil {
-		return err
-	}
-	resolved, err := filepath.EvalSymlinks(written)
-	if err != nil {
-		return err
-	}
-	for _, chain := range []string{written, resolved} {
-		for p := filepath.Dir(chain); ; p = filepath.Dir(p) {
-			info, err := os.Lstat(p)
-			if err != nil {
-				return err
-			}
-			st, ok := info.Sys().(*syscall.Stat_t)
-			if !ok || (st.Uid != 0 && int(st.Uid) != os.Geteuid()) {
-				return fmt.Errorf("socket directory %s: %s belongs to another user", dir, p)
-			}
-			if info.IsDir() && info.Mode().Perm()&0022 != 0 && info.Mode()&fs.ModeSticky == 0 {
-				return fmt.Errorf("socket directory %s: %s is writable by other users and is not sticky", dir, p)
-			}
-			if filepath.Dir(p) == p {
-				break
-			}
+// trustedDir resolves the existing directory dir one component at a time and returns the
+// path with no symbolic link left in it. Every directory passed through, including those
+// a link leads through, and dir itself, must belong to root or to this user and must not
+// be writable by group or others unless it is sticky (as /tmp is); every link followed
+// must belong to root or to this user. Clients send the token to the socket below it, so
+// no other user may be able to move or redirect it.
+func trustedDir(dir string) (string, error) {
+	if !filepath.IsAbs(dir) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
 		}
+		dir = wd + string(filepath.Separator) + dir
 	}
-	return nil
+	check := func(p string, info fs.FileInfo) error {
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || (st.Uid != 0 && int(st.Uid) != os.Geteuid()) {
+			return fmt.Errorf("socket path: %s belongs to another user", p)
+		}
+		if info.IsDir() && info.Mode().Perm()&0022 != 0 && info.Mode()&fs.ModeSticky == 0 {
+			return fmt.Errorf("socket path: %s is writable by other users and is not sticky", p)
+		}
+		return nil
+	}
+	root := string(filepath.Separator)
+	info, err := os.Lstat(root)
+	if err != nil {
+		return "", err
+	}
+	if err = check(root, info); err != nil {
+		return "", err
+	}
+	// Not cleaned first: ".." after a link means the parent of the link's target.
+	at, rest, links := root, strings.Split(dir, root), 0
+	for len(rest) > 0 {
+		name := rest[0]
+		rest = rest[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			at = filepath.Dir(at)
+			continue
+		}
+		next := filepath.Join(at, name)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return "", err
+		}
+		if err = check(next, info); err != nil {
+			return "", err
+		}
+		if info.Mode().Type() == fs.ModeSymlink {
+			if links++; links > 40 {
+				return "", fmt.Errorf("socket path: too many symbolic links at %s", next)
+			}
+			target, err := os.Readlink(next)
+			if err != nil {
+				return "", err
+			}
+			if filepath.IsAbs(target) {
+				at = root
+			}
+			rest = append(strings.Split(target, root), rest...)
+			continue
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("socket path: %s is not a directory", next)
+		}
+		at = next
+	}
+	return at, nil
 }
 
 // listenUnix creates the socket at path inside a directory only this user can enter. A socket this user left behind
 // is removed only under the path's lock and when nothing answers on it.
 func listenUnix(path string) (net.Listener, error) {
-	dir := filepath.Dir(path)
+	// The directory above the socket's own is resolved and checked before anything is
+	// created, and the socket is bound at the resolved path.
+	given, name := filepath.Split(path)
+	given = strings.TrimRight(given, string(filepath.Separator))
+	if given == "" {
+		given = "."
+	}
+	above, own := filepath.Split(given)
+	if above == "" {
+		above = "."
+	}
+	if own == "" || own == "." || own == ".." || name == "" {
+		return nil, fmt.Errorf("socket path %s must name a socket inside its own directory", path)
+	}
+	parent, err := trustedDir(above)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(parent, own)
+	path = filepath.Join(dir, name)
 	if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, err
 	}
@@ -110,9 +164,6 @@ func listenUnix(path string) (net.Listener, error) {
 	}
 	if !info.IsDir() || info.Mode().Perm()&0077 != 0 || !ownedByUs(info) {
 		return nil, fmt.Errorf("socket directory %s must be a directory of this user with mode 0700, not a link", dir)
-	}
-	if err := trustedAncestry(dir); err != nil {
-		return nil, err
 	}
 	lock, err := lockPath(path)
 	if err != nil {

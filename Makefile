@@ -25,10 +25,10 @@ test: dev-test ## Run the tests
 dev: dev-fmt-check dev-vet dev-test dev-race dev-build ## Run the complete development checks
 
 dev-fmt: ## Format the Go source
-	@"$(GOFMT)" -w *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go
+	@"$(GOFMT)" -w *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go
 
 dev-fmt-check: ## Check formatting without changing files
-	@files=$$("$(GOFMT)" -l *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
+	@files=$$("$(GOFMT)" -l *.go examples/*/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
 
 dev-vet: ## Run Go static analysis
 	@"$(GO)" vet ./...
@@ -170,3 +170,9 @@ dev-history: ## Measure seed, open or verify in a disposable HISTORY_DIR on Linu
 
 bench-clients: ## Run the language comparison with CLIENT_LANGS, CLIENT_ENGINES and BENCH_* settings
 	@sh benchmarks/clients/run.sh
+
+.PHONY: dev-native-kill
+dev-native-kill: ## Verify durable receipts and exact retries across SIGKILL on Linux
+	@mkdir -p .dev/bin
+	@CGO_ENABLED=0 "$(GO)" build -o .dev/bin/dostoevsky-server ./cmd/dostoevsky-server
+	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python python3 benchmarks/recovery/kill_native.py .dev/bin/dostoevsky-server

@@ -1,6 +1,6 @@
 # Dostoevsky wire protocol, version 1 (draft)
 
-**Status: draft.** The [`wire`](../wire) Go package encodes and decodes it; no server speaks it yet. It describes a native binary protocol that will sit beside the [HTTP API](clients.md), which stays. It makes no speed claim; any such claim will come from a checked-in receipt.
+**Status: draft.** The [`wire`](../wire) Go package encodes and decodes it and [`wireserver`](../wireserver), with the `dostoevsky-server` command, serves it. It describes a native binary protocol that will sit beside the [HTTP API](clients.md), which stays. It makes no speed claim; any such claim will come from a checked-in receipt.
 
 Test vectors for every message are in [`wire/testdata/vectors.json`](../wire/testdata/vectors.json). The file's `note` says what a receiver does with each invalid one. Where this text and a vector disagree, that is a bug to report, not a choice for the implementer.
 
@@ -16,7 +16,7 @@ A TCP or unix-domain stream connection. One connection carries many requests at 
 
 The two plaintext cases are a choice to trust the local machine: a process that can listen at that address or path before the server does receives the token. A server refuses to listen in plaintext anywhere else. A client never falls back from TLS to plaintext.
 
-**Unix socket.** The server creates it inside a directory that only the server's user can enter (mode 0700), so that no other user can reach it at any moment, and gives the socket mode 0600. It does not follow a symbolic link. If anything already exists at the path it refuses to start, except that it may remove a socket owned by its own user while it holds the lock of its data directory.
+**Unix socket.** The server creates it inside a directory that only the server's user can enter (mode 0700), so that no other user can reach it at any moment, and gives the socket mode 0600. It does not follow a symbolic link. If anything already exists at the path it refuses to start, except that it may remove a socket owned by its own user, on which nothing answers, while it holds a lock for that path.
 
 ## Handshake
 
@@ -152,6 +152,7 @@ Defaults, each configurable within the constraints given.
 | request pool, whole server | 16 MiB | at least max_body + 10 |
 | reply pool, whole server | 16 MiB | at least max_body + 10 |
 | reply pool held by one connection | 2 maximum frames | at least 1 maximum frame |
+| reads waiting for a record, whole server | 4096 | at least 1 |
 
 A server refuses to start with a configuration that breaks a constraint.
 
@@ -163,6 +164,8 @@ Only authenticated connections draw on these budgets. Intake and replies have **
 - **Request pool.** A frame's bytes are taken after its header is read and before its body is read, and given back once the server no longer holds those bytes: for PUBLISH and COMMIT after the write is durable or has failed, for READ and POSITION once the request is decoded. Nothing that holds request pool waits for any other budget.
 - **Reply pool.** Before the store is read for a READ or POSITION reply, a whole maximum frame is taken; it is given back when the reply has been written or the connection has closed. **A READ that is waiting for a record holds none**: it takes it only once the record exists. All other replies are at most 20 bytes and come from a fixed reserve of window x 20 bytes per connection.
 - Replies are written whether or not the connection is being read.
+- An id is answered once its whole reply has been received. A server may still be returning from that write when the id is used again, so a frame that reuses the id of a reply being written is held for up to 1 s: it is admitted if the write completes, and is a connection error if it does not. A frame that reuses the id of a request whose reply has not begun is a connection error at once.
+- A READ with `wait_ms` above 0 that finds no record when every wait is taken gets ERROR `limit`; a record already stored is still returned. The connection stays open.
 - So every holder of a budget can finish: a request needs no further budget, and a reply needs only the socket to drain, which has a deadline.
 - When a connection closes, its waiting reads end and everything it holds is given back. A publish or commit already admitted still runs to completion and gives back its bytes.
 

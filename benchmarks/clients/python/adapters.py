@@ -71,6 +71,49 @@ class Dostoevsky:
         self._c.close()
 
 
+class Native:
+    """The synchronous socket client has one reader. Give each worker its own connection."""
+    def __init__(self, addr, token, workers):
+        import queue
+        import dostoevsky_client
+        from dostoevsky_client.native import NativeClient, ConnectionLost
+        self.client_name = own_client_name(dostoevsky_client.__file__)
+        self.client_build = build_id(dostoevsky_client.__file__)
+        self.connection_lost = ConnectionLost
+        host, port = addr.rsplit(":", 1)
+        self.clients = []
+        self.available = queue.LifoQueue()
+        try:
+            for _ in range(workers):
+                client = NativeClient((host, int(port)), token)
+                self.clients.append(client)
+                self.available.put(client)
+        except BaseException:
+            self.close()
+            raise
+
+    def publish(self, data):
+        client = self.available.get()
+        try:
+            return client.publish(TOPIC, data).offset
+        except self.connection_lost as exc:
+            if exc.sent:
+                raise AmbiguousOutcome("connection ended after submission") from exc
+            raise
+        finally:
+            self.available.put(client)
+
+    def read(self, offset):
+        record = self.clients[0].read(TOPIC, 0, offset)
+        if record is None:
+            raise LookupError("offset is past the end")
+        return record.value
+
+    def close(self):
+        for client in self.clients:
+            client.close()
+
+
 class Kafka:
     """confluent-kafka (librdkafka): acks=all, no retries, no idempotence, one message per batch."""
 
@@ -214,4 +257,4 @@ class Redis:
         self._r.close()
 
 
-ENGINES = {"dostoevsky": Dostoevsky, "kafka": Kafka, "nats": Nats, "redis": Redis}
+ENGINES = {"native": Native, "dostoevsky": Dostoevsky, "kafka": Kafka, "nats": Nats, "redis": Redis}

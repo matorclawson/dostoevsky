@@ -12,6 +12,12 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 - Preserved the journal format, acknowledgment boundary and public Go API. Added tests for packed-location boundaries and deliberate fingerprint collisions.
 - Added a Linux history benchmark for separate seed, reopen and full payload readback processes, with optional decimal or 32-character producer IDs. Added native socket comparison, fresh-ready time, boot memory, and verified batched JavaScript trials. Kafka uses a record batch on one partition. Socket clients pipeline individually acknowledged records.
 
+### Native transport staging
+
+- Integrated the native server from PR 72 and native client source from PRs 62, 75 and 77 alongside the JavaScript/TypeScript client. Added native benchmark adapters for Python, Java, Rust and JavaScript.
+- Limited concurrent read and position tasks across connections. Added CLI options for the read-task budget and optional journal byte ceiling. Added coverage for capacity recovery, writes while reads are saturated, and publication at the journal ceiling.
+- Added a process-kill test with concurrent native publishers, byte-for-byte readback, and idempotent retry of every confirmed record. Added the upstream hash for the pinned CPython 3.12 AMD64 Kafka benchmark wheel.
+
 ## 0.1.0 — Embedded topics, durable storage, and stream processing
 
 - **Added an embedded Go module.** Reviewed the supplied Faust source and its word-count example, then implemented keyed streams and recoverable processor state in Go. A single-process application opens a data directory. Kafka, Flink, RocksDB, and a separately deployed broker are unnecessary.
@@ -117,3 +123,5 @@ Integrates the post-0.3.0 publishing work (ZIP SHA-256 `fb422713f1b5550fa8c30ae9
 - **A cap on the journal.** `Node.SetJournalCap` and the gateway's `-max-journal-mib` refuse publishes with `ErrJournalFull` (also `ErrLimit`) rather than let the file pass a size, with a reserve for commits so `Retain` can make room. Off by default. `Node.JournalSize` reports the size.
 - **Rust client.** Sets `TCP_NODELAY`, so a request body is sent without waiting for the server to acknowledge the request head.
 - **Faster open.** `Open` reads the journal in 1 MiB pieces and takes the topic, partition, offset and ID straight from a record frame it recognises, instead of building the whole record with `encoding/json`. It checks the same things as before: every checksum, and that each value and time decode. Anything unrecognised is decoded in full. Open time still grows with the history, and memory use is unchanged.
+- **`wireserver` and `dostoevsky-server`.** A server for the [native wire protocol, version 1](docs/wire-v1.md): token handshake, TLS or loopback and unix sockets only, ordered publish and commit with queued publishes sharing a sync, read with bounded waiting, position, ping, per-connection window, server-wide request and reply budgets, connection limits and absolute deadlines. Standard library only. No speed or memory figure is claimed: none has been measured.
+- **`Node.Await`.** Waits until an offset can be read, without reading it.

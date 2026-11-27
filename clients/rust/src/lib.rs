@@ -3,6 +3,8 @@
 //! of connections, so a `Client` can be shared between threads). For a TLS gateway, run a
 //! local TLS-terminating proxy and point this client at it.
 //! All payloads and checkpoint states are bytes.
+//!
+//! [`native`] is a preview client of the binary wire protocol.
 use std::{
     fmt,
     io::{BufRead, BufReader, Read, Write},
@@ -10,6 +12,8 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+
+pub mod native;
 
 const MAX_BODY: usize = 1_048_576;
 const MAX_LINE: u64 = 8192;

@@ -8,12 +8,12 @@
 <text x="16" y="72" fill="#e6edf3" xml:space="preserve" textLength="272.0" lengthAdjust="spacingAndGlyphs">$ export PYTHONPATH=clients/python</text>
 <text x="16" y="92" fill="#e6edf3" xml:space="preserve" textLength="736.0" lengthAdjust="spacingAndGlyphs">$ PY='import os; from dostoevsky_client import Client; c = Client("http://127.0.0.1:8787", o</text>
 <text x="16" y="112" fill="#e6edf3" xml:space="preserve" textLength="280.0" lengthAdjust="spacingAndGlyphs">    s.environ["DOSTOEVSKY_TOKEN"])'</text>
-<text x="16" y="132" fill="#9198a1" xml:space="preserve" textLength="408.0" lengthAdjust="spacingAndGlyphs"># `make dev-gateway &amp;` is running in the background</text>
+<text x="16" y="132" fill="#9198a1" xml:space="preserve" textLength="664.0" lengthAdjust="spacingAndGlyphs"># `make dev-gateway &amp;` is running in the background (started by the capture script)</text>
 <text x="16" y="152" fill="#e6edf3" xml:space="preserve" textLength="192.0" lengthAdjust="spacingAndGlyphs">$ make dev-client-python</text>
 <text x="16" y="172" fill="#7ee787" xml:space="preserve" textLength="248.0" lengthAdjust="spacingAndGlyphs">python-demo b'task from python'</text>
 <text x="16" y="192" fill="#e6edf3" xml:space="preserve" textLength="536.0" lengthAdjust="spacingAndGlyphs">$ python3 -c "$PY; print(c.publish('jobs', b'paid', id='order-1'))"</text>
 <text x="16" y="212" fill="#7ee787" xml:space="preserve" textLength="240.0" lengthAdjust="spacingAndGlyphs">Receipt(partition=0, offset=1)</text>
-<text x="16" y="232" fill="#9198a1" xml:space="preserve" textLength="360.0" lengthAdjust="spacingAndGlyphs"># kill -9 %1, then `make dev-gateway &amp;` again</text>
+<text x="16" y="232" fill="#9198a1" xml:space="preserve" textLength="472.0" lengthAdjust="spacingAndGlyphs"># the gateway is force-killed (SIGKILL), then started again</text>
 <text x="16" y="252" fill="#e6edf3" xml:space="preserve" textLength="536.0" lengthAdjust="spacingAndGlyphs">$ python3 -c "$PY; print(c.publish('jobs', b'paid', id='order-1'))"</text>
 <text x="16" y="272" fill="#7ee787" xml:space="preserve" textLength="240.0" lengthAdjust="spacingAndGlyphs">Receipt(partition=0, offset=1)</text>
 <text x="16" y="292" fill="#e6edf3" xml:space="preserve" textLength="424.0" lengthAdjust="spacingAndGlyphs">$ python3 -c "$PY; print(c.read('jobs', 0, 1).value)"</text>

@@ -2,10 +2,10 @@ package dostoevsky
 
 import (
 	"bytes"
-	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"hash/crc32"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -24,14 +24,6 @@ func recordFrame(t testing.TB, r Record) []byte {
 	return b
 }
 
-// allowedScanDifference: the scanner does not read Value or Time, so a frame whose
-// only defect is one of those is accepted by the scanner and rejected by json.Unmarshal.
-func allowedScanDifference(err error) bool {
-	var b64 base64.CorruptInputError
-	var tm *time.ParseError
-	return errors.As(err, &b64) || errors.As(err, &tm) || strings.Contains(err.Error(), "Time.UnmarshalJSON")
-}
-
 func checkScanAgainstJSON(t testing.TB, b []byte) (accepted bool) {
 	t.Helper()
 	var sc recordScanner
@@ -44,10 +36,7 @@ func checkScanAgainstJSON(t testing.TB, b []byte) (accepted bool) {
 	}
 	var e entry
 	if err := json.Unmarshal(b, &e); err != nil {
-		if !allowedScanDifference(err) {
-			t.Fatalf("the scanner accepted %q that json.Unmarshal rejects for another reason: %v", b, err)
-		}
-		return true
+		t.Fatalf("the scanner accepted %q that json.Unmarshal rejects: %v", b, err)
 	}
 	if e.Record == nil || e.Record.Partition != pp || e.Record.Offset != off || e.Record.ID != id {
 		t.Fatalf("scanner %v %d %q, json %+v for %q", pp, off, id, e.Record, b)
@@ -110,6 +99,9 @@ func TestScanRecordDeclinesWhatItDoesNotFullyUnderstand(t *testing.T) {
 		"empty":            ``,
 		"not json":         `Record`,
 		"invalid utf8 id":  strings.Replace(good, `"ID":"i"`, "\"ID\":\"\xff\"", 1),
+		"bad time":         strings.Replace(good, `"Time":"1970-01-01T00:00:01.000000002Z"`, `"Time":"yesterday"`, 1),
+		"bad base64":       strings.Replace(good, `"Value":"aGVsbG8="`, `"Value":"!!!!!!!!"`, 1),
+		"line break":       strings.Replace(good, `"Value":"aGVsbG8="`, "\"Value\":\"aGVs\nbG8=\"", 1),
 		"control in key":   strings.Replace(good, `"Key":"k"`, "\"Key\":\"\x01\"", 1),
 		"control in value": strings.Replace(good, `"Value":"aGVsbG8="`, "\"Value\":\"\x00000\"", 1), // found by FuzzScanRecord
 		"control late":     strings.Replace(good, `"Value":"aGVsbG8="`, "\"Value\":\"aGVsbG8aGVs\x1f\"", 1),
@@ -120,21 +112,6 @@ func TestScanRecordDeclinesWhatItDoesNotFullyUnderstand(t *testing.T) {
 		var sc recordScanner
 		if _, _, _, ok := sc.scan([]byte(b)); ok {
 			t.Errorf("%s was accepted by the scanner: %s", name, b)
-		}
-	}
-	// Documented limits: a malformed time or a base64 value of the right shape but wrong
-	// characters is accepted by the scanner and rejected by json.Unmarshal, and by Read.
-	for name, b := range map[string]string{
-		"bad time":   strings.Replace(good, `"Time":"1970-01-01T00:00:01.000000002Z"`, `"Time":"yesterday"`, 1),
-		"bad base64": strings.Replace(good, `"Value":"aGVsbG8="`, `"Value":"!!!!!!!!"`, 1),
-	} {
-		var sc recordScanner
-		if _, _, _, ok := sc.scan([]byte(b)); !ok {
-			t.Errorf("%s: the scanner declined, expected the documented acceptance", name)
-		}
-		var e entry
-		if err := json.Unmarshal([]byte(b), &e); err == nil {
-			t.Errorf("%s: json.Unmarshal accepted it", name)
 		}
 	}
 }
@@ -152,21 +129,58 @@ func FuzzScanRecord(f *testing.F) {
 	f.Fuzz(func(t *testing.T, b []byte) { checkScanAgainstJSON(t, b) })
 }
 
-// hasControl agrees with the byte-by-byte answer for every byte value at every position of a short value.
-func TestHasControl(t *testing.T) {
-	for length := 0; length <= 19; length++ {
-		for at := 0; at < length; at++ {
-			for c := 0; c < 256; c++ {
-				b := bytes.Repeat([]byte{'A'}, length)
-				b[at] = byte(c)
-				if got := hasControl(b); got != (c < 0x20) {
-					t.Fatalf("length %d, byte %#x at %d: %v", length, c, at, got)
-				}
-			}
+// Whatever byte stands anywhere in a value, the scanner accepts the frame only if encoding/json does.
+func TestScanRecordValueBytesMatchJSON(t *testing.T) {
+	good := recordFrame(t, Record{Partition: Partition{"events", 0}, Message: Message{Value: []byte("hello world!!")}, Offset: 7, Time: time.Unix(1, 2).UTC()})
+	start := bytes.Index(good, []byte(`"Value":"`)) + len(`"Value":"`)
+	length := bytes.IndexByte(good[start:], '"')
+	for at := 0; at < length; at++ {
+		for c := 0; c < 256; c++ {
+			b := bytes.Clone(good)
+			b[start+at] = byte(c)
+			checkScanAgainstJSON(t, b)
 		}
-		if hasControl(bytes.Repeat([]byte{0x20}, length)) || hasControl(bytes.Repeat([]byte{0xff}, length)) {
-			t.Fatalf("length %d: a value with no control byte was refused", length)
+	}
+}
+
+// A frame whose checksum is right but whose value or time is not is refused by Open, on both paths, and reported by
+// InspectJournal.
+func TestOpenAndInspectAgreeOnAMalformedRecord(t *testing.T) {
+	for name, change := range map[string][2]string{
+		"value": {`"Value":"d`, `"Value":"!`},
+		"time":  {`"Time":"2`, `"Time":"x`},
+	} {
+		dir := t.TempDir()
+		n := openTest(t, dir, config())
+		publish(t, n, "one")
+		publish(t, n, "two")
+		n.Close()
+		path := filepath.Join(dir, "journal.v1")
+		full, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
 		}
+		last := bytes.LastIndex(full, signature)
+		payload := full[last+20:]
+		if !bytes.Contains(payload, []byte(change[0])) {
+			t.Fatalf("%s: %s is not in %s", name, change[0], payload)
+		}
+		copy(payload, bytes.Replace(payload, []byte(change[0]), []byte(change[1]), 1))
+		binary.BigEndian.PutUint32(full[last+12:], crc32.Checksum(payload, crcTable))
+		binary.BigEndian.PutUint32(full[last+16:], crc32.Checksum(full[last:last+16], crcTable))
+		if err = os.WriteFile(path, full, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		report, err := InspectJournal(dir)
+		if err != nil || report.Damage != DamageEntry {
+			t.Fatalf("%s: inspect says %q, %v", name, report.Damage, err)
+		}
+		slow := replayWith(t, dir, config(), false, 1<<20)
+		fast := replayWith(t, dir, config(), true, 1<<20)
+		if fast.err == nil {
+			t.Fatalf("%s: Open accepted a frame that InspectJournal reports as damaged", name)
+		}
+		sameReplay(t, name, slow, fast)
 	}
 }
 

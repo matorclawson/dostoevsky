@@ -2,7 +2,9 @@ package dostoevsky
 
 import (
 	"bytes"
-	"encoding/binary"
+	"encoding/base64"
+	"math"
+	"time"
 	"unicode/utf8"
 )
 
@@ -17,15 +19,11 @@ import (
 // encoding/json, so a frame the scanner does not fully understand behaves exactly as
 // before, including its error.
 //
-// Not checked here, by design: that Value is valid base64 and that Time parses.
-// json.Unmarshal rejected such a frame at open; the scanner does not read them (the
-// base64 decode of every value is most of the cost it removes). A frame only passes
-// its CRC if a writer produced it, and the writer marshals typed values. Read decodes
-// a frame completely and fails there. The scanner keeps one cheap structural check:
-// the value length is a multiple of four and any '=' padding is only at the end. A control byte in the value, which
-// would make the frame invalid JSON, is declined.
+// The scanner accepts a frame only if json.Unmarshal would accept it, so Open, dost-repair and Read agree on what is
+// damaged. Value is therefore decoded (into a buffer that is reused, and thrown away) and Time is parsed.
 type recordScanner struct {
 	topic string // the previous frame's topic, so a repeated topic allocates nothing
+	value []byte // scratch for decoding values
 }
 
 const recordPrefix = `{"Record":{"Topic":"`
@@ -50,25 +48,6 @@ func plainString(b []byte, i int) (s []byte, next int, ok bool) {
 		}
 	}
 	return nil, 0, false
-}
-
-// hasControl reports whether b holds a byte below 0x20, which JSON does not allow unescaped in a string. It looks at
-// eight bytes at a time because it runs over every value (the subtraction borrows into a byte's top bit only if some
-// byte is below 0x20).
-func hasControl(b []byte) bool {
-	const ones = 0x0101010101010101
-	for ; len(b) >= 8; b = b[8:] {
-		x := binary.LittleEndian.Uint64(b)
-		if (x-ones*0x20)&^x&(ones*0x80) != 0 {
-			return true
-		}
-	}
-	for _, c := range b {
-		if c < 0x20 {
-			return true
-		}
-	}
-	return false
 }
 
 // canonicalUint reads a non-negative integer written the way encoding/json writes
@@ -111,6 +90,9 @@ func (s *recordScanner) scan(b []byte) (p Partition, offset int64, id string, ok
 	if number, i, ok = canonicalUint(b, i); !ok {
 		return
 	}
+	if number > math.MaxInt { // a 32-bit build: leave it to encoding/json, which refuses it
+		return p, 0, "", false
+	}
 	if i, ok = expect(b, i, `,"Key":"`); !ok {
 		return
 	}
@@ -131,10 +113,15 @@ func (s *recordScanner) scan(b []byte) (p Partition, offset int64, id string, ok
 			return p, 0, "", false
 		}
 		value := b[i : i+end]
-		if end%4 != 0 || bytes.IndexByte(value, '\\') >= 0 || hasControl(value) {
+		// The decoder skips line breaks, which unescaped in a JSON string are not JSON; every other byte that JSON would
+		// refuse here, or that needs unescaping, is outside the alphabet and fails the decode.
+		if bytes.IndexByte(value, '\n') >= 0 || bytes.IndexByte(value, '\r') >= 0 {
 			return p, 0, "", false
 		}
-		if pad := bytes.IndexByte(value, '='); pad >= 0 && (pad < end-2 || bytes.Count(value[pad:], []byte("=")) != end-pad) {
+		if n := base64.StdEncoding.DecodedLen(len(value)); cap(s.value) < n {
+			s.value = make([]byte, n)
+		}
+		if _, err := base64.StdEncoding.Decode(s.value[:cap(s.value)], value); err != nil {
 			return p, 0, "", false
 		}
 		i += end + 1
@@ -155,8 +142,13 @@ func (s *recordScanner) scan(b []byte) (p Partition, offset int64, id string, ok
 	if i, ok = expect(b, i, `,"Time":"`); !ok {
 		return
 	}
+	quoted := i - 1
 	if _, i, ok = plainString(b, i); !ok {
 		return
+	}
+	var at time.Time
+	if at.UnmarshalJSON(b[quoted:i]) != nil {
+		return p, 0, "", false
 	}
 	if i, ok = expect(b, i, `}}`); !ok || i != len(b) {
 		return p, 0, "", false

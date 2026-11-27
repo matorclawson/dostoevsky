@@ -43,6 +43,7 @@ const MAX_IN_FLIGHT_BYTES: usize = 4 << 20;
 const HANDSHAKE_TIME: Duration = Duration::from_secs(5);
 const REQUEST_TIME: Duration = Duration::from_secs(40);
 const CHUNK: usize = 65536;
+const TICK: Duration = Duration::from_secs(1); // how often an idle connection checks deadlines
 const KEEP_BUFFER: usize = 2 * CHUNK; // a larger receive buffer is given back once empty
 
 /// What a native call can fail with.
@@ -481,7 +482,10 @@ struct State {
     dead: bool,
     pending: HashMap<u32, Waiting>,
     unanswered: usize, // bytes of the pending frames
-    registered: u64,   // requests handed to the socket so far
+    // Requests are numbered in the order they are written; one at a time is being written.
+    reserved: u64,  // the latest number given out
+    finishing: u64, // the latest request whose last write call has been made
+    completed: u64, // the latest request written in full
     last_id: u32,
 }
 
@@ -489,11 +493,15 @@ impl State {
     fn oldest(&self) -> Option<Instant> {
         self.pending.values().map(|w| w.deadline).min()
     }
+
+    fn expired(&self) -> bool {
+        self.oldest().is_some_and(|at| at <= Instant::now())
+    }
 }
 
 struct Shared {
     state: Mutex<State>,
-    room: Condvar, // signalled when a request is answered or the connection dies
+    room: Condvar, // signalled when a request is written or answered and when the connection dies
     control: Stream,
 }
 
@@ -515,6 +523,26 @@ impl Shared {
         self.room.notify_all();
     }
 
+    /// Writes one request's frame, noting when its last write call is made and when it returned.
+    /// Until that call is made the server cannot have the whole request.
+    fn send(
+        &self,
+        sequence: u64,
+        data: &[u8],
+        mut write: impl FnMut(&[u8]) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let mut chunks = data.chunks(CHUNK).peekable();
+        while let Some(chunk) = chunks.next() {
+            if chunks.peek().is_none() {
+                lock(&self.state).finishing = sequence;
+            }
+            write(chunk)?;
+        }
+        lock(&self.state).completed = sequence;
+        self.room.notify_all();
+        Ok(())
+    }
+
     /// Delivers one server frame. False ends the connection.
     fn answer(&self, kind: u8, request_id: u32, body: &[u8], arrived: u64) -> bool {
         // Request id 0 is a connection error: the server closes after it.
@@ -525,14 +553,29 @@ impl Shared {
             return false;
         };
         let mut state = lock(&self.state);
-        match state.pending.get(&request_id) {
-            // A reply only answers a request written before the reply began to arrive, with that
-            // request's reply type or ERROR, and before its deadline.
-            Some(w)
-                if w.sequence <= arrived
-                    && (kind == ERROR || kind == REPLY | w.kind)
-                    && Instant::now() < w.deadline => {}
+        // A reply only answers a request whose last write call had been made when the reply began
+        // to arrive, with that request's reply type or ERROR, and before its deadline.
+        let (sequence, deadline) = match state.pending.get(&request_id) {
+            Some(w) if w.sequence <= arrived && (kind == ERROR || kind == REPLY | w.kind) => {
+                (w.sequence, w.deadline)
+            }
             _ => return false,
+        };
+        // A fast reply can be read before the writing thread has seen its last call return. It
+        // is delivered only once that call has succeeded.
+        while state.completed < sequence {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if state.dead || remaining.is_zero() {
+                return false;
+            }
+            state = self
+                .room
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
+        }
+        if Instant::now() >= deadline {
+            return false;
         }
         let Some(waiting) = state.pending.remove(&request_id) else {
             return false;
@@ -550,15 +593,32 @@ impl Shared {
     fn receive(&self, mut stream: Stream) {
         let mut chunk = vec![0u8; CHUNK];
         let mut buf: Vec<u8> = Vec::new();
-        let mut carried = 0; // `registered` when the first byte of a partly received reply arrived
+        let mut carried = 0; // `finishing` when the first byte of a partly received reply arrived
         loop {
-            let n = match stream.read(&mut chunk) {
+            let read = stream.read(&mut chunk);
+            // The connection owns every deadline: it ends even if nobody waits for the request.
+            let (now, expired) = {
+                let state = lock(&self.state);
+                (state.finishing, state.expired())
+            };
+            if expired {
+                break;
+            }
+            let n = match read {
                 Ok(0) => break,
                 Ok(n) => n,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::Interrupted
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    continue
+                }
                 Err(_) => break,
             };
-            let now = lock(&self.state).registered;
             let mut arrived = if buf.is_empty() { now } else { carried };
             buf.extend_from_slice(&chunk[..n]);
             let mut at = 0;
@@ -646,6 +706,7 @@ pub struct NativeClient {
     writer: Mutex<Stream>, // held to send, so frames are whole and leave in the order taken
     window: usize,
     window_bytes: usize,
+    request_time: Duration,
     reader: Option<JoinHandle<()>>,
 }
 
@@ -671,7 +732,8 @@ impl NativeClient {
         Err(NOT_SENT)
     }
 
-    /// Connects to a unix socket.
+    /// Connects to a unix socket. The 5 s handshake limit does not cover the connect itself (the
+    /// standard library cannot bound it): it can block while the server's accept queue is full.
     #[cfg(unix)]
     pub fn connect_unix(path: impl AsRef<std::path::Path>, token: &str) -> Result<Self> {
         let first = hello(token)?;
@@ -685,14 +747,18 @@ impl NativeClient {
         write_by(&mut stream, first, deadline).map_err(|_| NOT_SENT)?;
         read_by(&mut stream, &mut data, deadline).map_err(|_| NOT_SENT)?;
         let (window, window_bytes) = welcome(&data)?;
-        stream.set_read_timeout(None).map_err(|_| NOT_SENT)?;
+        stream
+            .set_read_timeout(Some(TICK))
+            .map_err(|_| NOT_SENT)?;
         let reading = stream.try_clone().map_err(|_| NOT_SENT)?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 dead: false,
                 pending: HashMap::new(),
                 unanswered: 0,
-                registered: 0,
+                reserved: 0,
+                finishing: 0,
+                completed: 0,
                 last_id: 0,
             }),
             room: Condvar::new(),
@@ -708,6 +774,7 @@ impl NativeClient {
             writer: Mutex::new(stream),
             window,
             window_bytes,
+            request_time: REQUEST_TIME,
             reader: Some(reader),
         })
     }
@@ -721,8 +788,7 @@ impl NativeClient {
             if state.dead {
                 return Err(NOT_SENT);
             }
-            let oldest = state.oldest();
-            if oldest.is_some_and(|at| at <= Instant::now()) {
+            if state.expired() {
                 drop(state);
                 self.shared.fail();
                 return Err(NOT_SENT);
@@ -730,7 +796,7 @@ impl NativeClient {
             if state.pending.len() < self.window && state.unanswered + size <= self.window_bytes {
                 break;
             }
-            let wait = oldest.map_or(REQUEST_TIME, |at| {
+            let wait = state.oldest().map_or(self.request_time, |at| {
                 at.saturating_duration_since(Instant::now())
             });
             state = self
@@ -749,12 +815,12 @@ impl NativeClient {
         }
         state.last_id = request_id;
         data[6..HEADER].copy_from_slice(&request_id.to_le_bytes());
-        // Registered before the first byte is written: a reply cannot find it missing, and from
-        // here the outcome of a lost connection is unknown.
-        let deadline = Instant::now() + REQUEST_TIME;
+        // Reserved before the first byte is written: from here the outcome of a lost connection is
+        // unknown. A reply is accepted only once `send` has reached the last write call.
+        let deadline = Instant::now() + self.request_time;
         let slot = Arc::new(Slot::default());
-        state.registered += 1;
-        let sequence = state.registered;
+        state.reserved += 1;
+        let sequence = state.reserved;
         state.unanswered += size;
         state.pending.insert(
             request_id,
@@ -767,7 +833,10 @@ impl NativeClient {
             },
         );
         drop(state);
-        if write_by(&mut writer, &data, deadline).is_err() {
+        let written = self.shared.send(sequence, &data, |chunk| {
+            write_by(&mut writer, chunk, deadline)
+        });
+        if written.is_err() {
             self.shared.fail();
         }
         Ok(Pending {
@@ -1100,6 +1169,103 @@ mod tests {
         assert_eq!(a.wait().unwrap().offset, 0);
         assert_eq!(b.wait().unwrap().offset, 1);
         drop(client);
+        server.join().unwrap();
+    }
+
+    /// A client of a server that reads but never answers.
+    fn silent() -> (NativeClient, JoinHandle<()>) {
+        let (address, server) = scripted(WELCOME, |conn| {
+            conn.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let mut sink = [0; 1024];
+            loop {
+                match conn.read(&mut sink) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) => panic!("the client did not end the connection: {e}"),
+                }
+            }
+        });
+        let mut client = NativeClient::connect(&address, TOKEN).unwrap();
+        client.request_time = Duration::from_millis(200);
+        (client, server)
+    }
+
+    fn reserve(client: &NativeClient, id: u32, sequence: u64) -> Arc<Slot> {
+        let slot = Arc::new(Slot::default());
+        let mut state = lock(&client.shared.state);
+        state.reserved = sequence;
+        state.pending.insert(
+            id,
+            Waiting {
+                kind: PING,
+                size: 0,
+                sequence,
+                deadline: Instant::now() + Duration::from_secs(5),
+                slot: Arc::clone(&slot),
+            },
+        );
+        slot
+    }
+
+    #[test]
+    fn a_request_counts_as_written_only_at_its_last_write() {
+        let (client, server) = silent();
+        let shared = &client.shared;
+        let mut seen = Vec::new();
+        let data = vec![0; 2 * CHUNK + 1];
+        shared
+            .send(1, &data, |chunk| {
+                let state = lock(&shared.state);
+                seen.push((chunk.len(), state.finishing, state.completed));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(seen, [(CHUNK, 0, 0), (CHUNK, 0, 0), (1, 1, 0)]);
+        assert_eq!(lock(&shared.state).completed, 1);
+        // A failed write never counts as completed.
+        assert!(shared
+            .send(2, &data, |_| Err(io::ErrorKind::BrokenPipe.into()))
+            .is_err());
+        assert_eq!(lock(&shared.state).completed, 1);
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_reply_waits_for_the_write_and_never_precedes_it() {
+        let (client, server) = silent();
+        // It began to arrive before the request's last write call: refused.
+        reserve(&client, 7, 1);
+        assert!(!client.shared.answer(REPLY | PING, 7, &[], 0));
+        // It began to arrive during that call: delivered once the call has returned.
+        let slot = reserve(&client, 8, 2);
+        lock(&client.shared.state).finishing = 2;
+        std::thread::scope(|scope| {
+            let reply = scope.spawn(|| client.shared.answer(REPLY | PING, 8, &[], 2));
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(lock(&slot.answer).is_none(), "delivered before the write returned");
+            lock(&client.shared.state).completed = 2;
+            client.shared.room.notify_all();
+            assert!(reply.join().unwrap());
+        });
+        assert!(matches!(*lock(&slot.answer), Some(Ok(Reply::Done))));
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_request_nobody_waits_for_still_expires() {
+        let (client, server) = silent();
+        drop(client.publish_nowait("t", b"a", "", "").unwrap());
+        server.join().unwrap(); // the client, still open, has ended the connection
+        assert_eq!(client.ping().unwrap_err(), NOT_SENT);
+    }
+
+    #[test]
+    fn waiting_past_the_deadline_leaves_the_outcome_unknown() {
+        let (client, server) = silent();
+        assert_eq!(client.publish("t", b"a", "", "").unwrap_err(), SENT);
+        assert_eq!(client.ping().unwrap_err(), NOT_SENT);
         server.join().unwrap();
     }
 

@@ -30,6 +30,6 @@ let ack = pending.wait()?;
 let rec = c.read("jobs", ack.partition, ack.offset, std::time::Duration::from_secs(1))?;
 ```
 
-Nothing is retried and there is no reconnect. `NativeError::ConnectionLost { sent: true }` means the request may have taken effect. A reply is accepted only within 40 s of its request.
+Nothing is retried and there is no reconnect. `NativeError::ConnectionLost { sent: true }` means the request may have taken effect. A reply is accepted only within 40 s of its request, and an expired request ends the connection within about a second even if nobody waits for it. The 5 s connect-and-handshake limit does not cover name resolution or the unix-socket connect itself.
 
 Test (no server needed, local stub): `cargo test --offline --manifest-path clients/rust/Cargo.toml`

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"hash/maphash"
 	"os"
 	"regexp"
 	"slices"
@@ -77,7 +78,7 @@ type stream struct {
 type recordTail struct {
 	records []location
 	packed  *locationIndex
-	ids     map[string]int64
+	ids     *idIndex
 }
 
 type streamWait struct {
@@ -133,21 +134,10 @@ func (s *stream) addRecordFields(id string, offset int64, loc location) {
 	}
 	if id != "" {
 		if s.tail.ids == nil {
-			s.tail.ids = make(map[string]int64)
+			s.tail.ids = new(idIndex)
 		}
-		s.tail.ids[id] = offset
+		s.tail.ids.add(maphash.String(producerIDSeed, id), offset)
 	}
-}
-
-func (s *stream) lookupID(id string) (int64, bool) {
-	if id != "" && id == s.firstID {
-		return s.base, true
-	}
-	if s.tail == nil {
-		return 0, false
-	}
-	off, ok := s.tail.ids[id]
-	return off, ok
 }
 
 func (s *stream) signal() {
@@ -448,12 +438,9 @@ func (n *Node) publishLocked(ctx context.Context, p Partition, m Message) (Recor
 	if e != nil {
 		return Record{}, e
 	}
-	if off, ok := s.lookupID(m.ID); m.ID != "" && ok {
-		ev, e := n.j.read(s.location(off - s.base))
-		if e != nil {
-			return Record{}, e
-		}
-		r := ev.Record
+	if r, err := s.storedID(n.j, m.ID); err != nil {
+		return Record{}, err
+	} else if r != nil {
 		if r.Key != m.Key || !bytes.Equal(r.Value, m.Value) {
 			return Record{}, ErrConflict
 		}

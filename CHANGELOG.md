@@ -4,6 +4,14 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — 27 November 2026 council recovery candidate
+
+- Integrated the strict journal scanner from PR 81. Recovery verifies framing and checksums, extracts the fields needed to index canonical records, and falls back to the existing JSON decoder for other journal entries.
+- Compressed physical locations for longer partitions. Each block anchors every 32 entries, bounding the number of entries decoded on a random read. Small partitions retain direct locations.
+- Reduced memory for producer IDs by indexing process-keyed fingerprints. A hit reads the full producer ID from the existing journal. Collisions are chained and compared exactly before a publish returns an old receipt or a conflict.
+- Preserved the journal format, acknowledgment boundary and public Go API. Added tests for packed-location boundaries and deliberate fingerprint collisions.
+- Added a Linux history benchmark for separate seed, reopen and full payload readback processes, with optional decimal or 32-character producer IDs. Added native socket comparison, fresh-ready time, boot memory, and verified batched JavaScript trials. Kafka uses a record batch on one partition. Socket clients pipeline individually acknowledged records.
+
 ## 0.1.0 — Embedded topics, durable storage, and stream processing
 
 - **Added an embedded Go module.** Reviewed the supplied Faust source and its word-count example, then implemented keyed streams and recoverable processor state in Go. A single-process application opens a data directory. Kafka, Flink, RocksDB, and a separately deployed broker are unnecessary.

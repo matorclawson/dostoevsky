@@ -159,3 +159,14 @@ dev-client-interop: ## All clients against one gateway across a restart, disposa
 .PHONY: test-scripts
 test-scripts: ## Test the scripts' own plumbing (the interop startup deadline); stdlib Python only, no gateway needed
 	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python python3 scripts/test_client_interop.py
+
+HISTORY_COUNT ?= 16000
+HISTORY_MODE ?= open
+HISTORY_ID_FLAGS ?=
+.PHONY: dev-history bench-clients
+dev-history: ## Measure seed, open or verify in a disposable HISTORY_DIR on Linux
+	@test -n "$(HISTORY_DIR)" || { echo "set HISTORY_DIR to a disposable benchmark directory" >&2; exit 2; }
+	@"$(GO)" run ./benchmarks/history -dir "$(HISTORY_DIR)" -mode "$(HISTORY_MODE)" -n "$(HISTORY_COUNT)" $(HISTORY_ID_FLAGS)
+
+bench-clients: ## Run the language comparison with CLIENT_LANGS, CLIENT_ENGINES and BENCH_* settings
+	@sh benchmarks/clients/run.sh

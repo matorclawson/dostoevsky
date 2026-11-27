@@ -86,12 +86,9 @@ func (n *Node) publishBatchLocked(ctx context.Context, items []Publication) ([]R
 			if j, ok := seen[k]; ok {
 				prior = &records[j]
 			} else if s != nil {
-				if off, ok := s.lookupID(m.ID); ok {
-					ev, e := n.j.read(s.location(off - s.base))
-					if e != nil {
-						return nil, e
-					}
-					prior = ev.Record
+				prior, e = s.storedID(n.j, m.ID)
+				if e != nil {
+					return nil, e
 				}
 			}
 			if prior != nil {

@@ -94,7 +94,7 @@ func TestScanRecordDeclinesWhatItDoesNotFullyUnderstand(t *testing.T) {
 	for name, b := range map[string]string{
 		"reordered":        strings.Replace(good, `"Number":0,"Key":"k"`, `"Key":"k","Number":0`, 1),
 		"whitespace":       strings.Replace(good, `"Topic":"events"`, `"Topic": "events"`, 1),
-		"escaped topic":    strings.Replace(good, `"events"`, `"events"`, 1),
+		"escaped topic":    strings.Replace(good, `"events"`, `"\u0065vents"`, 1),
 		"escaped id":       strings.Replace(good, `"ID":"i"`, `"ID":"\"i"`, 1),
 		"leading zero":     strings.Replace(good, `"Offset":7`, `"Offset":07`, 1),
 		"signed":           strings.Replace(good, `"Offset":7`, `"Offset":-7`, 1),
@@ -237,6 +237,10 @@ func buildMixedJournal(t testing.TB) string {
 		items = append(items, Publication{Topic: []string{"words", "other"}[i%2], Message: Message{Key: fmt.Sprintf("k%d", i), Value: []byte(fmt.Sprintf("batch-%d", i)), ID: fmt.Sprintf("b%d", i)}})
 	}
 	if _, err = n.PublishBatch(ctx, items); err != nil {
+		t.Fatal(err)
+	}
+	// A new group stands at 0: one commit that jumps (it records the expected cursor) and one ordinary commit.
+	if err = n.CommitBatch(ctx, Partition{"words", 0}, "g", 0, 10, []byte("state-é\"")); err != nil {
 		t.Fatal(err)
 	}
 	if err = n.Commit(ctx, Partition{"words", 0}, "g", 10, []byte("state-é\"")); err != nil {

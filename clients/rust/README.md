@@ -18,4 +18,18 @@ A call that fails on a reused connection before any reply is repeated once on a 
 
 Errors are `Error::Api(status, word)` (`conflict`, `expired`, `limit`, ...), `Error::Transport` or `Error::InvalidResponse`. Responses are capped at 1 MiB.
 
+## Native protocol client (preview)
+
+`dostoevsky_client::native::NativeClient` speaks the binary wire protocol (`docs/wire-v1.md`) on one connection with many requests in flight. **No released server speaks it yet.** Plaintext only, to a loopback address or a unix socket (the standard library has no TLS). One client can be shared between threads; it runs one extra thread to read replies.
+
+```rust
+use dostoevsky_client::native::NativeClient;
+let c = NativeClient::connect("127.0.0.1:8788", &token)?;          // or NativeClient::connect_unix(path, &token)
+let pending = c.publish_nowait("jobs", b"payload", "k", "once")?;  // pipelined; pending.wait() gives the receipt
+let ack = pending.wait()?;
+let rec = c.read("jobs", ack.partition, ack.offset, std::time::Duration::from_secs(1))?;
+```
+
+Nothing is retried and there is no reconnect. `NativeError::ConnectionLost { sent: true }` means the request may have taken effect. A reply is accepted only within 40 s of its request.
+
 Test (no server needed, local stub): `cargo test --offline --manifest-path clients/rust/Cargo.toml`

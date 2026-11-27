@@ -176,3 +176,7 @@ dev-native-kill: ## Verify durable receipts and exact retries across SIGKILL on 
 	@mkdir -p .dev/bin
 	@CGO_ENABLED=0 "$(GO)" build -o .dev/bin/dostoevsky-server ./cmd/dostoevsky-server
 	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python python3 benchmarks/recovery/kill_native.py .dev/bin/dostoevsky-server
+
+.PHONY: dev-peer-kill
+dev-peer-kill: ## Verify peer receipts after forced restarts using the configured benchmark binaries and venv
+	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python .dev/bench-venv/bin/python benchmarks/recovery/kill_peers.py

@@ -16,7 +16,7 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 - Integrated the native server from PR 72 and native client source from PRs 62, 75 and 77 alongside the JavaScript/TypeScript client. Added native benchmark adapters for Python, Java, Rust and JavaScript.
 - Limited concurrent read and position tasks across connections. Added CLI options for the read-task budget and optional journal byte ceiling. Added coverage for capacity recovery, writes while reads are saturated, and publication at the journal ceiling.
-- Added a process-kill test with concurrent native publishers, byte-for-byte readback, and idempotent retry of every confirmed record. Added the upstream hash for the pinned CPython 3.12 AMD64 Kafka benchmark wheel.
+- Added a process-kill test with concurrent native publishers, byte-for-byte readback, and idempotent retry of every confirmed record. Added a matching peer crash harness that restarts JetStream, Redis and Kafka on their original storage and verifies every observed acknowledgment. Added the upstream hash for the pinned CPython 3.12 AMD64 Kafka benchmark wheel.
 
 ## 0.1.0 — Embedded topics, durable storage, and stream processing
 

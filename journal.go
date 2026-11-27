@@ -1,7 +1,6 @@
 package dostoevsky
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
@@ -179,38 +178,71 @@ func (j *journal) read(loc location) (entry, error) {
 func validHeader(h []byte) bool {
 	return (bytes.Equal(h[:8], signature) || bytes.Equal(h[:8], signatureV1)) && binary.BigEndian.Uint32(h[16:]) == crc32.Checksum(h[:16], crcTable)
 }
-func (j *journal) recover(apply func(entry, location) error) error {
+
+// replayChunk (a variable so tests can shrink it) is the size of the sequential reads recovery makes. A frame is parsed in
+// place from the window; the window is refilled from the frame's start when a frame
+// does not fit in what is left of it, so no frame is copied and none is allocated.
+var replayChunk = 1 << 20
+
+// recover replays the journal. record, when not nil, receives Record frames that
+// recordScanner fully understands (partition, offset, ID, location) without decoding
+// them; every other frame, and every Record frame the scanner declines, is decoded
+// with encoding/json and handed to apply, exactly as before.
+func (j *journal) recover(record func(Partition, int64, string, location) error, apply func(entry, location) error) error {
 	info, err := j.file.Stat()
 	if err != nil {
 		return err
 	}
-	if info.Size() == 0 {
+	size := info.Size()
+	if size == 0 {
 		return nil
 	}
-	reader := bufio.NewReaderSize(io.NewSectionReader(j.file, 0, info.Size()), int(min(info.Size(), 32<<10)))
-	var payload []byte
-	for j.end < info.Size() {
-		var h [20]byte
-		_, err = io.ReadFull(reader, h[:])
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			break
+	var (
+		buf   []byte
+		bufAt int64
+		scan  recordScanner
+	)
+	// window returns up to need bytes of the file starting at at: fewer only when the
+	// file ends first. The slice is valid until the next call.
+	window := func(at int64, need int) ([]byte, error) {
+		if at >= bufAt && at+int64(need) <= bufAt+int64(len(buf)) {
+			return buf[at-bufAt : at-bufAt+int64(need)], nil
 		}
+		want := int(min(int64(max(replayChunk, need)), size-at))
+		if cap(buf) < want {
+			buf = make([]byte, want)
+		}
+		buf = buf[:want]
+		bufAt = at
+		n, err := j.file.ReadAt(buf, at)
+		if err != nil && !(errors.Is(err, io.EOF) && n > 0) {
+			buf = buf[:0]
+			return nil, err
+		}
+		buf = buf[:n]
+		return buf[:min(need, n)], nil
+	}
+	for j.end < size {
+		h, err := window(j.end, 20)
 		if err != nil {
 			return err
 		}
-		if !validHeader(h[:]) {
+		if len(h) < 20 {
+			break
+		}
+		if !validHeader(h) {
 			return fmt.Errorf("invalid journal header at %d", j.end)
 		}
-		size := int(binary.BigEndian.Uint32(h[8:]))
-		if size > maxFrame || size <= 0 {
+		n := int(binary.BigEndian.Uint32(h[8:]))
+		if n > maxFrame || n <= 0 {
 			return fmt.Errorf("invalid frame length at %d", j.end)
 		}
-		loc := location{j.end + 20, size}
-		next := loc.at + int64(size)
-		if next > info.Size() {
+		loc := location{j.end + 20, n}
+		next := loc.at + int64(n)
+		if next > size {
 			// An interrupted append cannot have complete frames inside what it announced. If there are some, the length
 			// is wrong, not the write unfinished: cutting here would discard them.
-			later, err := laterFrames(j.file, j.end+1, info.Size())
+			later, err := laterFrames(j.file, j.end+1, size)
 			if err != nil {
 				return err
 			}
@@ -219,32 +251,45 @@ func (j *journal) recover(apply func(entry, location) error) error {
 			}
 			break
 		}
-		if cap(payload) < size {
-			payload = make([]byte, size)
-		}
-		payload = payload[:size]
-		if _, err = io.ReadFull(reader, payload); err != nil {
-			return fmt.Errorf("frame at %d: %w", j.end, err)
-		}
-		if crc32.Checksum(payload, crcTable) != binary.BigEndian.Uint32(h[12:]) {
-			return fmt.Errorf("frame at %d: %w", j.end, errors.New("journal checksum mismatch"))
-		}
-		var e entry
-		err = json.Unmarshal(payload, &e)
+		v2 := bytes.Equal(h[:8], signature)
+		wantCRC := binary.BigEndian.Uint32(h[12:])
+		frame, err := window(j.end, 20+n)
 		if err != nil {
 			return fmt.Errorf("frame at %d: %w", j.end, err)
 		}
-		if err = apply(e, loc); err != nil {
-			return fmt.Errorf("replay at %d: %w", j.end, err)
+		if len(frame) < 20+n {
+			return fmt.Errorf("frame at %d: %w", j.end, io.ErrUnexpectedEOF)
+		}
+		payload := frame[20:]
+		if crc32.Checksum(payload, crcTable) != wantCRC {
+			return fmt.Errorf("frame at %d: %w", j.end, errors.New("journal checksum mismatch"))
+		}
+		done := false
+		if record != nil {
+			if p, offset, id, ok := scan.scan(payload); ok {
+				if err = record(p, offset, id, loc); err != nil {
+					return fmt.Errorf("replay at %d: %w", j.end, err)
+				}
+				done = true
+			}
+		}
+		if !done {
+			var e entry
+			if err = json.Unmarshal(payload, &e); err != nil {
+				return fmt.Errorf("frame at %d: %w", j.end, err)
+			}
+			if err = apply(e, loc); err != nil {
+				return fmt.Errorf("replay at %d: %w", j.end, err)
+			}
 		}
 		// Only a complete frame that passed its checksum and replay counts as a fence.
-		if bytes.Equal(h[:8], signature) {
+		if v2 {
 			j.fenced = true
 		}
 		j.end = next
 	}
-	if j.end != info.Size() {
-		j.torn = Truncation{At: j.end, Bytes: info.Size() - j.end}
+	if j.end != size {
+		j.torn = Truncation{At: j.end, Bytes: size - j.end}
 		if err = j.file.Truncate(j.end); err != nil {
 			return err
 		}

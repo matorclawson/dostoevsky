@@ -101,20 +101,22 @@ func (s *stream) location(index int64) location {
 	return s.tail.records[index-1]
 }
 
-func (s *stream) addRecord(r *Record, loc location) {
+func (s *stream) addRecord(r *Record, loc location) { s.addRecordFields(r.ID, r.Offset, loc) }
+
+func (s *stream) addRecordFields(id string, offset int64, loc location) {
 	if s.first.size == 0 {
-		s.first, s.firstID = loc, r.ID
+		s.first, s.firstID = loc, id
 		return
 	}
 	if s.tail == nil {
 		s.tail = &recordTail{}
 	}
 	s.tail.records = append(s.tail.records, loc)
-	if r.ID != "" {
+	if id != "" {
 		if s.tail.ids == nil {
 			s.tail.ids = make(map[string]int64)
 		}
-		s.tail.ids[r.ID] = r.Offset
+		s.tail.ids[id] = offset
 	}
 }
 
@@ -183,6 +185,10 @@ func (c Config) validate() error {
 	return nil
 }
 
+// fastRecordReplay lets Open take Record frames from the scanner in recordscan.go.
+// Tests turn it off to replay through encoding/json alone, as before, and compare.
+var fastRecordReplay = true
+
 // Open creates or recovers a node. A directory can have one open writer.
 func Open(dir string, c Config) (*Node, error) {
 	if e := c.validate(); e != nil {
@@ -213,7 +219,16 @@ func Open(dir string, c Config) (*Node, error) {
 		return nil, upgradeRequired(dir)
 	}
 	var declared int
-	e = j.recover(func(ev entry, loc location) error {
+	var record func(Partition, int64, string, location) error
+	if fastRecordReplay {
+		record = func(p Partition, offset int64, id string, loc location) error {
+			if declared == 0 {
+				return errors.New("missing manifest")
+			}
+			return n.indexRecord(p, offset, id, loc)
+		}
+	}
+	e = j.recover(record, func(ev entry, loc location) error {
 		if ev.Config != nil {
 			saved := ev.Config
 			if saved.Node != own.Node || !slices.Equal(saved.Nodes, own.Nodes) {
@@ -319,6 +334,20 @@ func (n *Node) stream(p Partition) (*stream, error) {
 	}
 	return s, nil
 }
+
+// indexRecord replays one Record frame from the fields replay needs.
+func (n *Node) indexRecord(p Partition, offset int64, id string, loc location) error {
+	s, err := n.stream(p)
+	if err != nil {
+		return err
+	}
+	if offset != s.base+s.count() {
+		return ErrConflict
+	}
+	s.addRecordFields(id, offset, loc)
+	s.signal()
+	return nil
+}
 func (n *Node) index(e entry, loc location) error {
 	if seed := e.Seed; seed != nil {
 		s, err := n.stream(seed.Partition)
@@ -350,16 +379,7 @@ func (n *Node) index(e entry, loc location) error {
 		return nil
 	}
 	if r := e.Record; r != nil {
-		s, err := n.stream(r.Partition)
-		if err != nil {
-			return err
-		}
-		if r.Offset != s.base+s.count() {
-			return ErrConflict
-		}
-		s.addRecord(r, loc)
-		s.signal()
-		return nil
+		return n.indexRecord(r.Partition, r.Offset, r.ID, loc)
 	}
 	if c := e.Check; c != nil {
 		s, err := n.stream(c.Partition)

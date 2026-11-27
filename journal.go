@@ -126,8 +126,14 @@ func cannotHaveCreated(dir string, err error) bool {
 	if errors.Is(err, syscall.EROFS) {
 		return true
 	}
+	// access(2) answers for the real identity, not the one that opens files.
+	if os.Getuid() != os.Geteuid() || os.Getgid() != os.Getegid() {
+		return false
+	}
 	const writable = 2 // W_OK
-	return errors.Is(err, os.ErrPermission) && syscall.Access(dir, writable) != nil
+	probe := syscall.Access(dir, writable)
+	denied := errors.Is(probe, syscall.EACCES) || errors.Is(probe, syscall.EPERM)
+	return errors.Is(err, os.ErrPermission) && denied
 }
 
 // One file descriptor owns the advisory lock for the lifetime of the node.

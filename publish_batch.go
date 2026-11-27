@@ -32,6 +32,9 @@ func (n *Node) publishBatchLocked(ctx context.Context, items []Publication) ([]R
 	if n.closed {
 		return nil, ErrClosed
 	}
+	if n.segments != nil {
+		return n.segmentBatch(ctx, items)
+	}
 	if n.j.failed != nil {
 		return nil, n.j.failed
 	}

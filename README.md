@@ -9,6 +9,8 @@
 
 **Durable streaming that aims to be the smallest server in the room.** Dostoevsky keeps topics, idempotent publish and consumer checkpoints in one fsync-backed journal, written in Go with the standard library only. Embed it in a Go program, or run it as a server and call it from Python, JavaScript/TypeScript, Java and Rust. The goal is the smallest server, a native binary protocol and clients in four languages. Today the clients on `main` speak HTTP; the native server is in review.
 
+For large retained journals, the opt-in segmented store loads a checkpoint and replays the active tail. The storage guide covers migration, verification, rollback and benchmark commands. [Segmented recovery](docs/segmented-recovery.md)
+
 ## Quick start: server and client
 
 From a clone of this repository (Go 1.22+, Python 3.10+), start the gateway on loopback port 8787:

@@ -180,3 +180,31 @@ dev-native-kill: ## Verify durable receipts and exact retries across SIGKILL on 
 .PHONY: dev-peer-kill
 dev-peer-kill: ## Verify peer receipts after forced restarts using the configured benchmark binaries and venv
 	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python .dev/bench-venv/bin/python benchmarks/recovery/kill_peers.py
+
+.PHONY: dev-storage dev-storage-recovery dev-storage-crash dev-storage-scale
+dev-storage: ## Build offline storage verification, migration and backup tool
+	@mkdir -p .dev/bin
+	@"$(GO)" build -o .dev/bin/dost-storage ./cmd/dost-storage
+
+dev-storage-recovery: ## Test segmented recovery, cross-format restoration and loss detection
+	@"$(GO)" test -race -count=1 -run 'Segment|Frame3|Checkpoint3' .
+
+dev-storage-crash: ## Kill the native segmented server and verify 20,000 receipts and retries
+	@mkdir -p .dev/bin
+	@"$(GO)" build -o .dev/bin/dostoevsky-server ./cmd/dostoevsky-server
+	@PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python python3 benchmarks/recovery/kill_native.py .dev/bin/dostoevsky-server --segmented --count 20000
+
+RECOVERY_RECORDS ?= 1000000
+RECOVERY_BYTES ?= 512
+RECOVERY_PARENT ?= .dev
+dev-storage-scale: ## Measure five fresh opens, integrity scan and exact paged readback on Linux
+	@mkdir -p .dev/bin "$(RECOVERY_PARENT)"
+	@"$(GO)" build -o .dev/bin/history ./benchmarks/history
+	@python3 benchmarks/recovery/scale.py .dev/bin/history "$(RECOVERY_PARENT)" "$(RECOVERY_RECORDS)" "$(RECOVERY_BYTES)"
+
+RECOVERY_TOPICS ?= 100000
+.PHONY: dev-storage-catalog
+dev-storage-catalog: ## Measure recovery with many one-record topics and consumer checkpoints
+	@mkdir -p .dev/bin "$(RECOVERY_PARENT)"
+	@"$(GO)" build -o .dev/bin/catalog ./benchmarks/catalog
+	@set -eu; d=$$(mktemp -d "$(RECOVERY_PARENT)/catalog-XXXXXX"); trap 'rm -rf "$$d"' EXIT; .dev/bin/catalog -seed -dir "$$d" -topics "$(RECOVERY_TOPICS)"; .dev/bin/catalog -dir "$$d" -topics "$(RECOVERY_TOPICS)"

@@ -1,4 +1,5 @@
 """Linux process-kill durability check. Pass a native server executable; data is disposable."""
+import argparse
 import concurrent.futures
 import hashlib
 import os
@@ -6,7 +7,6 @@ import pathlib
 import queue
 import secrets
 import subprocess
-import sys
 import tempfile
 import threading
 
@@ -17,8 +17,8 @@ def payload(i):
     return hashlib.sha256(str(i).encode()).digest() * 16
 
 
-def serve(binary, directory, token):
-    p = subprocess.Popen([binary, "-listen", "127.0.0.1:0", "-data", directory],
+def serve(binary, directory, token, segmented):
+    p = subprocess.Popen([binary, *(["-segmented"] if segmented else []), "-listen", "127.0.0.1:0", "-data", directory],
                          env={**os.environ, "DOSTOEVSKY_TOKEN": token},
                          stdout=subprocess.PIPE, text=True)
     try:
@@ -33,9 +33,9 @@ def serve(binary, directory, token):
         raise
 
 
-def check(binary, directory):
+def check(binary, directory, segmented=False, count=2000):
     token = secrets.token_hex(24)
-    server, address = serve(binary, directory, token)
+    server, address = serve(binary, directory, token, segmented)
     receipts = queue.Queue()
     stopping = threading.Event()
     def publish(worker):
@@ -56,7 +56,7 @@ def check(binary, directory):
             jobs = [pool.submit(publish, worker) for worker in range(8)]
             seen = []
             try:
-                while len(seen) < 2000:
+                while len(seen) < count:
                     seen.append(receipts.get(timeout=45))
             finally:
                 stopping.set()
@@ -72,7 +72,7 @@ def check(binary, directory):
         seen.append(receipts.get_nowait())
     if len({off for off, _ in seen}) != len(seen):
         raise ValueError("duplicate receipt offset")
-    server, address = serve(binary, directory, token)
+    server, address = serve(binary, directory, token, segmented)
     try:
         with NativeClient(address, token) as c:
             for off, i in sorted(seen):
@@ -88,5 +88,12 @@ def check(binary, directory):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", type=pathlib.Path)
+    parser.add_argument("--segmented", action="store_true")
+    parser.add_argument("--count", type=int, default=2000)
+    args = parser.parse_args()
+    if args.count < 1:
+        parser.error("--count must be positive")
     with tempfile.TemporaryDirectory() as tmp:
-        check(str(pathlib.Path(sys.argv[1]).resolve()), tmp)
+        check(str(args.binary.resolve()), tmp, args.segmented, args.count)

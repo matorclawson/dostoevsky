@@ -66,13 +66,14 @@ type checkpoint struct {
 	Position
 }
 type stream struct {
-	base    int64
-	firstID string
-	first   location
-	tail    *recordTail
-	groups  map[string]Position
-	wait    *streamWait
-	seeded  bool // a retention seed set base; further seeds for it may add groups
+	segmentState *partState
+	base         int64
+	firstID      string
+	first        location
+	tail         *recordTail
+	groups       map[string]Position
+	wait         *streamWait
+	seeded       bool // a retention seed set base; further seeds for it may add groups
 }
 
 type recordTail struct {
@@ -87,6 +88,9 @@ type streamWait struct {
 }
 
 func (s *stream) count() int64 {
+	if ps := s.segmentState; ps != nil {
+		return ps.next - ps.base
+	}
 	if s.first.size == 0 {
 		return 0
 	}
@@ -148,6 +152,8 @@ func (s *stream) signal() {
 }
 
 type Node struct {
+	segments  *segLog
+	rollBytes int64
 	publishes publishQueue
 	mu        sync.RWMutex
 	j         *journal
@@ -199,7 +205,13 @@ func (c Config) validate() error {
 var fastRecordReplay = true
 
 // Open creates or recovers a node. A directory can have one open writer.
-func Open(dir string, c Config) (*Node, error) {
+func Open(dir string, c Config) (*Node, error) { return openNodeFormat(dir, c, false) }
+
+// OpenSegmented creates an opt-in segmented store, or reopens one. Existing
+// JSON journals require an explicit copy into another directory.
+func OpenSegmented(dir string, c Config) (*Node, error) { return openNodeFormat(dir, c, true) }
+
+func openNodeFormat(dir string, c Config, segmented bool) (*Node, error) {
 	if e := c.validate(); e != nil {
 		return nil, e
 	}
@@ -219,6 +231,14 @@ func Open(dir string, c Config) (*Node, error) {
 		return nil, e
 	}
 	n := &Node{cfg: own, j: j, streams: make(map[Partition]*stream), topology: fmt.Sprintf("%x", sha256.Sum256(b))}
+	use, err := n.openSegments(dir, raw, segmented)
+	if err != nil {
+		j.close()
+		return nil, err
+	}
+	if use {
+		return n, nil
+	}
 	// Before recovery, which writes: a journal that needs an upgrade is not touched.
 	if old, e := legacyOnly(j.file); e != nil || old {
 		j.close()
@@ -281,7 +301,11 @@ func (n *Node) Close() error {
 	for _, s := range n.streams {
 		s.signal()
 	}
-	err := n.j.close()
+	var err error
+	if n.segments != nil {
+		err = n.segments.close()
+	}
+	err = errors.Join(err, n.j.close())
 	if n.retired != nil {
 		err = errors.Join(err, n.retired.Close())
 		n.retired = nil
@@ -325,6 +349,34 @@ func (n *Node) partition(t, key string) (Partition, error) {
 	_, _ = h.Write([]byte(key))
 	return Partition{t, int(h.Sum32() % uint32(c))}, nil
 }
+
+// streamBounds avoids allocating a reader or a second catalog entry for idle partitions.
+func (n *Node) streamBounds(p Partition) (int64, int64) {
+	if l := n.segments; l != nil {
+		if pid, ok := l.state.byPart[p]; ok {
+			ps := l.state.parts[pid]
+			return ps.base, ps.next
+		}
+		return 0, 0
+	}
+	if s := n.streams[p]; s != nil {
+		return s.base, s.base + s.count()
+	}
+	return 0, 0
+}
+func (n *Node) lookupStream(p Partition) *stream {
+	if s := n.streams[p]; s != nil {
+		return s
+	}
+	if l := n.segments; l != nil {
+		if pid, ok := l.state.byPart[p]; ok {
+			ps := l.state.parts[pid]
+			return &stream{base: ps.base, groups: ps.groups, segmentState: ps}
+		}
+	}
+	return nil
+}
+
 func (n *Node) stream(p Partition) (*stream, error) {
 	if n.closed {
 		return nil, ErrClosed
@@ -338,7 +390,10 @@ func (n *Node) stream(p Partition) (*stream, error) {
 	}
 	s := n.streams[p]
 	if s == nil {
-		s = &stream{}
+		s = n.lookupStream(p)
+		if s == nil {
+			s = &stream{}
+		}
 		n.streams[p] = s
 	}
 	return s, nil
@@ -431,6 +486,13 @@ func (n *Node) Publish(ctx context.Context, t string, m Message) (Record, error)
 
 // publishLocked writes one record under the node lock.
 func (n *Node) publishLocked(ctx context.Context, p Partition, m Message) (Record, error) {
+	if n.segments != nil {
+		rs, err := n.publishBatchLocked(ctx, []Publication{{p.Topic, m}})
+		if err != nil {
+			return Record{}, err
+		}
+		return rs[0], nil
+	}
 	if e := ctx.Err(); e != nil {
 		return Record{}, e
 	}
@@ -482,13 +544,18 @@ func (n *Node) Read(ctx context.Context, p Partition, offset int64, wait bool) (
 			}
 			return Record{}, ErrOwner
 		}
-		s := n.streams[p]
-		if s != nil && offset < s.base {
+		base, next := n.streamBounds(p)
+		if offset < base {
 			n.mu.RUnlock()
 			return Record{}, ErrExpired
 		}
-		if s != nil && offset < s.base+s.count() {
-			ev, e := n.j.read(s.location(offset - s.base))
+		if offset < next {
+			if n.segments != nil {
+				r, err := n.segmentRecord(p, offset)
+				n.mu.RUnlock()
+				return r, err
+			}
+			ev, e := n.j.read(n.streams[p].location(offset - base))
 			n.mu.RUnlock()
 			if e != nil {
 				return Record{}, e
@@ -566,8 +633,8 @@ func (n *Node) Await(ctx context.Context, p Partition, offset int64) error {
 			}
 			return ErrOwner
 		}
-		s := n.streams[p]
-		ready := s != nil && offset < s.base+s.count()
+		_, next := n.streamBounds(p)
+		ready := offset < next
 		n.mu.RUnlock()
 		if ready {
 			return nil
@@ -624,6 +691,9 @@ func (n *Node) CommitBatch(ctx context.Context, p Partition, g string, offset, n
 	ev := entry{Check: &checkpoint{Partition: p, Group: g, Position: Position{next, state}}}
 	if next != offset+1 {
 		ev.Check.Expected = &offset
+	}
+	if n.segments != nil {
+		return n.segmentCommit(s, *ev.Check)
 	}
 	loc, e := n.j.appendWithin(ev, n.commitCeiling())
 	if e != nil {

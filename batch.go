@@ -21,6 +21,22 @@ func (n *Node) ReadBatch(ctx context.Context, p Partition, start int64, l Limits
 	if l.Records < 1 || l.Bytes < 1 {
 		return Page{}, ErrInvalid
 	}
+	if n.segments != nil {
+		if wait {
+			if err := n.Await(ctx, p, start); err != nil {
+				return Page{}, err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return Page{}, err
+		}
+		n.mu.RLock()
+		defer n.mu.RUnlock()
+		if n.closed {
+			return Page{}, ErrClosed
+		}
+		return n.readSegmentPage(ctx, p, start, l)
+	}
 	page := Page{Next: start}
 	for len(page.Records) < l.Records {
 		r, e := n.Read(ctx, p, page.Next, wait && len(page.Records) == 0)

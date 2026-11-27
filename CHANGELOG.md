@@ -4,6 +4,13 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — segmented storage recovery
+
+- Added opt-in segmented storage to the public Go node and native server, with format discovery on reopen and durable checkpoints for topology, offsets, floors and consumer groups.
+- Added range validation for missing segment files, active-tail recovery, bounded index caching, index reconstruction and a sequential batch reader over sealed segments. Retention reclaims fully expired contiguous prefix segments.
+- Added staged migration from existing journals, backward-compatible backup export, a full integrity scan and the offline `dost-storage` tool.
+- Added recovery, missing-file, migration and rollback tests, public API scale and catalog benchmarks, an eight-producer process-kill check and development Make targets. See the [storage guide](docs/segmented-recovery.md).
+
 ## Unreleased — 27 November 2026 council recovery candidate
 
 - Integrated the strict journal scanner from PR 81. Recovery verifies framing and checksums, extracts the fields needed to index canonical records, and falls back to the existing JSON decoder for other journal entries.

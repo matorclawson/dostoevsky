@@ -126,6 +126,7 @@ func run() error {
 	key := flag.String("tls-key", "", "TLS private key file (PEM)")
 	journalCap := flag.Int64("journal-cap", 0, "maximum journal bytes (zero is unlimited)")
 	readTasks := flag.Int("read-tasks", 0, "maximum server-wide read and position tasks (zero selects the default)")
+	segmented := flag.Bool("segmented", false, "create a segmented store in a new directory")
 	flag.Parse()
 	if *journalCap < 0 || *readTasks < 0 {
 		return errors.New("limits must be non-negative")
@@ -144,7 +145,11 @@ func run() error {
 		}
 		cfg.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}}
 	}
-	node, err := d.Open(*dir, d.Config{Node: "local", Nodes: []string{"local"}, Topics: map[string]int{"*": *parts}})
+	open := d.Open
+	if *segmented {
+		open = d.OpenSegmented
+	}
+	node, err := open(*dir, d.Config{Node: "local", Nodes: []string{"local"}, Topics: map[string]int{"*": *parts}})
 	if err != nil {
 		return err
 	}

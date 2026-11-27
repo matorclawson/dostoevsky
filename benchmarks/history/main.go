@@ -20,14 +20,19 @@ import (
 	d "github.com/rodriveracom/dostoevsky"
 )
 
+var valueBytes = flag.Int("value-bytes", 512, "payload size from 8 to 512 bytes")
+
 func value(i int) []byte {
 	var v [512]byte
 	binary.LittleEndian.PutUint64(v[:], uint64(i))
+	if *valueBytes == 8 {
+		return v[:8]
+	}
 	seed := sha256.Sum256(v[:8])
 	for j := 8; j < len(v); j++ {
 		v[j] = seed[j%len(seed)]
 	}
-	return v[:]
+	return v[:*valueBytes]
 }
 func rss(key string) uint64 {
 	data, err := os.ReadFile("/proc/self/status")
@@ -47,18 +52,23 @@ func rss(key string) uint64 {
 }
 func main() {
 	dir := flag.String("dir", "", "disposable journal directory")
-	mode := flag.String("mode", "open", "seed, open, verify, or random")
+	mode := flag.String("mode", "open", "seed, open, pages, verify, or random")
 	count := flag.Int("n", 16000, "total retained records")
 	samples := flag.Int("samples", 100000, "number of deterministic random reads in random mode")
 	start := flag.Int("start", 0, "first offset when extending a fixture")
 	hexIDs := flag.Bool("hex-ids", false, "use unique 32-character producer IDs")
 	ids := flag.Bool("ids", false, "write and check unique producer IDs")
+	segmented := flag.Bool("segmented", false, "create a segmented store in a new directory")
 	flag.Parse()
-	if *dir == "" || *count < 1 || *start < 0 || *start >= *count {
+	if *valueBytes < 8 || *valueBytes > 512 || *dir == "" || *count < 1 || *start < 0 || *start >= *count {
 		panic("invalid arguments")
 	}
 	t := time.Now()
-	n, e := d.Open(*dir, d.Config{Node: "n", Nodes: []string{"n"}, Topics: map[string]int{"events": 1}})
+	open := d.Open
+	if *segmented {
+		open = d.OpenSegmented
+	}
+	n, e := open(*dir, d.Config{Node: "n", Nodes: []string{"n"}, Topics: map[string]int{"events": 1}})
 	if e != nil {
 		panic(e)
 	}
@@ -86,7 +96,7 @@ func main() {
 	}
 	var readTime time.Duration
 	switch *mode {
-	case "seed":
+	case "seed", "append-live":
 		for i := *start; i < *count; {
 			batch := make([]d.Publication, 0, min(256, *count-i))
 			for len(batch) < cap(batch) {
@@ -106,6 +116,26 @@ func main() {
 				}
 			}
 			i += len(batch)
+			if *mode == "append-live" {
+				fmt.Printf("ack_next=%d\n", i)
+			}
+		}
+	case "scrub":
+		if err := n.VerifySegments(ctx); err != nil {
+			panic(err)
+		}
+	case "pages", "acknowledged":
+		for i := *start; i < *count; {
+			page, err := n.ReadBatch(ctx, p, int64(i), d.Limits{Records: min(256, *count-i), Bytes: 1 << 20}, false)
+			if err != nil || len(page.Records) == 0 {
+				panic(fmt.Sprintf("page at %d: %v", i, err))
+			}
+			for _, r := range page.Records {
+				if r.Offset != int64(i) || r.ID != id(i) || !bytes.Equal(r.Value, value(i)) {
+					panic(fmt.Sprintf("wrong record at %d", i))
+				}
+				i++
+			}
 		}
 	case "verify":
 		for i := 0; i < *count; i++ {
@@ -128,14 +158,14 @@ func main() {
 	if _, err := n.Read(ctx, p, int64(*count-1), false); err != nil {
 		panic(err)
 	}
-	if _, err := n.Read(ctx, p, int64(*count), false); err != d.ErrEmpty {
+	if _, err := n.Read(ctx, p, int64(*count), false); *mode != "acknowledged" && err != d.ErrEmpty {
 		panic("unexpected tail")
 	}
 	elapsed := time.Since(t)
 	runtime.GC()
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
-	fmt.Printf("mode=%s count=%d ids=%t hex_ids=%t open_ms=%.3f elapsed_s=%.3f openRSS_KiB=%d currentRSS_KiB=%d peakRSS_KiB=%d liveHeap_KiB=%d\n", *mode, *count, *ids || *hexIDs, *hexIDs, float64(opened)/1e6, elapsed.Seconds(), initialRSS, rss("VmRSS"), rss("VmHWM"), mem.HeapAlloc/1024)
+	fmt.Printf("mode=%s count=%d value_bytes=%d ids=%t hex_ids=%t open_ms=%.3f elapsed_s=%.3f openRSS_KiB=%d currentRSS_KiB=%d peakRSS_KiB=%d liveHeap_KiB=%d\n", *mode, *count, *valueBytes, *ids || *hexIDs, *hexIDs, float64(opened)/1e6, elapsed.Seconds(), initialRSS, rss("VmRSS"), rss("VmHWM"), mem.HeapAlloc/1024)
 	if *mode == "random" {
 		fmt.Printf("random_reads=%d read_elapsed_s=%.3f verified_reads_per_s=%.0f\n", *samples, readTime.Seconds(), float64(*samples)/readTime.Seconds())
 	}

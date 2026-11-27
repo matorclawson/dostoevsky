@@ -163,10 +163,7 @@ fn over_tcp() {
     let listen = ["-listen", "127.0.0.1:0"];
     let server = Server::start(&binary, &data, listen);
     let wrong = NativeClient::connect(&server.address, "wrong-token-wrong-token");
-    assert!(matches!(
-        wrong,
-        Err(NativeError::Api(401, "unauthorized"))
-    ));
+    assert!(matches!(wrong, Err(NativeError::Api(401, "unauthorized"))));
     let client = NativeClient::connect(&server.address, TOKEN).unwrap();
     checks(&client, "t-tcp");
     drop(server);

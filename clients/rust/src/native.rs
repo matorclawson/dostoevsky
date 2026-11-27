@@ -61,9 +61,7 @@ impl fmt::Display for NativeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Api(status, code) => write!(f, "{status} {code}"),
-            Self::ConnectionLost { sent: true } => {
-                f.write_str("connection lost; outcome unknown")
-            }
+            Self::ConnectionLost { sent: true } => f.write_str("connection lost; outcome unknown"),
             Self::ConnectionLost { sent: false } => f.write_str("connection lost; not sent"),
             Self::Refused(why) => f.write_str(why),
         }
@@ -158,7 +156,10 @@ fn publish_frame(topic: &str, value: &[u8], key: &str, id: &str) -> Result<Vec<u
     if value.len() > MAX_VALUE {
         return Err(LIMIT);
     }
-    let mut out = frame(PUBLISH, 5 + topic.len() + key.len() + id.len() + value.len());
+    let mut out = frame(
+        PUBLISH,
+        5 + topic.len() + key.len() + id.len() + value.len(),
+    );
     str8(&mut out, topic)?;
     str16(&mut out, key, MAX_KEY)?;
     str16(&mut out, id, MAX_ID)?;
@@ -449,7 +450,9 @@ fn read_by(stream: &mut Stream, buf: &mut [u8], deadline: Instant) -> io::Result
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // No code holding these locks can leave them half-updated by panicking.
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Where one request's answer is put.
@@ -881,7 +884,10 @@ mod tests {
             hex("0d000000010001000000066576656e7473000000006869")
         );
         assert_eq!(
-            with_id(publish_frame("jobs", b"", "k\u{e9}", "once").unwrap(), 0x01020304),
+            with_id(
+                publish_frame("jobs", b"", "k\u{e9}", "once").unwrap(),
+                0x01020304
+            ),
             hex("10000000010004030201046a6f627303006bc3a904006f6e6365")
         );
         let second = Duration::from_secs(1);
@@ -910,15 +916,15 @@ mod tests {
     fn refuses_values_it_will_not_send() {
         let long = "x".repeat(MAX_KEY + 1);
         assert_eq!(publish_frame("t", b"", &long, "").unwrap_err(), LIMIT);
-        assert_eq!(publish_frame("t", b"", "", &long[..257]).unwrap_err(), LIMIT);
+        assert_eq!(
+            publish_frame("t", b"", "", &long[..257]).unwrap_err(),
+            LIMIT
+        );
         assert_eq!(
             publish_frame("t", &vec![0; MAX_VALUE + 1], "", "").unwrap_err(),
             LIMIT
         );
-        assert_eq!(
-            read_frame("t", 0, -1, Duration::ZERO).unwrap_err(),
-            INVALID
-        );
+        assert_eq!(read_frame("t", 0, -1, Duration::ZERO).unwrap_err(), INVALID);
         assert_eq!(
             read_frame("t", 0, 0, Duration::from_millis(30_001)).unwrap_err(),
             INVALID
@@ -938,7 +944,8 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let found = body("1c0000008200020000000100002900000000000000158dc824e15e7b1801006b000000ff0a0d");
+        let found =
+            body("1c0000008200020000000100002900000000000000158dc824e15e7b1801006b000000ff0a0d");
         match decode_reply(0x82, &found) {
             Some(Reply::Read(Some(r))) => {
                 assert_eq!((r.receipt.partition, r.receipt.offset), (0, 41));
@@ -1078,7 +1085,8 @@ mod tests {
         // window 1
         let (address, server) = scripted("4453545600010000201000010000004000", |conn| {
             let (_, first) = next_frame(conn);
-            conn.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+            conn.set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
             assert!(conn.read(&mut [0; 1]).is_err(), "a second request was sent");
             conn.set_read_timeout(None).unwrap();
             conn.write_all(&published(first, 0)).unwrap();

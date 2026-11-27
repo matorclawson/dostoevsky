@@ -205,7 +205,7 @@ export class NativeClient {
     this.#queue = [];
   }
 
-  // Random, so that a server cannot answer a request before it has received that request's header.
+  // Random, so that a server is very unlikely to guess a request's id before it has received that request's header.
   #unusedId() {
     do { webcrypto.getRandomValues(this.#word); } while (this.#word[0] === 0 || this.#pending.has(this.#word[0]));
     return this.#word[0];

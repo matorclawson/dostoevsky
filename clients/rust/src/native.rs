@@ -748,9 +748,7 @@ impl NativeClient {
         write_by(&mut stream, first, deadline).map_err(|_| NOT_SENT)?;
         read_by(&mut stream, &mut data, deadline).map_err(|_| NOT_SENT)?;
         let (window, window_bytes) = welcome(&data)?;
-        stream
-            .set_read_timeout(Some(TICK))
-            .map_err(|_| NOT_SENT)?;
+        stream.set_read_timeout(Some(TICK)).map_err(|_| NOT_SENT)?;
         let reading = stream.try_clone().map_err(|_| NOT_SENT)?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
@@ -1168,7 +1166,8 @@ mod tests {
     /// A client of a server that reads but never answers.
     fn silent() -> (NativeClient, JoinHandle<()>) {
         let (address, server) = scripted(WELCOME, |conn| {
-            conn.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            conn.set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
             let mut sink = [0; 1024];
             loop {
                 match conn.read(&mut sink) {

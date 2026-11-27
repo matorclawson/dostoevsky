@@ -61,8 +61,8 @@ Median records per second (median p99 in ms), 5 trials of 120 s each, 512-byte r
 
 Latency percentiles are upper bin edges, at most 1% above the true value. All 240 trials completed, and every acknowledged record was read back.
 
-* **Server memory:** the Dostoevsky gateway's median peak was 13 to 36 MiB, the smallest in all 36 comparisons. NATS used 67 to 76 MiB and Kafka 567 to 645 MiB; Redis's lowest was 53 MiB, and it grows with the records it holds in memory. Whether Dostoevsky's memory stays flat as history grows was **not measured** by this run.
-* **Where Dostoevsky loses besides Redis:** NATS is faster with one producer in Java, JavaScript and Rust; Kafka is faster with one producer in JavaScript; the unfixed Rust client was behind every competitor. The Dostoevsky client processes in JavaScript and Java used more memory than most or all competitor clients in those languages.
+* **Server memory:** the Dostoevsky gateway's median peak was 13 to 36 MiB, the smallest in all 36 comparisons. The figure is the sum of each server process's highest sampled resident peak (`VmHWM`): the peaks need not occur at the same time, and pages shared between processes (Redis's append-only-file children) can be counted more than once. NATS used 67 to 76 MiB and Kafka 567 to 645 MiB; Redis's lowest was 53 MiB, and it grows with the records it holds in memory. Whether Dostoevsky's memory stays flat as history grows was **not measured** by this run.
+* **Where Dostoevsky loses besides Redis:** NATS is faster with one producer in Java, JavaScript and Rust; Kafka is faster with one producer in JavaScript; the unfixed Rust client was behind every competitor at 1 and 8 producers, and behind NATS and Redis at 32. The Dostoevsky client processes in JavaScript and Java used more memory than most or all competitor clients in those languages.
 
 Durability settings:
 

@@ -1,4 +1,5 @@
-import asyncio, json, os, socket, struct, sys, threading, time, unittest
+import asyncio, itertools, json, os, socket, struct, sys, threading, time, unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from dostoevsky_client import ClientError, Position, Receipt, Record, _wire, native  # noqa: E402
@@ -126,6 +127,14 @@ class SyncDeadlines(unittest.TestCase):
         self.assertLess(time.monotonic() - began, 2)
 
 
+def sequential_ids(test):
+    """Predictable request ids, so that a script can name one that has not been sent yet. The client's own are random."""
+    counter = itertools.count(1)
+    patcher = mock.patch.object(native._Ids, "next", lambda self, used: next(counter))
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
 def two_replies_at_once(fake, conn, kind, request_id, body):
     conn.sendall(frame(0x85, request_id) + frame(0x85, request_id + 1))
 
@@ -237,7 +246,7 @@ class Sync(unittest.TestCase):
             self.assertEqual(c.publish("events", b"b"), Receipt(0, 5))
 
     def test_a_bad_reply_ends_the_connection(self):
-        for name, answer in (("unknown id", lambda r: frame(0x85, r + 1)), ("wrong type", lambda r: frame(0x84, r)),
+        for name, answer in (("unknown id", lambda r: frame(0x85, (r % 0xFFFFFFFF) + 1)), ("wrong type", lambda r: frame(0x84, r)),
                              ("bytes left over", lambda r: frame(0x85, r, b"\0")), ("connection error", lambda r: frame(0xFF, 0, b"\x0b"))):
             with self.subTest(name):
                 fake = Fake(self, lambda fake, conn, kind, request_id, body, a=answer: conn.sendall(a(request_id)))
@@ -274,7 +283,21 @@ class Sync(unittest.TestCase):
                 self.assertEqual(refused.exception.code, code)
         self.assertEqual(fake.frames, [])
 
+    def test_request_ids_are_not_predictable(self):
+        ids = native._Ids()
+        drawn = [ids.next(()) for _ in range(200)]
+        self.assertTrue(all(0 < i <= 0xFFFFFFFF for i in drawn))
+        self.assertTrue(any(b != a + 1 for a, b in zip(drawn, drawn[1:])))
+        self.assertGreater(len(set(drawn)), 190)
+
+    def test_a_reply_for_an_id_not_yet_sent_ends_the_connection(self):
+        fake = Fake(self, lambda fake, conn, kind, request_id, body: conn.sendall(frame(0x85, (request_id % 0xFFFFFFFF) + 1)))
+        c = NativeClient(fake.address, TOKEN)
+        with self.assertRaises(ConnectionLost):
+            c.ping()
+
     def test_a_buffered_reply_cannot_answer_a_request_sent_after_it_arrived(self):
+        sequential_ids(self)
         fake = Fake(self, two_replies_at_once, window=1)
         with NativeClient(fake.address, TOKEN) as c:
             c.ping()
@@ -324,6 +347,7 @@ class Async(unittest.IsolatedAsyncioTestCase):
             await AsyncNativeClient.connect(fake.address, TOKEN, max_bytes=1000)
 
     async def test_a_buffered_reply_cannot_answer_a_later_request(self):
+        sequential_ids(self)
         fake = Fake(self, two_replies_at_once, window=1)
         c = await AsyncNativeClient.connect(fake.address, TOKEN)
         first, second = await asyncio.gather(c.ping(), c.ping(), return_exceptions=True)

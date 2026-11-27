@@ -12,6 +12,7 @@ An `address` is `(host, port)` or the path of a unix socket. The token is sent o
 """
 import asyncio
 import ipaddress
+import secrets
 import selectors
 import socket
 import ssl
@@ -128,14 +129,14 @@ def _connect_tcp(address, deadline: float) -> socket.socket:
 
 
 class _Ids:
-    def __init__(self):
-        self.last = 0
+    """Request ids from the operating system's randomness, so that a server cannot answer a request before it has
+    received that request's header."""
 
     def next(self, used) -> int:
         while True:
-            self.last = 1 if self.last == 0xFFFFFFFF else self.last + 1
-            if self.last not in used:
-                return self.last
+            request_id = secrets.randbits(32)
+            if request_id and request_id not in used:
+                return request_id
 
 
 class Pending:

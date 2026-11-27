@@ -12,6 +12,12 @@ Call `VerifySegments(ctx)` to read and checksum the complete physical history an
 
 Each sealed segment can have a rebuildable index. Random reads locate a segment and scan forward from a sparse offset. Pages reuse a read window. ID-bearing publishes compare candidate matches with full records. Sealed segments can carry a checksummed Bloom filter. A definite miss skips the segment's exact ID index. A possible match still checks the index and the complete stored ID and payload. The first identified publish lazily loads the filters, and older directories build missing filters from verified indexes. To prepare a stopped store before upgrading, run `dost-storage -mode prepare-ids -config topology.json -data segmented-store`. An embedded application can call `PrepareIDFilters(ctx)` before accepting traffic. The filter cache has a 64 MiB bit-array budget. A workload exceeding it can reload filters from disk. Benchmark the actual retained ID count and churn. Large numbers of distinct partitions or consumer groups also increase checkpoint size. A lagging partition can keep a mixed segment on disk after other partitions advance.
 
+A workload whose retained IDs exceed the filter budget, for example one scanning from newest to oldest, can reload the same filters repeatedly; how much that costs has not been measured.
+
+**Do not run `dost-repair` or the upgrade tool of an earlier release on a segmented directory.** An old repair can remove the format marker and leave the segment data behind.
+
+**An interrupted first initialization** (stopped before the format marker was written) leaves a directory that `Open` refuses. No write was acknowledged from it: remove that new directory and initialize again.
+
 ## Migrate, verify and roll back
 
 Stop the source application. Set aside enough space for both stores and your backup. Supply the application's current topology JSON with its exact node, node list and topic counts. Opening a store performs ordinary recovery and can truncate an incomplete active tail. The CLI accepts a new destination with an existing parent. Keep the destination under exclusive operator control while the copy runs.

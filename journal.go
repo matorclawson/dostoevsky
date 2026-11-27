@@ -57,9 +57,51 @@ type journal struct {
 	torn   Truncation // the incomplete tail recover cut off, if any
 }
 
+// syncParent is syncDir, replaceable so a test can see which directories are synced.
+var syncParent = syncDir
+
+// mkdirDurable creates dir and any missing parents, and syncs the parent of each
+// directory it created, so that a host crash cannot lose the entry of a directory that
+// holds acknowledged data. The parent of dir is synced even when dir already exists: an
+// earlier start may have stopped between creating it and syncing. A parent that may not
+// be opened for reading is skipped in that case only.
+func mkdirDurable(dir string) error {
+	var missing []string
+	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
+		if _, err := os.Stat(p); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, p)
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if len(missing) == 0 {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		if err = syncParent(filepath.Dir(abs)); err != nil && !errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		return nil
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := syncParent(filepath.Dir(missing[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // One file descriptor owns the advisory lock for the lifetime of the node.
 func openJournal(dir string) (*journal, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := mkdirDurable(dir); err != nil {
 		return nil, err
 	}
 	if _, err := os.Stat(filepath.Join(dir, "journal.v1")); errors.Is(err, os.ErrNotExist) {

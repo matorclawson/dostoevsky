@@ -16,7 +16,7 @@ A TCP or unix-domain stream connection. One connection carries many requests at 
 
 The two plaintext cases are a choice to trust the local machine: a process that can listen at that address or path before the server does receives the token. A server refuses to listen in plaintext anywhere else. A client never falls back from TLS to plaintext.
 
-**Unix socket.** The server creates it inside a directory that only the server's user can enter (mode 0700), so that no other user can reach it at any moment, and gives the socket mode 0600. It does not follow a symbolic link. If anything already exists at the path it refuses to start, except that it may remove a socket owned by its own user, on which nothing answers, while it holds a lock for that path.
+**Unix socket.** The server creates it inside a directory that only the server's user can enter (mode 0700), so that no other user can reach it at any moment, and gives the socket mode 0600. It does not follow a symbolic link at that directory or at the socket. Every directory above it must belong to root or to the server's user and must not be writable by group or others unless it is sticky (as `/tmp` is); otherwise the server refuses to start. A client sends the token to whatever listens at the path, so it must use a path whose directories it trusts in the same way; the server cannot check that for it. If anything already exists at the path it refuses to start, except that it may remove a socket owned by its own user, on which nothing answers, while it holds a lock for that path.
 
 ## Handshake
 
@@ -185,3 +185,9 @@ Passing one of the first three closes the connection; after the idle one the ser
 ## Versions
 
 A server answers with the highest version both sides speak, or `unsupported_version`. Anything that changes bytes on the wire needs a new version; version 1 receivers reject flags and unknown types.
+
+## Notes on this implementation (`dostoevsky-server`)
+
+* **Read and position tasks are capped server-wide** (4,608 by default, `-read-tasks`), apart from the limit on waiting reads. At the cap a read is refused with the limit code before the record is looked up, even when it is stored.
+* **`storage_failure` does not say whether a write took effect.** After the server restarts, retry a publish with the same ID and content, and read the position before repeating a commit.
+

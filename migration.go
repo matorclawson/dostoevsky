@@ -50,7 +50,7 @@ func (n *Node) MigrateSegmented(ctx context.Context, dir string) error {
 				if len(batch) == 0 {
 					return nil
 				}
-				if err := dst.segmentAppend(frames, 0); err != nil {
+				if err := dst.segmentAppend(frames, 0, true); err != nil {
 					return err
 				}
 				start := l.active.end - int64(len(frames))

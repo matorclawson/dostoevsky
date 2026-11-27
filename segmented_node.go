@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,11 @@ import (
 
 const segmentMarker = "DOSTOEVSKY-SEGMENTED-01\n"
 const segmentTarget = 8 << 20
+
+// segmentPosLimit is the last byte position the sparse index can hold. A segment's tail
+// is bounded by the rollover target, but its start checkpoint holds every group's state
+// and is not. A variable so that a test can reach it.
+var segmentPosLimit int64 = math.MaxUint32
 
 func (n *Node) openSegments(dir string, raw []byte, requested bool) (bool, error) {
 	var b [len(segmentMarker)]byte
@@ -192,7 +198,9 @@ func (n *Node) segmentRoll(cp checkpoint3) error {
 	return nil
 }
 
-func (n *Node) segmentAppend(frames []byte, ceiling int64) error {
+// segmentAppend appends frames, rolling first when the active tail is full. indexed
+// says the frames hold records, whose positions the sparse index must be able to store.
+func (n *Node) segmentAppend(frames []byte, ceiling int64, indexed bool) error {
 	l := n.segments
 	if l.failed != nil {
 		return l.failed
@@ -216,6 +224,11 @@ func (n *Node) segmentAppend(frames []byte, ceiling int64) error {
 	}
 	if ceiling > 0 && int64(len(frames)) > ceiling-l.bytes {
 		return ErrJournalFull
+	}
+	// Refused before anything is written: a record past the limit would be acknowledged
+	// and then looked up at a truncated position.
+	if indexed && int64(len(frames)) > segmentPosLimit-l.active.end {
+		return fmt.Errorf("%w: the segment's checkpoint leaves no indexable room for records; reduce consumer group state", ErrLimit)
 	}
 	if err := l.append(frames); err != nil {
 		return err
@@ -322,7 +335,7 @@ func (n *Node) segmentBatch(ctx context.Context, items []Publication) ([]Record,
 	if len(buf) == 0 {
 		return out, nil
 	}
-	if e := n.segmentAppend(buf, n.maxBytes); e != nil {
+	if e := n.segmentAppend(buf, n.maxBytes, true); e != nil {
 		return nil, e
 	}
 	for p, pid := range pids {
@@ -357,7 +370,7 @@ func (n *Node) segmentCommit(s *stream, c checkpoint) error {
 	if e != nil {
 		return e
 	}
-	if e = n.segmentAppend(frame, n.commitCeiling()); e != nil {
+	if e = n.segmentAppend(frame, n.commitCeiling(), false); e != nil {
 		return e
 	}
 	if e = l.state.applyCommit(cmd); e != nil {

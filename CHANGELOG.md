@@ -4,6 +4,12 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — review fixes for the council candidate
+
+- `Open` syncs the parent of every directory it creates.
+- `dostoevsky-server` refuses a unix socket path below a directory another user can rewrite.
+- A segmented store refuses records it could not index (a segment checkpoint near 4 GiB) instead of acknowledging them.
+
 ## Unreleased — publishing with retained producer IDs
 
 - Sealed segments now have optional per-segment Bloom filters for producer ID lookups. Full-record comparison still determines duplicate receipts and conflicts. Missing, damaged or mismatched hints fall back to the verified exact index. Retention removes expired hints.
@@ -135,6 +141,6 @@ Integrates the post-0.3.0 publishing work (ZIP SHA-256 `fb422713f1b5550fa8c30ae9
 - **Repairing a damaged journal.** `Open` still stops at a frame that does not verify. New: `InspectJournal`, `RepairJournal` and the `dost-repair` command, which truncate after the last good frame only when asked, keep a copy of what they remove, and refuse to discard good frames that follow the damage without a second flag. `Node.Truncated` reports the torn final frame that `Open` removes, and the gateway logs it. `Open` no longer cuts a final frame whose announced length hides frames that verify: it refuses, as for other damage.
 - **A cap on the journal.** `Node.SetJournalCap` and the gateway's `-max-journal-mib` refuse publishes with `ErrJournalFull` (also `ErrLimit`) rather than let the file pass a size, with a reserve for commits so `Retain` can make room. Off by default. `Node.JournalSize` reports the size.
 - **Rust client.** Sets `TCP_NODELAY`, so a request body is sent without waiting for the server to acknowledge the request head.
-- **Faster open.** `Open` reads the journal in 1 MiB pieces and takes the topic, partition, offset and ID straight from a record frame it recognises, instead of building the whole record with `encoding/json`. It checks the same things as before: every checksum, and that each value and time decode. Anything unrecognised is decoded in full. Open time still grows with the history, and memory use is unchanged.
+- **Faster open.** `Open` reads the journal in 1 MiB pieces and takes the topic, partition, offset and ID straight from a record frame it recognises, instead of building the whole record with `encoding/json`. It checks the same things as before: every checksum, and that each value and time decode. Anything unrecognised is decoded in full. Open time still grows with the history.
 - **`wireserver` and `dostoevsky-server`.** A server for the [native wire protocol, version 1](docs/wire-v1.md): token handshake, TLS or loopback and unix sockets only, ordered publish and commit with queued publishes sharing a sync, read with bounded waiting, position, ping, per-connection window, server-wide request and reply budgets, connection limits and absolute deadlines. Standard library only. No speed or memory figure is claimed: none has been measured.
 - **`Node.Await`.** Waits until an offset can be read, without reading it.

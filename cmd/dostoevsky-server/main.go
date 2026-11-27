@@ -15,6 +15,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 
 	d "github.com/rodriveracom/dostoevsky"
@@ -57,6 +59,44 @@ func lockPath(path string) (*os.File, error) {
 	return f, nil
 }
 
+// trustedAncestry refuses a socket directory that another user could replace or
+// redirect. Every directory above it, along the path as written and along its resolved
+// form, must belong to root or to this user and must not be writable by group or others
+// unless it is sticky (as /tmp is). A symbolic link on the way must belong to root or to
+// this user. Clients send the token to this path, so it must not be someone else's to move.
+func trustedAncestry(dir string) error {
+	if slices.Contains(strings.Split(dir, string(filepath.Separator)), "..") {
+		return fmt.Errorf("socket directory %s: a path with .. is refused", dir)
+	}
+	written, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	resolved, err := filepath.EvalSymlinks(written)
+	if err != nil {
+		return err
+	}
+	for _, chain := range []string{written, resolved} {
+		for p := filepath.Dir(chain); ; p = filepath.Dir(p) {
+			info, err := os.Lstat(p)
+			if err != nil {
+				return err
+			}
+			st, ok := info.Sys().(*syscall.Stat_t)
+			if !ok || (st.Uid != 0 && int(st.Uid) != os.Geteuid()) {
+				return fmt.Errorf("socket directory %s: %s belongs to another user", dir, p)
+			}
+			if info.IsDir() && info.Mode().Perm()&0022 != 0 && info.Mode()&fs.ModeSticky == 0 {
+				return fmt.Errorf("socket directory %s: %s is writable by other users and is not sticky", dir, p)
+			}
+			if filepath.Dir(p) == p {
+				break
+			}
+		}
+	}
+	return nil
+}
+
 // listenUnix creates the socket at path inside a directory only this user can enter. A socket this user left behind
 // is removed only under the path's lock and when nothing answers on it.
 func listenUnix(path string) (net.Listener, error) {
@@ -70,6 +110,9 @@ func listenUnix(path string) (net.Listener, error) {
 	}
 	if !info.IsDir() || info.Mode().Perm()&0077 != 0 || !ownedByUs(info) {
 		return nil, fmt.Errorf("socket directory %s must be a directory of this user with mode 0700, not a link", dir)
+	}
+	if err := trustedAncestry(dir); err != nil {
+		return nil, err
 	}
 	lock, err := lockPath(path)
 	if err != nil {

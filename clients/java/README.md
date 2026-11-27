@@ -31,6 +31,8 @@ try (var c = NativeClient.connect("127.0.0.1", 8788, token)) {          // or Na
 
 Errors are `Client.ClientException`, or `NativeClient.ConnectionLost` whose `sent` true means the request may have taken effect. Nothing is retried and there is no reconnect. A reply is accepted only within 40 s of its request.
 
-**Reply matching.** A reply is accepted only for a request that had been written in full before the reply was read, and request ids are random, so a server is very unlikely to guess the id of a request it has not received. A server that is broken or hostile holds the token and can return any answer.
+**Reply matching.** A reply is accepted only for a request that had been written in full before the reply was read, and request ids are random, so a server is very unlikely to guess the id of a request it has not received. A server that has received only part of a request can still answer it early; the answer is refused if the client reads it before writing the rest, and may be believed if read afterwards, for example with a publish receipt for a record it never kept in full. Only a server that is broken or hostile does this, and such a server holds the token and can return any answer anyway.
+
+**Memory.** The ceilings of 256 requests and 4 MiB cover requests admitted to the connection; each thread waiting for room also holds the one frame it is waiting to send.
 
 Test with only a JDK, no Maven: `clients/java/test.sh`. The `pom.xml` is for a later, separate publishing decision.

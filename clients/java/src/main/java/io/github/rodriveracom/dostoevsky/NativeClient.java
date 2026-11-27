@@ -37,7 +37,13 @@ import java.util.concurrent.TimeUnit;
  * that may have reached the server has an unknown outcome ({@link ConnectionLost#sent}).
  *
  * <p>A reply is accepted only for a request that had been written in full before the reply was read. Request ids are
- * random, so a server is very unlikely to guess the id of a request it has not received.
+ * random, so a server is very unlikely to guess the id of a request it has not received. A server that has received
+ * only part of a request can still answer it early; the answer is refused if it is read before the rest is written,
+ * and believed if it is read afterwards. Only a broken or hostile server does this, and it holds the token and can
+ * return any answer anyway.
+ *
+ * <p>The ceilings of 256 requests and 4 MiB cover requests admitted to the connection. Each caller waiting for room
+ * also holds the one frame it is waiting to send.
  */
 public final class NativeClient implements AutoCloseable {
     /** The connection ended. {@code sent} true: the request may have taken effect. */
@@ -155,16 +161,18 @@ public final class NativeClient implements AutoCloseable {
         IOException last = new ConnectionLost(false);
         for (InetAddress address : addresses) {
             SocketChannel channel = SocketChannel.open();
+            NativeClient client = null;
             try {
                 channel.setOption(StandardSocketOptions.TCP_NODELAY, true);
                 if (sendBuffer > 0) channel.setOption(StandardSocketOptions.SO_SNDBUF, sendBuffer);
-                return start(channel, new InetSocketAddress(address, port), hello, deadline);
+                client = start(channel, new InetSocketAddress(address, port), hello, deadline);
+                return client;
             } catch (Client.ClientException e) {
-                channel.close();
                 throw e;
             } catch (IOException e) {
-                channel.close();
                 last = new ConnectionLost(false);
+            } finally {
+                if (client == null) channel.close();
             }
         }
         throw last;
@@ -173,15 +181,18 @@ public final class NativeClient implements AutoCloseable {
     /** Connects to a unix socket. */
     public static NativeClient connectUnix(Path path, String token) throws IOException {
         byte[] hello = hello(token);
+        SocketAddress address = UnixDomainSocketAddress.of(path); // a bad path fails before anything is opened
         SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX);
+        NativeClient client = null;
         try {
-            return start(channel, UnixDomainSocketAddress.of(path), hello, System.nanoTime() + HANDSHAKE_NANOS);
+            client = start(channel, address, hello, System.nanoTime() + HANDSHAKE_NANOS);
+            return client;
         } catch (Client.ClientException e) {
-            channel.close();
             throw e;
         } catch (IOException e) {
-            channel.close();
             throw new ConnectionLost(false);
+        } finally {
+            if (client == null) channel.close();
         }
     }
 

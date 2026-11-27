@@ -478,6 +478,7 @@ struct Waiting {
     slot: Arc<Slot>,
 }
 
+#[derive(Default)]
 struct State {
     dead: bool,
     pending: HashMap<u32, Waiting>,
@@ -752,15 +753,7 @@ impl NativeClient {
             .map_err(|_| NOT_SENT)?;
         let reading = stream.try_clone().map_err(|_| NOT_SENT)?;
         let shared = Arc::new(Shared {
-            state: Mutex::new(State {
-                dead: false,
-                pending: HashMap::new(),
-                unanswered: 0,
-                reserved: 0,
-                finishing: 0,
-                completed: 0,
-                last_id: 0,
-            }),
+            state: Mutex::new(State::default()),
             room: Condvar::new(),
             control: stream.try_clone().map_err(|_| NOT_SENT)?,
         });
@@ -1190,9 +1183,29 @@ mod tests {
         (client, server)
     }
 
-    fn reserve(client: &NativeClient, id: u32, sequence: u64) -> Arc<Slot> {
+    /// A client with no reader thread, so that nothing but the code under test ends it. The
+    /// listener is returned to keep the other end open.
+    fn unread() -> (NativeClient, TcpListener) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let client = NativeClient {
+            shared: Arc::new(Shared {
+                state: Mutex::new(State::default()),
+                room: Condvar::new(),
+                control: Stream::Tcp(stream.try_clone().unwrap()),
+            }),
+            writer: Mutex::new(Stream::Tcp(stream)),
+            window: MAX_IN_FLIGHT,
+            window_bytes: MAX_IN_FLIGHT_BYTES,
+            request_time: REQUEST_TIME,
+            reader: None,
+        };
+        (client, listener)
+    }
+
+    fn reserve(shared: &Shared, id: u32, sequence: u64, deadline: Instant) -> Arc<Slot> {
         let slot = Arc::new(Slot::default());
-        let mut state = lock(&client.shared.state);
+        let mut state = lock(&shared.state);
         state.reserved = sequence;
         state.pending.insert(
             id,
@@ -1200,16 +1213,20 @@ mod tests {
                 kind: PING,
                 size: 0,
                 sequence,
-                deadline: Instant::now() + Duration::from_secs(5),
+                deadline,
                 slot: Arc::clone(&slot),
             },
         );
         slot
     }
 
+    fn soon() -> Instant {
+        Instant::now() + Duration::from_secs(5)
+    }
+
     #[test]
     fn a_request_counts_as_written_only_at_its_last_write() {
-        let (client, server) = silent();
+        let (client, _listener) = unread();
         let shared = &client.shared;
         let mut seen = Vec::new();
         let data = vec![0; 2 * CHUNK + 1];
@@ -1227,30 +1244,52 @@ mod tests {
             .send(2, &data, |_| Err(io::ErrorKind::BrokenPipe.into()))
             .is_err());
         assert_eq!(lock(&shared.state).completed, 1);
-        drop(client);
-        server.join().unwrap();
     }
 
     #[test]
     fn a_reply_waits_for_the_write_and_never_precedes_it() {
-        let (client, server) = silent();
+        let (client, _listener) = unread();
+        let shared = &client.shared;
         // It began to arrive before the request's last write call: refused.
-        reserve(&client, 7, 1);
-        assert!(!client.shared.answer(REPLY | PING, 7, &[], 0));
+        reserve(shared, 7, 1, soon());
+        assert!(!shared.answer(REPLY | PING, 7, &[], 0));
         // It began to arrive during that call: delivered once the call has returned.
-        let slot = reserve(&client, 8, 2);
-        lock(&client.shared.state).finishing = 2;
+        let slot = reserve(shared, 8, 2, soon());
+        lock(&shared.state).finishing = 2;
         std::thread::scope(|scope| {
-            let reply = scope.spawn(|| client.shared.answer(REPLY | PING, 8, &[], 2));
+            let reply = scope.spawn(|| shared.answer(REPLY | PING, 8, &[], 2));
             std::thread::sleep(Duration::from_millis(100));
-            assert!(lock(&slot.answer).is_none(), "delivered before the write returned");
-            lock(&client.shared.state).completed = 2;
-            client.shared.room.notify_all();
+            assert!(
+                lock(&slot.answer).is_none(),
+                "delivered before the write returned"
+            );
+            lock(&shared.state).completed = 2;
+            shared.room.notify_all();
             assert!(reply.join().unwrap());
         });
         assert!(matches!(*lock(&slot.answer), Some(Ok(Reply::Done))));
-        drop(client);
-        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_late_reply_is_refused() {
+        let (client, _listener) = unread();
+        let shared = &client.shared;
+        let slot = reserve(shared, 7, 1, Instant::now());
+        {
+            let mut state = lock(&shared.state);
+            state.finishing = 1;
+            state.completed = 1;
+        }
+        assert!(!shared.answer(REPLY | PING, 7, &[], 1));
+        assert!(lock(&slot.answer).is_none());
+    }
+
+    #[test]
+    fn nothing_more_is_sent_after_an_expired_request() {
+        let (client, _listener) = unread();
+        let slot = reserve(&client.shared, 7, 1, Instant::now());
+        assert_eq!(client.ping().unwrap_err(), NOT_SENT);
+        assert!(matches!(&*lock(&slot.answer), Some(Err(e)) if *e == SENT));
     }
 
     #[test]

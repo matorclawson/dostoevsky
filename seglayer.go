@@ -521,20 +521,24 @@ var (
 const idxCacheSize = 32
 
 type segLog struct {
-	bytes     int64
-	fs        fsys
-	dir       string
-	indexLoad sync.Mutex // serializes cold index loads and publication of rebuilt sidecars
-	mu        sync.Mutex // guards ids, cache and pins
-	ids       []uint64   // sealed segment ids, ascending (the active segment is not in it)
-	active    *segment
-	state     *logState // as of Open: the state the active segment replays to
-	idx       *segIndex // the active segment's index: built by the scan, extended by observe
-	failed    error     // set by a failed write or roll: the log refuses further writes until reopened
+	filters    *idFilterCache // only used by the public node under its write lock
+	idProbes   uint64         // exact sealed ID lookups under the node write lock
+	indexLoads uint64         // cold index loads under indexLoad lock
+	bytes      int64
+	fs         fsys
+	dir        string
+	indexLoad  sync.Mutex // serializes cold index loads and publication of rebuilt sidecars
+	mu         sync.Mutex // guards ids, cache and pins
+	ids        []uint64   // sealed segment ids, ascending (the active segment is not in it)
+	active     *segment
+	state      *logState // as of Open: the state the active segment replays to
+	idx        *segIndex // the active segment's index: built by the scan, extended by observe
+	failed     error     // set by a failed write or roll: the log refuses further writes until reopened
 
-	cache      map[uint64]*segIndex // sealed segments' indexes, verified; a small bounded cache
-	cacheOrder []uint64
-	pins       segPins
+	cache        map[uint64]*segIndex // sealed segments' indexes, verified; a small bounded cache
+	cacheIDBytes int
+	cacheOrder   []uint64
+	pins         segPins
 
 	sealAsync bool // write a sealed segment's idx file in the background (the engine sets it); tests run it inline
 	wg        sync.WaitGroup
@@ -650,8 +654,16 @@ func (l *segLog) roll(cp checkpoint3) error {
 	info := idxFooterInfo{segment: old.id, size: uint64(old.end), lastPos: uint64(old.lastPos), lastCRC: old.lastCRC}
 	l.mu.Lock()
 	l.ids = append(l.ids, old.id)
+	oldIdx.footer = info
 	l.cachePut(old.id, oldIdx)
 	l.mu.Unlock()
+	if l.filters != nil {
+		if oldIdx.ids.n == 0 {
+			l.filters.put(old.id, idFilter{})
+		} else {
+			l.rememberFilter(old.id, oldIdx)
+		}
+	}
 	old.f.Close()
 	l.active, l.idx = seg, newSegIndex(startNextOf(st))
 	write := func() {
@@ -683,7 +695,10 @@ func (l *segLog) close() error {
 // writeIdxFile publishes seg-<id>.idx the way a segment is published: stage, write, fsync, rename,
 // fsync the directory. A failure leaves no idx file, which only costs a rebuild later.
 func (l *segLog) writeIdxFile(id uint64, data []byte) error {
-	tmp, final := filepath.Join(l.dir, idxTmpName(id)), filepath.Join(l.dir, idxName(id))
+	return l.writeHint(idxName(id), data)
+}
+func (l *segLog) writeHint(name string, data []byte) error {
+	tmp, final := filepath.Join(l.dir, name+".tmp"), filepath.Join(l.dir, name)
 	l.fs.Remove(tmp) // a leftover from a crashed attempt
 	f, err := l.fs.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -715,8 +730,13 @@ func (l *segLog) cachePut(id uint64, x *segIndex) {
 	if _, ok := l.cache[id]; !ok {
 		l.cacheOrder = append(l.cacheOrder, id)
 	}
+	if prev := l.cache[id]; prev != nil {
+		l.cacheIDBytes -= len(prev.ids.keys) * 16
+	}
 	l.cache[id] = x
-	for len(l.cacheOrder) > idxCacheSize {
+	l.cacheIDBytes += len(x.ids.keys) * 16
+	for len(l.cacheOrder) > idxCacheSize || (len(l.cacheOrder) > 1 && l.cacheIDBytes > 8<<20) {
+		l.cacheIDBytes -= len(l.cache[l.cacheOrder[0]].ids.keys) * 16
 		delete(l.cache, l.cacheOrder[0])
 		l.cacheOrder = l.cacheOrder[1:]
 	}
@@ -747,24 +767,31 @@ func (l *segLog) loadIdxFile(id uint64) (*segIndex, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = l.checkIndexSegment(id, info); err != nil {
+		return nil, err
+	}
+	x.footer = info
+	return x, nil
+}
+func (l *segLog) checkIndexSegment(id uint64, info idxFooterInfo) error {
 	seg, err := l.fs.OpenFile(filepath.Join(l.dir, segName(id)), os.O_RDONLY, 0)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer seg.Close()
 	segSize, err := seg.Size()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if info.segment != id || info.size != uint64(segSize) || info.lastPos < segHeaderSize || info.lastPos >= info.size {
-		return nil, fmt.Errorf("%w: it describes segment %d of %d bytes, not segment %d of %d", errIdxInvalid, info.segment, info.size, id, segSize)
+		return fmt.Errorf("%w: it describes segment %d of %d bytes, not segment %d of %d", errIdxInvalid, info.segment, info.size, id, segSize)
 	}
 	fr := &frameReader{f: seg, size: segSize}
 	_, _, n, err := fr.next(int64(info.lastPos))
 	if err != nil || int64(info.lastPos)+int64(n) != segSize || binary.LittleEndian.Uint32(fr.buf[int64(info.lastPos)-fr.bufAt+10:]) != info.lastCRC {
-		return nil, fmt.Errorf("%w: the last frame does not match the segment", errIdxInvalid)
+		return fmt.Errorf("%w: the last frame does not match the segment", errIdxInvalid)
 	}
-	return x, nil
+	return nil
 }
 
 // rebuildIdx scans one sealed segment (read-only) and builds its index, then tries to write it back.
@@ -781,6 +808,7 @@ func (l *segLog) rebuildIdx(id uint64) (*segIndex, error) {
 	l.rebuilds++
 	l.mu.Unlock()
 	info := idxFooterInfo{segment: id, size: uint64(seg.end), lastPos: uint64(seg.lastPos), lastCRC: seg.lastCRC}
+	idx.footer = info
 	if err := l.writeIdxFile(id, encodeSegIndex(idx, info)); err != nil {
 		l.mu.Lock()
 		l.idxErr = err
@@ -806,6 +834,7 @@ func (l *segLog) sealedIndex(id uint64) (*segIndex, error) {
 	if x != nil {
 		return x, nil
 	}
+	l.indexLoads++
 	x, err := l.loadIdxFile(id)
 	if err != nil {
 		if x, err = l.rebuildIdx(id); err != nil {
@@ -877,14 +906,21 @@ func (l *segLog) unpin(id uint64) {
 func (l *segLog) removeSegmentFiles(id uint64) {
 	l.fs.Remove(filepath.Join(l.dir, segName(id)))
 	l.fs.Remove(filepath.Join(l.dir, idxName(id)))
+	l.fs.Remove(filepath.Join(l.dir, filterName(id)))
 }
 
 // retire takes a sealed segment out of the log (retention): it is no longer found, and its files
 // are removed now, or by the last reader or backup that holds it.
 func (l *segLog) retire(id uint64) {
+	if l.filters != nil {
+		l.filters.remove(id)
+	}
 	l.mu.Lock()
 	if i := slices.Index(l.ids, id); i >= 0 {
 		l.ids = slices.Delete(l.ids, i, i+1)
+	}
+	if x := l.cache[id]; x != nil {
+		l.cacheIDBytes -= len(x.ids.keys) * 16
 	}
 	delete(l.cache, id)
 	l.cacheOrder = slices.DeleteFunc(l.cacheOrder, func(x uint64) bool { return x == id })
@@ -901,6 +937,11 @@ func (l *segLog) readRecord(pid uint32, off uint64) (record3, error) {
 	if err != nil {
 		return record3{}, err
 	}
+	return l.readLocatedRecord(id, pos, pid, off)
+}
+
+func (l *segLog) readLocatedRecord(id uint64, pos int64, pid uint32, off uint64) (record3, error) {
+	var err error
 	var f fsFile
 	var size int64
 	if l.active != nil && id == l.active.id {
@@ -956,13 +997,45 @@ func (l *segLog) findIDs(pid uint32, id []byte, window int, visit func(seg, off 
 			return nil
 		}
 	}
-	l.mu.Lock()
-	ids := slices.Clone(l.ids)
-	l.mu.Unlock()
+	// Public publishers hold Node.mu for this lookup and for rollover/retirement.
+	var ids []uint64
+	var ordered []idFilter
+	mixed := mixFilterHash(h)
+	if l.filters != nil {
+		ids = l.ids
+		ordered = l.filters.orderedFilters(ids)
+	} else {
+		l.mu.Lock()
+		ids = slices.Clone(l.ids)
+		l.mu.Unlock()
+	}
 	for k := len(ids) - 1; k >= 0 && k >= len(ids)-window; k-- {
+		if ordered != nil {
+			if !ordered[k].contains(mixed) {
+				continue
+			}
+		} else if l.filters != nil {
+			f, ok := l.filters.entries[ids[k]]
+			if !ok {
+				if loaded, err := l.readFilter(ids[k]); err == nil {
+					f = loaded
+					ok = true
+					l.filters.put(ids[k], loaded)
+				}
+			}
+			if ok && !f.contains(mixed) {
+				continue
+			}
+		}
+		l.idProbes++
 		x, err := l.sealedIndex(ids[k])
 		if err != nil {
 			return err
+		}
+		if l.filters != nil {
+			if _, exists := l.filters.entries[ids[k]]; !exists {
+				l.rememberFilter(ids[k], x)
+			}
 		}
 		x.ids.lookup(h, func(off uint64) bool { stop = visit(ids[k], off); return stop })
 		if stop {

@@ -101,6 +101,7 @@ type idxPart struct {
 }
 
 type segIndex struct {
+	footer              idxFooterInfo     // identity verified on load or captured on seal
 	startNext           map[uint32]uint64 // every partition's next offset when the segment began (its start checkpoint)
 	parts               map[uint32]*idxPart
 	ids                 idTable

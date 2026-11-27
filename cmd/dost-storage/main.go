@@ -22,12 +22,13 @@ func main() {
 	}
 }
 func run() (err error) {
-	mode := flag.String("mode", "verify", "verify, migrate or backup")
+	mode := flag.String("mode", "verify", "verify, prepare-ids, migrate or backup")
 	data := flag.String("data", "", "existing node directory")
 	config := flag.String("config", "", "JSON file with the stored Node, Nodes and Topics")
 	dest := flag.String("dest", "", "new destination for migrate or backup")
 	flag.Parse()
-	if *data == "" || *config == "" || flag.NArg() != 0 || (*mode != "verify" && *mode != "migrate" && *mode != "backup") || (*mode == "verify") != (*dest == "") {
+	inspection := *mode == "verify" || *mode == "prepare-ids"
+	if *data == "" || *config == "" || flag.NArg() != 0 || (!inspection && *mode != "migrate" && *mode != "backup") || inspection != (*dest == "") {
 		return errors.New("supply -mode, -data, -config and a new -dest for migrate or backup")
 	}
 	fi, err := os.Stat(filepath.Join(*data, "journal.v1"))
@@ -53,6 +54,8 @@ func run() (err error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	switch *mode {
+	case "prepare-ids":
+		return n.PrepareIDFilters(ctx)
 	case "verify":
 		return n.VerifySegments(ctx)
 	case "migrate":

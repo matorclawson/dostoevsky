@@ -4,6 +4,12 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — publishing with retained producer IDs
+
+- Sealed segments now have optional per-segment Bloom filters for producer ID lookups. Full-record comparison still determines duplicate receipts and conflicts. Missing, damaged or mismatched hints fall back to the verified exact index. Retention removes expired hints.
+- Added a 64 MiB budget for resident filter bits and an 8 MiB target for cached exact ID tables, with room for one oversized table. Retry lookups read directly from the matching segment.
+- Added `PrepareIDFilters` and offline `dost-storage -mode prepare-ids`, deep-history publish and rollover measurements, and native-protocol peer benchmarks with identified messages and restart verification.
+
 ## Unreleased — segmented storage recovery
 
 - Added opt-in segmented storage to the public Go node and native server, with format discovery on reopen and durable checkpoints for topology, offsets, floors and consumer groups.

@@ -92,10 +92,10 @@ class Native:
             self.close()
             raise
 
-    def publish(self, data):
+    def publish(self, data, msg_id=""):
         client = self.available.get()
         try:
-            return client.publish(TOPIC, data).offset
+            return client.publish(TOPIC, data, id=msg_id).offset
         except self.connection_lost as exc:
             if exc.sent:
                 raise AmbiguousOutcome("connection ended after submission") from exc
@@ -117,14 +117,14 @@ class Native:
 class Kafka:
     """confluent-kafka (librdkafka): acks=all, no retries, no idempotence, one message per batch."""
 
-    def __init__(self, addr, token, workers):
+    def __init__(self, addr, token, workers, identified=False):
         from confluent_kafka import Consumer, Producer, TopicPartition  # noqa: F401
         import confluent_kafka
         # The package and the librdkafka it bundles: the wheel's native half is part of what is measured.
         self.client_name = _version("confluent-kafka") + "+librdkafka-" + confluent_kafka.libversion()[0]
         self._addr = addr
         self._p = Producer({
-            "bootstrap.servers": addr, "acks": "all", "enable.idempotence": False, "retries": 0,
+            "bootstrap.servers": addr, "acks": "all", "enable.idempotence": identified, "retries": 3 if identified else 0,
             "linger.ms": 0, "batch.num.messages": 1, "queue.buffering.max.messages": 100000,
         })
         self.delivery_timeout = 60.0
@@ -139,7 +139,7 @@ class Kafka:
         while not self._stop.is_set():
             self._p.poll(0.02)
 
-    def publish(self, data):
+    def publish(self, data, msg_id=None):
         done, box = threading.Event(), []
         abandoned = threading.Event()
 
@@ -149,7 +149,7 @@ class Kafka:
             box.append((err, msg))
             done.set()
 
-        self._p.produce(TOPIC, value=data, on_delivery=delivered)
+        self._p.produce(TOPIC, value=data, key=msg_id, on_delivery=delivered)
         if not done.wait(self.delivery_timeout):
             abandoned.set()
             self._timed_out = True  # the message may still be queued: close() purges instead of flushing it
@@ -206,8 +206,8 @@ class Nats:
     def _run(self, coro, timeout=90):
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
 
-    def publish(self, data):
-        return self._run(self._js.publish(TOPIC, data, timeout=60)).seq
+    def publish(self, data, msg_id=None):
+        return self._run(self._js.publish(TOPIC, data, timeout=60, headers={"Nats-Msg-Id": msg_id} if msg_id else None)).seq
 
     def read(self, offset):
         return self._run(self._js.get_msg("EVENTS", seq=offset)).data

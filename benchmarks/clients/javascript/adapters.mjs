@@ -201,8 +201,8 @@ export async function nats(addr, token) {
   const js = jetstream(nc);
   return {
     clientName: identity("nats"),
-    publish: async (data) => {
-      try { return BigInt((await js.publish(TOPIC, data, { timeout: 60000 })).seq); } catch (e) { throw ambiguousIfTimeout(e); }
+    publish: async (data, msgID) => {
+      try { return BigInt((await js.publish(TOPIC, data, { timeout: 60000, msgID })).seq); } catch (e) { throw ambiguousIfTimeout(e); }
     },
     read: async (offset) => (await jsm.streams.getMessage("EVENTS", { seq: Number(offset) })).data,
     close: async () => { await nc.close(); },
@@ -243,7 +243,7 @@ export async function native(addr, token) {
   const c = await NativeClient.connect({host: endpoint.hostname, port: Number(endpoint.port)}, token);
   return {
     clientName: ownClientName(), clientBuild: buildId(),
-    publish: async (data) => (await c.publish(TOPIC, data)).offset,
+    publish: async (data, id = "") => (await c.publish(TOPIC, data, {id})).offset,
     read: async (offset) => {
       const record = await c.read(TOPIC, 0, offset);
       if (record === null) throw new Error(`missing offset ${offset}`);

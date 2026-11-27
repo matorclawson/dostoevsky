@@ -208,3 +208,23 @@ dev-storage-catalog: ## Measure recovery with many one-record topics and consume
 	@mkdir -p .dev/bin "$(RECOVERY_PARENT)"
 	@"$(GO)" build -o .dev/bin/catalog ./benchmarks/catalog
 	@set -eu; d=$$(mktemp -d "$(RECOVERY_PARENT)/catalog-XXXXXX"); trap 'rm -rf "$$d"' EXIT; .dev/bin/catalog -seed -dir "$$d" -topics "$(RECOVERY_TOPICS)"; .dev/bin/catalog -dir "$$d" -topics "$(RECOVERY_TOPICS)"
+
+ID_HISTORY ?= 1000000
+ID_ROUNDS ?= 3
+ID_PYTHON ?= python3
+.PHONY: dev-id-publish dev-id-peers dev-id-eventloop
+dev-id-publish: ## Compare identified publishes with 1 and 32 workers on a disposable Linux volume
+	@mkdir -p .dev/bin "$(RECOVERY_PARENT)"
+	@"$(GO)" build -o .dev/bin/id-fixture ./benchmarks/idpublish
+	@"$(GO)" test -c -o .dev/bin/id-workload .
+	@python3 benchmarks/idpublish/local.py .dev/bin/id-fixture .dev/bin/id-workload "$(RECOVERY_PARENT)" "$(ID_HISTORY)" --rounds "$(ID_ROUNDS)"
+
+dev-id-peers: ## Compare loopback native clients and verify receipts after SIGKILL (Linux)
+	@mkdir -p .dev/bin
+	@"$(GO)" build -o .dev/bin/dostoevsky-server ./cmd/dostoevsky-server
+	@ID_NATIVE_BIN="$(CURDIR)/.dev/bin/dostoevsky-server" BENCH_NATIVE_SERVER="$(CURDIR)/benchmarks/idpublish/segmented-server.sh" PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=clients/python "$(ID_PYTHON)" benchmarks/idpublish/peers.py --rounds "$(ID_ROUNDS)"
+
+dev-id-eventloop: ## Cross-check identified publish throughput with JavaScript native and JetStream clients
+	@mkdir -p .dev/bin
+	@"$(GO)" build -o .dev/bin/dostoevsky-server ./cmd/dostoevsky-server
+	@ID_NATIVE_BIN="$(CURDIR)/.dev/bin/dostoevsky-server" BENCH_NATIVE_SERVER="$(CURDIR)/benchmarks/idpublish/segmented-server.sh" node benchmarks/idpublish/eventloop.mjs

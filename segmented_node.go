@@ -123,6 +123,7 @@ func (n *Node) openSegments(dir string, raw []byte, requested bool) (bool, error
 	if log.active.torn.Bytes > 0 {
 		n.truncated = log.active.torn
 	}
+	log.filters = &idFilterCache{entries: make(map[uint64]idFilter)}
 	n.segments = log
 	n.rollBytes = segmentTarget
 	ok = true
@@ -146,17 +147,31 @@ func (n *Node) segmentPrior(p Partition, id string) (*Record, error) {
 	}
 	var found *Record
 	var readErr error
-	err := l.findIDs(pid, []byte(id), len(l.ids), func(_, off uint64) bool {
+	err := l.findIDs(pid, []byte(id), len(l.ids), func(segment, off uint64) bool {
 		if off < uint64(l.state.parts[pid].base) {
 			return false
 		}
-		r, e := n.segmentRecord(p, int64(off))
+		index := l.idx
+		if segment != l.active.id {
+			var err error
+			index, err = l.sealedIndex(segment)
+			if err != nil {
+				readErr = err
+				return true
+			}
+		}
+		pos, ok := index.find(pid, off)
+		if !ok {
+			readErr = ErrCorruptLog
+			return true
+		}
+		rec, e := l.readLocatedRecord(segment, pos, pid, off)
 		if e != nil {
 			readErr = e
 			return true
 		}
-		if r.ID == id {
-			found = &r
+		if string(rec.ID) == id {
+			found = &Record{Partition: p, Offset: int64(off), Time: nanosToTime(rec.Time), Message: Message{Key: string(rec.Key), ID: id, Value: rec.Value}}
 			return true
 		}
 		return false

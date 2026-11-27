@@ -55,6 +55,7 @@ type journal struct {
 	// synced is true once the file's size and metadata were made durable with a
 	// full sync. Until then appends use full sync; afterwards fdatasync.
 	synced bool
+	torn   Truncation // the incomplete tail recover cut off, if any
 }
 
 // One file descriptor owns the advisory lock for the lifetime of the node.
@@ -99,7 +100,10 @@ func openJournal(dir string) (*journal, error) {
 	return &journal{path: path, file: f, lock: lock}, nil
 }
 
-func (j *journal) append(e entry) (location, error) {
+func (j *journal) append(e entry) (location, error) { return j.appendWithin(e, 0) }
+
+// appendWithin appends e unless that would take the journal past ceiling bytes (zero: no ceiling).
+func (j *journal) appendWithin(e entry, ceiling int64) (location, error) {
 	var loc location
 	if j.failed != nil {
 		return loc, j.failed
@@ -111,6 +115,9 @@ func (j *journal) append(e entry) (location, error) {
 	// Avoid retaining unusually large payloads for the lifetime of the node.
 	if cap(frame) <= 16<<10 {
 		j.frame = frame[:0]
+	}
+	if ceiling > 0 && j.end+int64(len(frame)) > ceiling {
+		return loc, ErrJournalFull
 	}
 	loc = location{j.end + 20, len(frame) - 20}
 	return loc, j.writeFrames(frame)
@@ -201,6 +208,15 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		loc := location{j.end + 20, size}
 		next := loc.at + int64(size)
 		if next > info.Size() {
+			// An interrupted append cannot have complete frames inside what it announced. If there are some, the length
+			// is wrong, not the write unfinished: cutting here would discard them.
+			later, err := laterFrames(j.file, j.end+1, info.Size())
+			if err != nil {
+				return err
+			}
+			if later > 0 {
+				return fmt.Errorf("frame at %d announces more bytes than remain, yet %d frames that verify follow: not truncating", j.end, later)
+			}
 			break
 		}
 		if cap(payload) < size {
@@ -228,6 +244,7 @@ func (j *journal) recover(apply func(entry, location) error) error {
 		j.end = next
 	}
 	if j.end != info.Size() {
+		j.torn = Truncation{At: j.end, Bytes: info.Size() - j.end}
 		if err = j.file.Truncate(j.end); err != nil {
 			return err
 		}

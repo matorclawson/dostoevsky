@@ -113,6 +113,9 @@ func (n *Node) publishBatchLocked(ctx context.Context, items []Publication) ([]R
 		writes = append(writes, staged{i, location{n.j.end + int64(start) + 20, len(frames) - start - 20}})
 	}
 	if len(writes) > 0 {
+		if n.maxBytes > 0 && n.j.end+int64(len(frames)) > n.maxBytes {
+			return nil, ErrJournalFull // before any write: the whole batch is refused
+		}
 		if e := n.j.writeFrames(frames); e != nil {
 			return nil, e
 		}

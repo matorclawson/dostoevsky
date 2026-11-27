@@ -3,7 +3,7 @@
 # Run from the project root on the benchmark host with TMPDIR on the data disk.
 #   BENCH_ENGINES="dostoevsky jetstream sqlite redis valkey" \
 # (gateway: the control for the language client benchmarks. Chart label to use in the plots meta:
-#  label.gateway=gateway end to end (HTTP, process boundary); harness and gateway each run GOMAXPROCS=1)
+#  label.gateway=gateway end to end (HTTP, process boundary); the gateway as the language cells get it, unpinned; the equal-budget variant, harness and gateway each GOMAXPROCS=1, is the separate row gateway-pinned1)
 #   REDIS_BIN=/opt/bench/redis-8.12.0/src/redis-server \
 #   VALKEY_BIN=/opt/bench/valkey-9.2.0/bin/valkey-server \
 #   KAFKA_HOME=/opt/bench/kafka_2.13-4.4.0 JAVA_HOME=/opt/bench/jdk-21 \
@@ -21,7 +21,7 @@ rounds=${BENCH_ROUNDS:-5}
 (cd benchmarks/embedded && CGO_ENABLED=0 "${GO:-go}" build -mod=readonly -buildvcs=false -o ../../.dev/embedded/ ./cmd/...) || exit 2
 # The gateway control engine needs the gateway binary, built from the same checkout.
 case " $engines " in
- *" gateway "*)
+ *" gateway "*|*" gateway-pinned1 "*)
   if [ -z "${GATEWAY_BIN:-}" ]; then
    (CGO_ENABLED=0 "${GO:-go}" build -mod=readonly -buildvcs=false -o .dev/embedded/dostoevsky-gateway ./cmd/dostoevsky-gateway) || exit 2
   fi
@@ -42,7 +42,8 @@ run_engine() { # engine workers
  case "$1" in
   dostoevsky) .dev/embedded/dost -workers "$2" -count "$count" ;;
   jetstream) .dev/embedded/jet -workers "$2" -count "$count" ;;
-  gateway) GOMAXPROCS=1 BENCH_GATEWAY_GOMAXPROCS=1 BENCH_SERVER_BIN="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}" .dev/embedded/gateway -workers "$2" -count "$count" ;;
+  gateway) BENCH_SERVER_BIN="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}" .dev/embedded/gateway -workers "$2" -count "$count" ;;
+  gateway-pinned1) GOMAXPROCS=1 BENCH_GATEWAY_GOMAXPROCS=1 BENCH_SERVER_BIN="${GATEWAY_BIN:-.dev/embedded/dostoevsky-gateway}" .dev/embedded/gateway -workers "$2" -count "$count" ;;
   sqlite) .dev/embedded/sqlite -workers "$2" -count "$count" ;;
   redis) BENCH_ENGINE_LABEL=redis BENCH_SERVER_BIN="${REDIS_BIN:?set REDIS_BIN}" .dev/embedded/redis -workers "$2" -count "$count" ;;
   valkey) BENCH_ENGINE_LABEL=valkey BENCH_SERVER_BIN="${VALKEY_BIN:?set VALKEY_BIN}" .dev/embedded/redis -workers "$2" -count "$count" ;;

@@ -331,7 +331,11 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 	}
 	if comparisonMode(expectedEngines) {
 		if err := requireComparisonMeta(expectedEngines, meta); err != nil {
-			return fmt.Errorf("%s: %w", metaPath, err)
+			from := metaPath
+			if len(expectedEngines) > maxSeries { // the selection is at fault, not the metadata
+				from = "-engines"
+			}
+			return fmt.Errorf("%s: %w", from, err)
 		}
 	}
 	notShown = leftOut(trials, expectedEngines, ignoredEngines)
@@ -520,10 +524,22 @@ func renderBars(c chart, data []series, footer []string) string {
 	sort.Ints(ws)
 	step, steps := ticks(maxV)
 	top1 := step * float64(steps)
-	plotW, plotH := float64(width-left-right), float64(base-top)
+	plotW := float64(width - left - right)
+	verdict := winners(data, c.lower)
+	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", c.note + " " + verdict}
+	if c.explain != "" && losing(data, c.lower) {
+		subtitle[1] += " " + c.explain
+	}
+	subLines := wrap(subtitle, 100)
+	// A subtitle that wraps to three lines must not run into the top gridline: the plot starts below
+	// its last line (two-line subtitles leave the plot where it always was).
+	plotTop := float64(top)
+	if need := float64(46+15*(len(subLines)-1)) + 14; need > plotTop {
+		plotTop = need
+	}
+	plotH := float64(base) - plotTop
 	y := func(v float64) float64 { return float64(base) - v/top1*plotH }
 
-	verdict := winners(data, c.lower)
 	var b strings.Builder
 	footer = wrap(footer, 112)
 	groupW := plotW / float64(len(ws))
@@ -532,11 +548,7 @@ func renderBars(c chart, data []series, footer []string) string {
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
 	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict+notShownSentence()), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
-	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", c.note + " " + verdict}
-	if c.explain != "" && losing(data, c.lower) {
-		subtitle[1] += " " + c.explain
-	}
-	for i, line := range wrap(subtitle, 100) {
+	for i, line := range subLines {
 		fmt.Fprintf(&b, `<text x="%d" y="%d" font-size="12" class="m">%s</text>`+"\n", left, 46+i*15, html.EscapeString(line))
 	}
 	for i := 0; i <= steps; i++ {

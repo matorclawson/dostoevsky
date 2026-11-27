@@ -141,7 +141,22 @@ func cutoffStatus() string {
 func Main(engine string, open func(string, bool) (Store, error)) {
 	count := flag.Int("count", 2000, "records per run")
 	workers := flag.Int("workers", 1, "concurrent synchronous producers")
+	window := flag.Duration("window", 0, "sustained mode: the fixed window (0: the ordinary trial)")
+	target := flag.Int64("target", 100_000_000, "sustained mode: stop at this many acknowledged messages")
+	bucket := flag.Duration("bucket", 5*time.Minute, "sustained mode: reporting bucket")
+	reopenEvery := flag.Int64("reopen-every", 0, "sustained mode: close, reopen and verify every this many messages (0: only at the end)")
+	keepLast := flag.Int64("keep-last", 0, "sustained mode: with a retaining engine, keep about this many recent records (0: none)")
+	retainEvery := flag.Duration("retain-every", 30*time.Second, "sustained mode: how often retention runs")
+	minFreeDisk := flag.Uint64("min-free-disk-mib", 3072, "sustained mode: stop when the data disk has less free space than this")
 	flag.Parse()
+	if *window > 0 {
+		o := Sustained{Window: *window, Target: *target, Workers: *workers, Bucket: *bucket, ReopenEvery: *reopenEvery, KeepLast: *keepLast, RetainEvery: *retainEvery, MinFreeDiskKiB: *minFreeDisk << 10}
+		if err := executeSustained(engine, open, o, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "FAILED:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := execute(engine, open, *count, *workers, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)

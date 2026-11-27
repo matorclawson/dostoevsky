@@ -259,6 +259,12 @@ func TestAClientAcceptsOnlyAUsableWelcome(t *testing.T) {
 			t.Errorf("%+v: %v", w, err)
 		}
 	}
+	// A later version is refused even by a caller that offered it.
+	later := good
+	later.Version = Version + 1
+	if err := later.Accept(9); !errors.Is(err, ErrProtocol) {
+		t.Errorf("later version: %v", err)
+	}
 	var refused *RequestError
 	if err := (Welcome{Status: Unauthorized}).Accept(1); !errors.As(err, &refused) || refused.Code != Unauthorized {
 		t.Errorf("refusal: %v", err)

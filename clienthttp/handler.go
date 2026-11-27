@@ -63,6 +63,7 @@ func fail(w http.ResponseWriter, err error) {
 		{d.ErrOwner, 409, "wrong_owner"},
 		{d.ErrConflict, 409, "conflict"},
 		{d.ErrExpired, 410, "expired"},
+		{d.ErrJournalFull, 507, "journal_full"}, // before ErrLimit, which it also is
 		{d.ErrLimit, 413, "limit"},
 		{d.ErrClosed, 503, "closed"},
 		{context.DeadlineExceeded, 504, "timeout"},

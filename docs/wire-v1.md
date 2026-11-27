@@ -43,7 +43,7 @@ WELCOME, always 17 bytes:
 | window | u16 | requests a connection may have unanswered |
 | window_bytes | u32 | request bytes a connection may have unanswered |
 
-With a status other than 0, every later field is 0 and the server closes. A wrong magic, nonzero flags or a token_len above 4096 closes the connection with no reply. Before authentication a server reads at most 4,106 bytes. A token shorter than 16 bytes is `unauthorized`. The token is checked before the version. A server compares tokens in constant time (compare their SHA-256 digests, so length does not leak either) and never logs them.
+With a status other than 0, every later field is 0 and the server closes. A wrong magic, nonzero flags or a token_len above 4096 closes the connection with no reply. Before authentication a server reads at most 4,106 bytes. A token shorter than 16 bytes is `unauthorized`. The token is checked before the version. A server compares tokens in constant time (compare their SHA-256 digests, so the comparison does not show where they differ; hashing them still takes time that grows with a token's length) and never logs them.
 
 A client validates WELCOME before it sends anything else: the magic; status 0; 1 <= version <= the max_version it sent; max_body exactly 1,056,768 in version 1; window at least 1; window_bytes at least max_body + 10, so that every legal frame can be admitted. Otherwise it closes. It does not retry with weaker transport security.
 

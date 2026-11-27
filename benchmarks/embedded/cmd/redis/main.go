@@ -24,6 +24,15 @@ const stream = "events"
 type store struct {
 	client *redis.Client
 	proc   *serverproc.Proc
+	// ctx is nil outside tests: commands then run under the harness's run context.
+	ctx func() context.Context
+}
+
+func (s store) context() context.Context {
+	if s.ctx != nil {
+		return s.ctx()
+	}
+	return run.Context()
 }
 
 // A stream ID is "<milliseconds>-<sequence>". Pack it into the harness's uint64
@@ -47,7 +56,7 @@ func pack(id string) (uint64, error) {
 func unpack(v uint64) string { return fmt.Sprintf("%d-%d", v>>16, v&0xffff) }
 
 func (s store) Publish(data []byte) (uint64, error) {
-	id, err := s.client.XAdd(context.Background(), &redis.XAddArgs{Stream: stream, Values: map[string]any{"d": data}}).Result()
+	id, err := s.client.XAdd(s.context(), &redis.XAddArgs{Stream: stream, Values: map[string]any{"d": data}}).Result()
 	if err != nil {
 		return 0, err
 	}
@@ -56,7 +65,14 @@ func (s store) Publish(data []byte) (uint64, error) {
 
 func (s store) Read(v uint64) ([]byte, error) {
 	id := unpack(v)
-	msgs, err := s.client.XRange(context.Background(), stream, id, id).Result()
+	// go-redis does not interrupt a read already on the socket when its context is cancelled, so the wait itself is bound
+	// to the run context. Verification only: the timed publish path has no extra goroutine.
+	ctx := s.context()
+	var msgs []redis.XMessage
+	err := run.Within(ctx, 60*time.Second, func() (e error) {
+		msgs, e = s.client.XRange(ctx, stream, id, id).Result()
+		return e
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +239,6 @@ func main() {
 		if err = client.XLen(ctx, stream).Err(); err != nil {
 			return fail(err)
 		}
-		return store{client, proc}, nil
+		return store{client: client, proc: proc}, nil
 	})
 }

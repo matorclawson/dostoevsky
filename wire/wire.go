@@ -439,8 +439,9 @@ func ReadHello(r io.Reader) (Hello, error) {
 	return h, nil
 }
 
-// Authenticate answers a HELLO: OK, Unauthorized or UnsupportedVersion, the token checked first. The comparison takes
-// the same time whatever the offered token holds or how long it is.
+// Authenticate answers a HELLO: OK, Unauthorized or UnsupportedVersion, the token checked first. It compares SHA-256
+// digests in constant time, so the comparison does not show where the tokens differ. Hashing them first still takes
+// time that grows with each token's length.
 func Authenticate(h Hello, token []byte) Code {
 	offered, want := sha256.Sum256(h.Token), sha256.Sum256(token)
 	same := subtle.ConstantTimeCompare(offered[:], want[:]) == 1
@@ -483,7 +484,8 @@ func ParseWelcome(b []byte) (Welcome, error) {
 		binary.LittleEndian.Uint16(b[11:]), binary.LittleEndian.Uint32(b[13:])}, nil
 }
 
-// Accept is the client's validation of a WELCOME, given the highest version it offered. A refusal by the server (a
+// Accept is the client's validation of a WELCOME, given the highest version it offered. A version this package cannot
+// decode is not accepted, whatever was offered. A refusal by the server (a
 // known status with every later field zero) is a *RequestError with that status; any other unacceptable WELCOME is
 // ErrProtocol. Both end the connection.
 func (w Welcome) Accept(offered uint16) error {
@@ -493,7 +495,7 @@ func (w Welcome) Accept(offered uint16) error {
 		}
 		return refuse(w.Status)
 	}
-	if w.Version < 1 || w.Version > offered || w.MaxBody != MaxBody || w.Window < 1 || w.WindowBytes < MaxBody+HeaderSize {
+	if w.Version < 1 || w.Version > offered || w.Version > Version || w.MaxBody != MaxBody || w.Window < 1 || w.WindowBytes < MaxBody+HeaderSize {
 		return ErrProtocol
 	}
 	return nil

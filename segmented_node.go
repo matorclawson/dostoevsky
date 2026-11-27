@@ -153,18 +153,9 @@ func (n *Node) segmentPrior(p Partition, id string) (*Record, error) {
 	}
 	var found *Record
 	var readErr error
-	err := l.findIDs(pid, []byte(id), len(l.ids), func(segment, off uint64) bool {
+	err := l.findIDs(pid, []byte(id), len(l.ids), func(segment, off uint64, index *segIndex) bool {
 		if off < uint64(l.state.parts[pid].base) {
 			return false
-		}
-		index := l.idx
-		if segment != l.active.id {
-			var err error
-			index, err = l.sealedIndex(segment)
-			if err != nil {
-				readErr = err
-				return true
-			}
 		}
 		pos, ok := index.find(pid, off)
 		if !ok {

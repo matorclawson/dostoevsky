@@ -228,3 +228,10 @@ dev-id-eventloop: ## Cross-check identified publish throughput with JavaScript n
 	@mkdir -p .dev/bin
 	@"$(GO)" build -o .dev/bin/dostoevsky-server ./cmd/dostoevsky-server
 	@ID_NATIVE_BIN="$(CURDIR)/.dev/bin/dostoevsky-server" BENCH_NATIVE_SERVER="$(CURDIR)/benchmarks/idpublish/segmented-server.sh" node benchmarks/idpublish/eventloop.mjs
+
+.PHONY: dev-bench-admission dev-bench-hot-topics
+dev-bench-admission: ## Compare the original and candidate index policies on the same traces
+	@sh scripts/admission-bench.sh
+
+dev-bench-hot-topics: ## Measure topic tracker accuracy, memory and observation cost
+	@"$(GO)" test -run HotTopic -v -bench HotTopics -benchmem -count=3 ./sketch

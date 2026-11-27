@@ -1,0 +1,38 @@
+=== RUN   TestHotTopics
+--- PASS: TestHotTopics (0.00s)
+=== RUN   TestHotTopicRecall
+    hot_topics_test.go:63: top-10 across two phases: 20/20
+--- PASS: TestHotTopicRecall (0.05s)
+=== RUN   TestHotTopicsMillionNames
+    hot_topics_test.go:101: 1,000,000 distinct cold names over 60 seconds of event time; top=regular score=2404.09
+--- PASS: TestHotTopicsMillionNames (0.09s)
+=== RUN   TestHotTopics
+--- PASS: TestHotTopics (0.00s)
+=== RUN   TestHotTopicRecall
+    hot_topics_test.go:63: top-10 across two phases: 20/20
+--- PASS: TestHotTopicRecall (0.05s)
+=== RUN   TestHotTopicsMillionNames
+    hot_topics_test.go:101: 1,000,000 distinct cold names over 60 seconds of event time; top=regular score=2404.09
+--- PASS: TestHotTopicsMillionNames (0.10s)
+=== RUN   TestHotTopics
+--- PASS: TestHotTopics (0.00s)
+=== RUN   TestHotTopicRecall
+    hot_topics_test.go:63: top-10 across two phases: 20/20
+--- PASS: TestHotTopicRecall (0.05s)
+=== RUN   TestHotTopicsMillionNames
+    hot_topics_test.go:101: 1,000,000 distinct cold names over 60 seconds of event time; top=regular score=2404.09
+--- PASS: TestHotTopicsMillionNames (0.10s)
+goos: linux
+goarch: amd64
+pkg: github.com/rodriveracom/dostoevsky/sketch
+cpu: AMD EPYC 9V74 80-Core Processor
+BenchmarkHotTopics
+BenchmarkHotTopics-9            	42487952	        30.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHotTopics-9            	42793720	        29.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHotTopics-9            	38664940	        31.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHotTopicsConstruct
+BenchmarkHotTopicsConstruct-9   	  177129	      6932 ns/op	   39632 B/op	       3 allocs/op
+BenchmarkHotTopicsConstruct-9   	  174198	      8897 ns/op	   39632 B/op	       3 allocs/op
+BenchmarkHotTopicsConstruct-9   	  142630	      9704 ns/op	   39632 B/op	       3 allocs/op
+PASS
+ok  	github.com/rodriveracom/dostoevsky/sketch	8.740s

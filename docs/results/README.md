@@ -3,8 +3,11 @@
 One line per trial, as the benchmark printed it. Host names, addresses and paths are not part of these lines. All runs used
 one Linux ARM64 server (2 vCPU, ext4) over loopback; the hardware is not identified further.
 
-The SHA-256 beside each file is of the **original, unredacted log of that run, which is held privately**; it is not the digest
-of the file published here. For the Rust comparison the lines come from the run's per-trial files, with `arm=` added.
+The SHA-256 beside each file is of an **original, unredacted file of that run, held privately**; it is not the digest of the
+file published here. For the native runs it is the log the lines are taken from. For the other two it is the run's host record,
+which holds no trial lines: the language-client lines are that run's `languages.log` (SHA-256
+`e348999f1f97e75975a3d557e59b189b621a996e7bab3021311ac32d67682102`), and the Rust lines come from the run's per-trial files,
+with `arm=` added.
 
 | File | Lines | Run | SHA-256 of the original log |
 |---|---:|---|---|
@@ -20,5 +23,6 @@ of the file published here. For the Rust comparison the lines come from the run'
 Runs of the native server: Python clients, 512-byte records, one record per request, 2,048 timed messages per cell after 64
 warm-up requests, acknowledged after each engine's durable acknowledgment, five rounds with rotated engine order. **The
 Dostoevsky server ran with segmented storage, which is opt-in and not the default.** Redis ran without publish deduplication;
-the runs that include it use a one-line fix to the benchmark's Redis adapter. `boot_KiB` and `peak_KiB` are the server
-process's resident memory when ready and its peak.
+the runs that include it use a one-line fix to the benchmark's Redis adapter. `boot_KiB` is the server
+process's resident memory (`VmRSS`) when ready. `peak_KiB` is its lifetime high-water mark (`VmHWM`) read at the end of that
+cell, so a later cell of the same trial can carry an earlier cell's peak.

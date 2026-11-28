@@ -81,7 +81,7 @@ Python clients, one 512-byte record per request (**no batching**), durable ackno
 * Faster than JetStream and Kafka in these unbatched runs (in an earlier run without Redis, one Dostoevsky trial at 1 producer fell inside JetStream's range).
 * p99 lower than Redis at 32 producers.
 * **No throughput difference from Redis is established** at 1, 8 or 32 producers: the trials overlap. Redis ran without publish deduplication.
-* **Not the smallest memory.** Server memory when ready and the per-cell median peaks, in MiB: Redis 7.5 and 9.1 to 10.8; JetStream 13.9 and 21.9 to 28.3; Dostoevsky 18.2 and 26.5 to 31.6; Kafka 394 and 419 to 424.
+* **Not the smallest memory.** Server memory in MiB, as median resident size when ready (`VmRSS`) and the range of per-cell median peaks: Redis 7.5 and 9.1 to 10.8; JetStream 13.9 and 21.9 to 28.3; Dostoevsky 18.2 and 26.5 to 31.6; Kafka 394 and 418 to 424. A peak is the process's lifetime high-water mark (`VmHWM`) read at the end of each cell, so a later cell can carry an earlier cell's peak.
 * These are short runs over a short history. They say nothing about sustained rates, batching or long histories.
 
 Every trial line, including the runs without Redis and the two failed runs, is in [docs/results](docs/results/README.md).
@@ -121,7 +121,7 @@ Durability settings:
 | NATS JetStream | `sync_interval: always`, file storage, 1 replica | each publish awaits its ack, no retries |
 | Kafka | `log.flush.interval.messages=1`, `min.insync.replicas=1`, replication factor 1 (fsync per message is inferred from the setting) | `acks=all`, no idempotence, no retries; `linger.ms=0` where set (Python also `batch.num.messages=1`), KafkaJS one message per send |
 
-These settings are read from the source; the run did not trace `fsync` calls. Source commit `d7b967ae805b14817b47a8c83314f3735e100198`. The [trial lines](docs/results/2026-11-26-language-clients.log) are published; `HOST.log` SHA-256 `f94a43ce457981f8d76128099a1ebb73caae675d09cfbe2d73a6987fac0201ca` is of the original unredacted log, held privately.
+These settings are read from the source; the run did not trace `fsync` calls. Source commit `d7b967ae805b14817b47a8c83314f3735e100198`. The [trial lines](docs/results/2026-11-26-language-clients.log) are published; They are the lines of that run's `languages.log` (SHA-256 `e348999f1f97e75975a3d557e59b189b621a996e7bab3021311ac32d67682102`); `HOST.log` SHA-256 `f94a43ce457981f8d76128099a1ebb73caae675d09cfbe2d73a6987fac0201ca` is the run's host record. Both digests are of original files held privately.
 
 ### Rust: the `TCP_NODELAY` fix
 
@@ -133,7 +133,7 @@ The Rust client stalled for about 43 ms per request. [PR 74](https://github.com/
 | 8 | 182 | 2,419 | 54.48 | 8.31 |
 | 32 | 728 | 6,617 | 52.35 | 10.65 |
 
-The [trial lines](docs/results/2026-11-27-rust-nodelay-ab.log) are published; `HOST.log` SHA-256 `baae763942642f13ca52f6a45edf7c5260955367123e08435c1d29df82f0d27c` is of the original unredacted log, held privately. These rows come from a different run and are not a head-to-head with the table above.
+The [trial lines](docs/results/2026-11-27-rust-nodelay-ab.log) are published; They are the run's per-trial log lines with the arm added; `HOST.log` SHA-256 `baae763942642f13ca52f6a45edf7c5260955367123e08435c1d29df82f0d27c` is the run's host record, held privately. These rows come from a different run and are not a head-to-head with the table above.
 
 ## Measured results: embedded Go library
 

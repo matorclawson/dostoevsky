@@ -134,16 +134,53 @@ pub type Result<T> = std::result::Result<T, Error>;
 mod tests {
     use super::*;
 
+    /// The names in the Go driver's `codes` table, in its order, read from the Go source.
+    fn go_driver_codes() -> Vec<String> {
+        let source = include_str!("../../../../cmd/dost-conform/main.go");
+        let table = source.split("var codes = []struct {").nth(1).expect("the codes table");
+        let table = &table[..table.find("\n}\n").expect("the end of the codes table")];
+        table
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("{\""))
+            .map(|rest| rest[..rest.find('"').unwrap()].to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_kinds_are_the_go_driver_s_codes_in_its_order() {
+        let go = go_driver_codes();
+        assert_eq!(go.len(), 19, "{go:?}");
+        // The driver's table ends with the three workflow errors, which arrive with the workflow store.
+        assert_eq!(&go[16..], ["start_conflict", "stale", "missing"]);
+        let rust: Vec<&str> = Kind::ALL.iter().map(|k| k.code()).collect();
+        assert_eq!(rust, go[..16], "Kind::ALL against cmd/dost-conform/main.go");
+    }
+
     #[test]
     fn the_first_kind_in_the_driver_order_is_reported() {
         assert_eq!(Error::other("x").code(), "other");
+        // Every pair, built in both orders: the kind that comes first in the driver's table is the one reported.
+        for (i, first) in Kind::ALL.iter().enumerate() {
+            assert_eq!(Error::new(*first, "x").code(), first.code());
+            for later in &Kind::ALL[i + 1..] {
+                assert_eq!(Error::new(*first, "x").also(*later).code(), first.code());
+                assert_eq!(Error::new(*later, "x").also(*first).code(), first.code());
+                assert_ne!(first.code(), later.code());
+            }
+        }
+        // And by name, for the pairs the Go engine really builds: a full journal is also a limit, and a limit is
+        // also invalid.
+        assert_eq!(
+            Error::new(Kind::Invalid, "x")
+                .also(Kind::Limit)
+                .also(Kind::JournalFull)
+                .code(),
+            "journal_full"
+        );
         assert_eq!(Error::new(Kind::Invalid, "x").also(Kind::Limit).code(), "limit");
         assert_eq!(
             Error::new(Kind::Exists, "x").also(Kind::CorruptLog).code(),
             "corrupt_log"
         );
-        let mut sorted = Kind::ALL;
-        sorted.sort();
-        assert_eq!(sorted, Kind::ALL, "ALL must list the kinds in declaration order");
     }
 }

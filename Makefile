@@ -25,10 +25,10 @@ test: dev-test ## Run the tests
 dev: dev-fmt-check dev-vet dev-test dev-race dev-build ## Run the complete development checks
 
 dev-fmt: ## Format the Go source
-	@"$(GOFMT)" -w *.go examples/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go cmd/dost-conform/*.go
+	@"$(GOFMT)" -w *.go examples/*/*.go examples/workflows/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go cmd/dost-conform/*.go
 
 dev-fmt-check: ## Check formatting without changing files
-	@files=$$("$(GOFMT)" -l *.go examples/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go cmd/dost-conform/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
+	@files=$$("$(GOFMT)" -l *.go examples/*/*.go examples/workflows/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go cmd/dost-conform/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
 
 dev-vet: ## Run Go static analysis
 	@"$(GO)" vet ./...

@@ -165,13 +165,14 @@ func (n *Node) exportSegments(ctx context.Context, f *os.File) error {
 	if err := emit(entry{Config: &n.cfg}); err != nil {
 		return err
 	}
-	for pid, ps := range l.state.parts {
-		seed := retentionSeed{Partition: l.state.byPID[pid], Base: ps.base}
+	for _, p := range partitionsInOrder(l.state.byPart) {
+		ps := l.state.parts[l.state.byPart[p]]
+		seed := retentionSeed{Partition: p, Base: ps.base}
 		if err := emit(entry{Seed: &seed}); err != nil {
 			return err
 		}
-		for group, pos := range ps.groups {
-			seed.Groups = map[string]Position{group: pos}
+		for _, group := range groupsInOrder(ps.groups) {
+			seed.Groups = map[string]Position{group: ps.groups[group]}
 			if err := emit(entry{Seed: &seed}); err != nil {
 				return err
 			}

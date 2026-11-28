@@ -4,6 +4,11 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — test seam for stored inputs
+
+- The clock and randomness that reach stored bytes now go through an internal package so that tests can fix them. Applications cannot reach it, and unset it is the standard library.
+- Legacy retention, the legacy export of a segmented store and migration now write partitions and consumer groups in a fixed order (they followed Go's random map order). Contents are unchanged.
+
 ## Unreleased — workflow conformance cases
 
 - Added workflow operations to `cmd/dost-conform` and cases for registration, starts, leases, outcomes, signals and a killed process. No change to the engine.

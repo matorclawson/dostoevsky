@@ -107,7 +107,8 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 		return err
 	}
 	rebuilt := make(map[Partition]*stream, len(n.streams))
-	for p, s := range n.streams {
+	for _, p := range partitionsInOrder(n.streams) {
+		s := n.streams[p]
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -125,7 +126,8 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 				batch, size = map[string]Position{}, 0
 				return e
 			}
-			for g, pos := range s.groups {
+			for _, g := range groupsInOrder(s.groups) {
+				pos := s.groups[g]
 				cost := len(g) + len(pos.State)*4/3 + 64
 				if size > 0 && size+cost > seedFrameBudget {
 					if err = flush(); err != nil {

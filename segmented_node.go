@@ -13,7 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"time"
+
+	"github.com/rodriveracom/dostoevsky/internal/seam"
 )
 
 const segmentMarker = "DOSTOEVSKY-SEGMENTED-01\n"
@@ -424,7 +425,7 @@ func (n *Node) segmentBatch(ctx context.Context, items []Publication) ([]Record,
 				return nil, e
 			}
 		}
-		r := Record{Partition: p, Message: m, Time: time.Now().UTC(), Offset: base + counts[p]}
+		r := Record{Partition: p, Message: m, Time: seam.Now().UTC(), Offset: base + counts[p]}
 		counts[p]++
 		if len(steps) == 0 && len(items) > 1 {
 			steps = make([]step, 0, len(items))

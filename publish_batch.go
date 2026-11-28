@@ -3,7 +3,8 @@ package dostoevsky
 import (
 	"bytes"
 	"context"
-	"time"
+
+	"github.com/rodriveracom/dostoevsky/internal/seam"
 )
 
 // Publication addresses a single message in a local owner batch.
@@ -103,7 +104,7 @@ func (n *Node) publishBatchLocked(ctx context.Context, items []Publication) ([]R
 			}
 			seen[k] = i
 		}
-		records[i] = Record{Partition: p, Message: m, Offset: base + counts[p], Time: time.Now().UTC()}
+		records[i] = Record{Partition: p, Message: m, Offset: base + counts[p], Time: seam.Now().UTC()}
 		counts[p]++
 		start := len(frames)
 		frames, e = appendEncodedFrame(frames, entry{Record: &records[i]}, maxFrame)

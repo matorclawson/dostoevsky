@@ -11,7 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/rodriveracom/dostoevsky/internal/seam"
 )
 
 // Open never guesses about damage: a frame that does not verify stops recovery. InspectJournal and RepairJournal are
@@ -212,7 +213,7 @@ func RepairJournal(dir string, o RepairOptions) (JournalReport, error) {
 	if r.LaterFrames > 0 && !o.DiscardLaterFrames {
 		return r, ErrLaterFrames
 	}
-	name := filepath.Join(dir, fmt.Sprintf("journal.v1.damaged-%d", time.Now().UnixNano()))
+	name := filepath.Join(dir, fmt.Sprintf("journal.v1.damaged-%d", seam.Now().UnixNano()))
 	if err := copyDurably(dir, name, io.NewSectionReader(j.file, r.GoodBytes, r.Size-r.GoodBytes)); err != nil {
 		return r, fmt.Errorf("journal left unchanged, the copy of the removed bytes failed: %w", err)
 	}

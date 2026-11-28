@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -33,20 +34,9 @@ import (
 )
 
 func main() {
-	// Usage goes to stdout when it was asked for (-h, -help), to stderr when it comes with an error.
-	usage := io.Writer(os.Stderr)
-	for _, a := range os.Args[1:] {
-		if a == "-h" || a == "-help" || a == "--help" {
-			usage = os.Stdout
-		}
-	}
-	engine, bin, err := parseArgs(os.Args[1:], os.Getenv, usage)
-	if err != nil {
-		if code := exitCodeForArgs(err); code != 0 {
-			fmt.Fprintln(os.Stderr, "FAILED:", err)
-			os.Exit(code)
-		}
-		os.Exit(0) // -help is not a failure
+	engine, bin, code, done := arguments(os.Args[1:], os.Getenv, os.Stdout, os.Stderr)
+	if done {
+		os.Exit(code)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT) // before any start
 	defer stop()
@@ -54,6 +44,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)
 	}
+}
+
+// arguments reads the command line. done means there is nothing to serve: exit with code. Usage goes to stdout when
+// it was asked for and to stderr when it comes with an error; which of the two is decided by the result of parsing, so
+// a -help after a bad flag does not move the diagnostic to stdout.
+func arguments(args []string, getenv func(string) string, stdout, stderr io.Writer) (engine, bin string, code int, done bool) {
+	var usage bytes.Buffer
+	engine, bin, err := parseArgs(args, getenv, &usage)
+	if err == nil {
+		return engine, bin, 0, false
+	}
+	if code = exitCodeForArgs(err); code == 0 {
+		stdout.Write(usage.Bytes())
+		return "", "", 0, true
+	}
+	stderr.Write(usage.Bytes())
+	fmt.Fprintln(stderr, "FAILED:", err)
+	return "", "", code, true
 }
 
 // parseArgs reads the command line and resolves the server executable in the documented order:

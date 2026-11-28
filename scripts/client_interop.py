@@ -25,7 +25,9 @@ def startup_line(proc, timeout=30.0):
         if not ready:
             continue  # the loop re-checks the deadline
         chunk = os.read(fd, 4096)
-        if not chunk:  # the gateway closed its output without finishing a line
+        if not chunk:  # the gateway closed its output
+            if buf:
+                raise RuntimeError("the gateway closed its output in the middle of its first line (got %r)" % buf[:80])
             break
         buf += chunk
     return buf.split(b"\n", 1)[0].decode(errors="replace").strip()

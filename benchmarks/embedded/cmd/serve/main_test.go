@@ -198,3 +198,25 @@ func TestHelpIsASuccessWithUsageOnTheWriterItWasGiven(t *testing.T) {
 		t.Fatalf("an unknown flag: err %v, exit %d; want an error and exit 2", err, exitCodeForArgs(err))
 	}
 }
+
+func TestWhereTheUsageTextGoesFollowsTheResultOfParsing(t *testing.T) {
+	none := func(string) string { return "" }
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"-help"}, 0},
+		{[]string{"-nope", "-help"}, 2},
+		{[]string{"-nope"}, 2},
+	} {
+		var stdout, stderr bytes.Buffer
+		_, _, code, done := arguments(tc.args, none, &stdout, &stderr)
+		told, silent := &stderr, &stdout
+		if tc.code == 0 {
+			told, silent = &stdout, &stderr
+		}
+		if !done || code != tc.code || silent.Len() != 0 || !strings.Contains(told.String(), "-engine") {
+			t.Errorf("%v: code %d done %v, stdout %q, stderr %q", tc.args, code, done, stdout.String(), stderr.String())
+		}
+	}
+}

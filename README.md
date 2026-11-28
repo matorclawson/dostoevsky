@@ -147,6 +147,7 @@ Synchronous, fsync-backed publishes of 512-byte records to one topic, five alter
 | Native protocol server (`dostoevsky-server`) | on `main` |
 | Native clients: JavaScript/TypeScript, Python, Rust, Java (preview) | on `main` |
 | [Segmented storage](docs/segmented-recovery.md) | on `main`, opt-in; not the default |
+| [Embedded workflows](docs/workflow-lifecycle.md) | on `main`, experimental; not a supported API |
 
 ## Embed it in Go
 
@@ -193,59 +194,6 @@ Next: the [getting started guide](docs/getting-started.md) and [using the librar
 
 The full list, with retention, backups and deployment: [operating Dostoevsky](docs/operating.md).
 
-## Documentation
-
-[Getting started](docs/getting-started.md) · [Client guide](docs/clients.md) · [Using the library](docs/library.md) · [Operating](docs/operating.md) · [How it works](docs/how-it-works.md) · [Integrations](docs/integrations.md) · [Changelog](CHANGELOG.md)
-
-## Contribute
-
-Open an issue describing the problem, with a failing test when you can. For a change, fork the repository, branch, and run `make verify` (format, vet, tests, race detector, example build) before opening a pull request. Keep changes small and focused, and add or update tests and the CHANGELOG. Contributions are accepted under the MIT license.
-<<<<<<< HEAD
-=======
-
-## Bursts and dynamically named topics (0.3.0 candidate)
-
-Use an ordinary named topic with many keys when consumers share an offset sequence. If independent replay positions are required per topic, a fresh node can use `Topics: map[string]int{"*": 1}`. This config accepts valid topic names on demand. Each actual topic has its own partition offsets, checkpoints and exact ID namespace. All topics use the configured partition count. Wildcard mode is exclusive with explicit declarations and persists across reopen. In a mesh the topic hash rotates the first owner, then consecutive partition numbers rotate across the configured nodes. Use the same manifest and version on all peers. Avoid opening wildcard journals with older binaries.
-
-When a producer already holds a burst, pass a slice of `Publication{Topic: ..., Message: ...}` to `Node.PublishBatch`. A successful call acknowledges all records after one sync for the newly written frames. All items must belong to the local owner. The existing peer protocol supports individual publications. Input errors are detected before writing. A crash or storage error can persist part of a batch. This is usually a prefix, but a crash with out-of-order page writeback can instead leave a frame that fails its checksum, and reopening then reports corruption instead of truncating. Retry the whole slice with stable IDs once the node reopens. This is a durability optimization for independent events; applications needing atomic multi-record transactions must supply that boundary themselves.
-
-One call accepts up to 1,024 items and 4 MiB each of input field bytes and new encoded frames. Choose smaller batches to bound writer occupancy and urgent-message latency. An isolated single-message Publish writes immediately. Overlapping calls can share a sync. Concurrent readers share the node lock while reading immutable offsets; appends and sync still use one writer per node. Explicit caller batching avoids a hidden unbounded producer queue.
-
-~~~sh
-# Put TMPDIR on the volume you intend to measure.
-make dev-burst BURST_RECORDS=100000 BURST_TOPICS=100000
-make dev-burst BURST_RECORDS=1000000 BURST_TOPICS=1000000 BURST_DURATION=1m
-make dev-burst BURST_RECORDS=1000000 BURST_TOPICS=1
-~~~
-
-The workload assigns every 128-byte record a distinct producer ID. It reports ingest time, post-GC live heap and journal size, then closes, reopens and reconciles IDs by topic and offset. This exercise covers a finite burst. Retained record locations, topic state and exact producer IDs grow with history. Disk-backed indexes, segmented retention and automatic deduplication windows are future storage work. Selecting such a window changes the guarantee for retries older than the window.
-
-[Delivery-service design and capacity considerations](docs/delivery-workload.md) · [Candidate benchmark receipts](docs/burst-results.txt)
-
-## Approximate distinct counts and backups
-
-The standard-library-only `sketch` package provides HyperLogLog with configurable precision from 4 to 18, merge, and versioned binary encoding. It estimates cardinality and is suitable for telemetry. Keep records, producer IDs and delivery decisions exact. The burst harness uses a mergeable `sketch.LatencyHistogram` per producer to report upper bounds for p95 and p99 scheduled-to-ack latency. Each histogram uses 7,688 bytes regardless of run length. Positive percentile bounds have less than 6.25% upward error. Historical receipts used exact sample sorting. Sketches need external synchronization when shared by goroutines.
-
-`Node.Backup(ctx, newDirectory)` copies a consistent journal while holding the node lock. It requires a new directory and syncs the copied journal before returning. Open the resulting directory with the same Config to recover it. Remove any partially created backup after an error. This operation pauses node reads and writes while copying. `Backup` builds the copy in a hidden sibling named `.<name>.backup-<random>` and renames it to the destination only when it is complete and synced, so a crash leaves at most that hidden directory (delete it). The destination must be a new path that stays under the caller's control until `Backup` returns: no other process and no other goroutine of the same process, including a concurrent `Backup` to that path, may create or use it; the existence check and the rename are separate steps because the standard library has no portable no-replace directory rename. If only the final parent sync fails, `Backup` returns an error wrapping `ErrBackupNotDurable`: the backup is complete, but sync the parent directory before relying on it. As a guard for directories left by an older or interrupted 0.3.0 candidate, `Open` refuses a directory holding `.journal.tmp` and no `journal.v1` with `ErrIncompleteBackup`; the current `Backup` never creates that layout.
-
-## Retention and restart recovery
-
-Call `node.Retain(ctx, map[Partition]int64{partition: floor})` to remove records strictly below an absolute offset. The operation refuses a floor above any existing consumer group's committed position. A reader requesting an expired offset receives `ErrExpired`. Keep the floor at or below the oldest offset needed by all consumers, including consumers that have yet to register. New consumer groups start at offset zero and must handle an expired offset themselves.
-
-Retention rewrites the journal while holding the node lock, syncs a replacement, then atomically renames it and syncs the directory. Retained offsets, checkpoints and state survive restart. A cancellation before replacement leaves the old journal in place. A crash may leave an unused temporary file. A successful replacement requires enough free space to hold the new journal alongside the old one. If directory synchronization reports an error after rename, reopen and inspect the resulting state before retrying.
-
-Producer IDs attached to deleted records expire at the retention floor. Retrying a deleted ID can publish a new record. Set retention no shorter than the application's producer retry horizon. Records and IDs at or above the floor remain exact. Backups taken before retention preserve the historical journal.
-
-Restart scans the compacted journal. Retention reduces the amount of history to scan. Recovery time still grows with the retained journal, and this version has no independent startup snapshot or on-disk index. Call retention regularly according to the application's storage and replay requirements.
-
-## Performance comparisons
-
-Run `make dev-bench-embedded` on Linux to compare embedded single-node publishers on your disk. Set `TMPDIR` to a directory on the intended volume. The benchmark module requires Go 1.26 or later. See [workloads and measurements](docs/embedded-performance.md).
-
-Concurrent calls to `Node.Publish` can share a journal sync. A lone producer writes immediately. Acknowledgments follow the sync, and messages from different calls keep their own receipts. Run `make dev-bench-publish` on Linux for the [concurrent publishing comparison](docs/concurrent-publishing.md).
-
-Run `make dev-bench-publish-gate` on Linux to compare synchronous publishers at one, eight and 32 producers. The command checks median throughput and peak process memory against embedded JetStream. See [measurements and reproduction](docs/publisher-gate.md).
-
 ### High-cardinality workloads
 
 Go consumers can use `sketch.HotTopics` to rank recent activity with a fixed resident budget. Segmented nodes can enable frequency-based cache admission for historical producer-ID retries. See the [usage examples and benchmark results](benchmarks/admission/README.md).
@@ -253,4 +201,11 @@ Go consumers can use `sketch.HotTopics` to rank recent activity with a fixed res
 ### Embedded workflows (experimental)
 
 Use a dedicated segmented directory for durable sequential activities. The [workflow guide](docs/workflow-lifecycle.md) covers leases, retries, history, crash behavior and the release boundary.
->>>>>>> upstream/main
+
+## Documentation
+
+[Getting started](docs/getting-started.md) · [Client guide](docs/clients.md) · [Using the library](docs/library.md) · [Operating](docs/operating.md) · [How it works](docs/how-it-works.md) · [Integrations](docs/integrations.md) · [Changelog](CHANGELOG.md)
+
+## Contribute
+
+Open an issue describing the problem, with a failing test when you can. For a change, fork the repository, branch, and run `make verify` (format, vet, tests, race detector, example build) before opening a pull request. Keep changes small and focused, and add or update tests and the CHANGELOG. Contributions are accepted under the MIT license.

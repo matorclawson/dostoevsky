@@ -36,7 +36,7 @@ pub fn id_hash(pid: u32, id: &[u8]) -> u64 {
 /// empty. Equal hashes (distinct IDs that collide, or repeated entries) coexist.
 #[derive(Debug, Clone, Default)]
 pub struct IdTable {
-    pub keys: Vec<u64>,
+    keys: Vec<u64>,
     vals: Vec<u64>,
     n: usize,
 }
@@ -102,6 +102,11 @@ impl IdTable {
         self.n
     }
 
+    /// How many slots the table has: a power of two, or none before the first entry.
+    pub fn slots(&self) -> usize {
+        self.keys.len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.n == 0
     }
@@ -115,9 +120,9 @@ pub struct IdxPart {
     pub first: u64,
     pub count: u64,
     /// Sparse entries: offset ...
-    pub offs: Vec<u64>,
+    offs: Vec<u64>,
     /// ... and the position of that record's frame in the segment file.
-    pub poss: Vec<u32>,
+    poss: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -392,5 +397,8 @@ pub fn decode_seg_index(b: &[u8]) -> Result<(SegIndex, IdxFooterInfo), (IdxFoote
         (ph, po) = (h, off);
         x.ids.add(h, off);
     }
+    // Go's loader assigns the footer to the index right after this call; here the index carries it from the start,
+    // so that a decoded index never holds an empty one.
+    x.footer = f;
     Ok((x, f))
 }

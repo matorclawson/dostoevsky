@@ -532,7 +532,7 @@ fn the_id_table_and_filter_match_go() {
                     table.add(h.parse().unwrap(), off.parse().unwrap());
                 }
                 assert_eq!(
-                    (table.len().to_string().as_str(), table.keys.len().to_string().as_str()),
+                    (table.len().to_string().as_str(), table.slots().to_string().as_str()),
                     (f[1], f[2]),
                     "{line}"
                 );
@@ -651,6 +651,11 @@ fn the_segment_index_matches_go() {
                         "what was read writes back as the bytes it was read from"
                     );
                     assert!(index.same_as(index, *foot));
+                    assert_eq!(
+                        index.footer, *foot,
+                        "a decoded index carries the footer it was read with"
+                    );
+                    assert_eq!(encode_seg_index(index, index.footer), b);
                 }
             }
             other => panic!("unknown row {other}"),

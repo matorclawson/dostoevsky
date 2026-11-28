@@ -24,7 +24,7 @@ struct LocationBlock {
 #[derive(Debug, Default)]
 pub struct LocationIndex {
     blocks: Vec<LocationBlock>,
-    pub count: i64,
+    count: i64,
     /// The payload address assuming the next journal frame belongs to this stream.
     next: i64,
 }
@@ -52,6 +52,11 @@ fn uvarint(b: &[u8]) -> (u64, usize) {
 }
 
 impl LocationIndex {
+    /// How many locations have been appended.
+    pub fn count(&self) -> i64 {
+        self.count
+    }
+
     pub fn append(&mut self, loc: Location) {
         let slot = (self.count % LOCATION_BLOCK_SIZE as i64) as usize;
         if slot == 0 {

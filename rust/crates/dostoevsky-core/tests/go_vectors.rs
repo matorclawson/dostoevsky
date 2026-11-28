@@ -42,7 +42,7 @@ fn the_admission_sketch_and_the_location_index_match_go() {
                     });
                 }
                 let want = list(f[2]);
-                assert_eq!(index.count as usize, want.len());
+                assert_eq!(index.count() as usize, want.len());
                 for (i, entry) in want.iter().enumerate() {
                     let loc = index.location(i as i64);
                     assert_eq!(format!("{}:{}", loc.at, loc.size), *entry, "entry {i}");

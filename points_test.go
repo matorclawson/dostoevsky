@@ -155,7 +155,7 @@ func TestArmingOverAnUncheckedPointIsRefused(t *testing.T) {
 	if err := seam.Arm("backup.write", false, 0); err == nil || err.Error() != held {
 		t.Fatalf("before the point fired: %v", err)
 	}
-	if err := seam.Arm("no.such.point", false, 0); err == nil || err.Error() == held {
+	if err := seam.Arm("no.such.point", false, 0); err == nil || err.Error() != `seam: no point is named "no.such.point"` {
 		t.Fatalf("an unknown name is refused first: %v", err)
 	}
 	if _, err := n.Publish(context.Background(), p.Topic, Message{Value: []byte("x")}); !errors.Is(err, seam.ErrInjected) {

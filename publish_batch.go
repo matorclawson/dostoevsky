@@ -32,6 +32,9 @@ func (n *Node) publishBatchLocked(ctx context.Context, items []Publication) ([]R
 	if n.closed {
 		return nil, ErrClosed
 	}
+	if n.segments != nil {
+		return n.segmentBatch(ctx, items)
+	}
 	if n.j.failed != nil {
 		return nil, n.j.failed
 	}
@@ -86,12 +89,9 @@ func (n *Node) publishBatchLocked(ctx context.Context, items []Publication) ([]R
 			if j, ok := seen[k]; ok {
 				prior = &records[j]
 			} else if s != nil {
-				if off, ok := s.lookupID(m.ID); ok {
-					ev, e := n.j.read(s.location(off - s.base))
-					if e != nil {
-						return nil, e
-					}
-					prior = ev.Record
+				prior, e = s.storedID(n.j, m.ID)
+				if e != nil {
+					return nil, e
 				}
 			}
 			if prior != nil {
@@ -113,6 +113,9 @@ func (n *Node) publishBatchLocked(ctx context.Context, items []Publication) ([]R
 		writes = append(writes, staged{i, location{n.j.end + int64(start) + 20, len(frames) - start - 20}})
 	}
 	if len(writes) > 0 {
+		if n.maxBytes > 0 && n.j.end+int64(len(frames)) > n.maxBytes {
+			return nil, ErrJournalFull // before any write: the whole batch is refused
+		}
 		if e := n.j.writeFrames(frames); e != nil {
 			return nil, e
 		}

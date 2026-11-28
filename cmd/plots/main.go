@@ -36,6 +36,47 @@ func (t trial) numAny(keys string) (float64, bool) {
 	return 0, false
 }
 
+// quantileKind says how a receipt line's percentiles were computed: "bin-upper-1pct" (the
+// shared 1% histogram, an upper bound at most 1% above the true value) or "exact" (the sample
+// itself, which every receipt written before the histogram is, and which carries no marker).
+func quantileKind(t trial) string {
+	if k := t["quantiles"]; k != "" {
+		return k
+	}
+	return "exact"
+}
+
+// carriesPercentiles says whether a row has percentiles at all. A FAILED row (the driver's marker, or a
+// worker's result=FAILED) and anything else without p50/p95/p99 has none, so it says nothing about how
+// percentiles were computed and must not take part in the kind check.
+func carriesPercentiles(t trial) bool {
+	if t["failed"] == "1" {
+		return false
+	}
+	for _, k := range []string{"p50_us", "p95_us", "p99_us"} {
+		if _, ok := t[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// oneQuantileKind refuses a set of trials whose percentiles mean different things: a chart that
+// mixed exact values with bin upper edges would compare numbers that are not the same quantity.
+// Only rows that carry percentiles are looked at, so a run with a failed trial is not "mixed".
+func oneQuantileKind(trials []trial) error {
+	kinds := map[string]bool{}
+	for _, t := range trials {
+		if carriesPercentiles(t) {
+			kinds[quantileKind(t)] = true
+		}
+	}
+	if len(kinds) > 1 {
+		return fmt.Errorf("the receipt mixes percentile kinds (quantiles=exact and quantiles=bin-upper-1pct); draw them as separate charts")
+	}
+	return nil
+}
+
 // parseTrials reads the key=value lines of one receipt. With a section name it
 // keeps only the lines under that "# section" header (up to the next header) that
 // start with trial=; with an empty name it keeps every line that has key=value pairs.
@@ -75,13 +116,22 @@ func parseTrials(path, section string) ([]trial, error) {
 			}
 			if k, v, ok := strings.Cut(field, "="); ok {
 				t[k] = v
+				if k == "result" && v == "FAILED" {
+					t["failed"] = "1" // a language worker's own verdict counts exactly like the driver's FAILED marker
+				}
 			}
 		}
 		if len(t) > 0 {
 			out = append(out, t)
 		}
 	}
-	return out, sc.Err()
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if err := oneQuantileKind(out); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return out, nil
 }
 
 func parseMeta(path string) (map[string]string, error) {
@@ -281,7 +331,11 @@ func run(receipt, section, metaPath, sketchPath, out string, want int) error {
 	}
 	if comparisonMode(expectedEngines) {
 		if err := requireComparisonMeta(expectedEngines, meta); err != nil {
-			return fmt.Errorf("%s: %w", metaPath, err)
+			from := metaPath
+			if len(expectedEngines) > maxSeries { // the selection is at fault, not the metadata
+				from = "-engines"
+			}
+			return fmt.Errorf("%s: %w", from, err)
 		}
 	}
 	notShown = leftOut(trials, expectedEngines, ignoredEngines)
@@ -470,10 +524,22 @@ func renderBars(c chart, data []series, footer []string) string {
 	sort.Ints(ws)
 	step, steps := ticks(maxV)
 	top1 := step * float64(steps)
-	plotW, plotH := float64(width-left-right), float64(base-top)
+	plotW := float64(width - left - right)
+	verdict := winners(data, c.lower)
+	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", c.note + " " + verdict}
+	if c.explain != "" && losing(data, c.lower) {
+		subtitle[1] += " " + c.explain
+	}
+	subLines := wrap(subtitle, 100)
+	// A subtitle that wraps to three lines must not run into the top gridline: the plot starts below
+	// its last line (two-line subtitles leave the plot where it always was).
+	plotTop := float64(top)
+	if need := float64(46+15*(len(subLines)-1)) + 14; need > plotTop {
+		plotTop = need
+	}
+	plotH := float64(base) - plotTop
 	y := func(v float64) float64 { return float64(base) - v/top1*plotH }
 
-	verdict := winners(data, c.lower)
 	var b strings.Builder
 	footer = wrap(footer, 112)
 	groupW := plotW / float64(len(ws))
@@ -482,11 +548,7 @@ func renderBars(c chart, data []series, footer []string) string {
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-labelledby="t d">`+"\n", width, h, width, h)
 	fmt.Fprintf(&b, "<title id=\"t\">%s</title><desc id=\"d\">%s</desc>\n%s\n", html.EscapeString(c.title), html.EscapeString(c.alt+" "+verdict+notShownSentence()), style)
 	fmt.Fprintf(&b, `<text x="%d" y="26" font-size="18" font-weight="600">%s</text>`+"\n", left, html.EscapeString(c.title))
-	subtitle := []string{c.unit + ". Bars are medians; dots are trials.", c.note + " " + verdict}
-	if c.explain != "" && losing(data, c.lower) {
-		subtitle[1] += " " + c.explain
-	}
-	for i, line := range wrap(subtitle, 100) {
+	for i, line := range subLines {
 		fmt.Fprintf(&b, `<text x="%d" y="%d" font-size="12" class="m">%s</text>`+"\n", left, 46+i*15, html.EscapeString(line))
 	}
 	for i := 0; i <= steps; i++ {

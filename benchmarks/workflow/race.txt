@@ -1,0 +1,56 @@
+=== RUN   TestWorkflowCost
+    cost_linux_test.go:25: set a disposable disk directory
+--- SKIP: TestWorkflowCost (0.00s)
+=== RUN   TestWorkflowReopenFootprint
+    cost_linux_test.go:131: set a disposable disk directory
+--- SKIP: TestWorkflowReopenFootprint (0.00s)
+=== RUN   TestAbruptExit
+=== RUN   TestAbruptExit/before-write/start
+=== RUN   TestAbruptExit/before-write/poll
+=== RUN   TestAbruptExit/before-write/finish
+=== RUN   TestAbruptExit/before-write/failure
+=== RUN   TestAbruptExit/before-write/expire
+=== RUN   TestAbruptExit/after-sync/start
+=== RUN   TestAbruptExit/after-sync/poll
+=== RUN   TestAbruptExit/after-sync/finish
+=== RUN   TestAbruptExit/after-sync/failure
+=== RUN   TestAbruptExit/after-sync/expire
+--- PASS: TestAbruptExit (0.31s)
+    --- PASS: TestAbruptExit/before-write/start (0.04s)
+    --- PASS: TestAbruptExit/before-write/poll (0.05s)
+    --- PASS: TestAbruptExit/before-write/finish (0.03s)
+    --- PASS: TestAbruptExit/before-write/failure (0.01s)
+    --- PASS: TestAbruptExit/before-write/expire (0.02s)
+    --- PASS: TestAbruptExit/after-sync/start (0.05s)
+    --- PASS: TestAbruptExit/after-sync/poll (0.03s)
+    --- PASS: TestAbruptExit/after-sync/finish (0.05s)
+    --- PASS: TestAbruptExit/after-sync/failure (0.01s)
+    --- PASS: TestAbruptExit/after-sync/expire (0.01s)
+=== RUN   TestGroupedConflicts
+--- PASS: TestGroupedConflicts (0.00s)
+=== RUN   TestFenceAfterUncertainWrite
+--- PASS: TestFenceAfterUncertainWrite (0.00s)
+=== RUN   TestWorkflowGroupCrashImages
+=== RUN   TestWorkflowGroupCrashImages/damaged=false
+=== RUN   TestWorkflowGroupCrashImages/damaged=true
+--- PASS: TestWorkflowGroupCrashImages (0.01s)
+    --- PASS: TestWorkflowGroupCrashImages/damaged=false (0.00s)
+    --- PASS: TestWorkflowGroupCrashImages/damaged=true (0.00s)
+=== RUN   TestActivityConformance
+=== RUN   TestActivityConformance/lost-start
+=== RUN   TestActivityConformance/lost-lease-last
+=== RUN   TestActivityConformance/lost-lease-retry
+=== RUN   TestActivityConformance/lost-finish
+=== RUN   TestActivityConformance/lost-failure
+=== RUN   TestActivityConformance/competing-workers
+--- PASS: TestActivityConformance (0.63s)
+    --- PASS: TestActivityConformance/lost-start (0.00s)
+    --- PASS: TestActivityConformance/lost-lease-last (0.31s)
+    --- PASS: TestActivityConformance/lost-lease-retry (0.31s)
+    --- PASS: TestActivityConformance/lost-finish (0.00s)
+    --- PASS: TestActivityConformance/lost-failure (0.00s)
+    --- PASS: TestActivityConformance/competing-workers (0.00s)
+=== RUN   ExampleStore
+--- PASS: ExampleStore (0.00s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky/workflow	1.973s

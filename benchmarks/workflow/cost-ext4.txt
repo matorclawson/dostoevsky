@@ -1,0 +1,35 @@
+=== RUN   TestWorkflowCost
+=== RUN   TestWorkflowCost/1
+    cost_linux_test.go:122: workers=1 completed=512 runs/s=303.7 p99_ms=8.15 records/run=7 append_groups/run=7.000 logical_disk_bytes/run=1647.5 cpu_us/run=584.1
+=== RUN   TestWorkflowCost/8
+    cost_linux_test.go:122: workers=8 completed=512 runs/s=1082.1 p99_ms=13.60 records/run=7 append_groups/run=1.762 logical_disk_bytes/run=1647.5 cpu_us/run=226.2
+=== RUN   TestWorkflowCost/32
+    cost_linux_test.go:122: workers=32 completed=512 runs/s=1103.4 p99_ms=56.42 records/run=7 append_groups/run=1.754 logical_disk_bytes/run=1648.2 cpu_us/run=248.8
+--- PASS: TestWorkflowCost (2.64s)
+    --- PASS: TestWorkflowCost/1 (1.69s)
+    --- PASS: TestWorkflowCost/8 (0.48s)
+    --- PASS: TestWorkflowCost/32 (0.47s)
+=== RUN   TestWorkflowCost
+=== RUN   TestWorkflowCost/1
+    cost_linux_test.go:122: workers=1 completed=512 runs/s=345.0 p99_ms=3.98 records/run=7 append_groups/run=7.000 logical_disk_bytes/run=1647.5 cpu_us/run=467.6
+=== RUN   TestWorkflowCost/8
+    cost_linux_test.go:122: workers=8 completed=512 runs/s=1387.2 p99_ms=7.25 records/run=7 append_groups/run=1.752 logical_disk_bytes/run=1647.5 cpu_us/run=180.2
+=== RUN   TestWorkflowCost/32
+    cost_linux_test.go:122: workers=32 completed=512 runs/s=1166.2 p99_ms=46.69 records/run=7 append_groups/run=1.752 logical_disk_bytes/run=1648.2 cpu_us/run=261.9
+--- PASS: TestWorkflowCost (2.31s)
+    --- PASS: TestWorkflowCost/1 (1.49s)
+    --- PASS: TestWorkflowCost/8 (0.37s)
+    --- PASS: TestWorkflowCost/32 (0.44s)
+=== RUN   TestWorkflowCost
+=== RUN   TestWorkflowCost/1
+    cost_linux_test.go:122: workers=1 completed=512 runs/s=357.5 p99_ms=4.99 records/run=7 append_groups/run=7.000 logical_disk_bytes/run=1647.5 cpu_us/run=445.5
+=== RUN   TestWorkflowCost/8
+    cost_linux_test.go:122: workers=8 completed=512 runs/s=1287.4 p99_ms=13.75 records/run=7 append_groups/run=1.752 logical_disk_bytes/run=1647.5 cpu_us/run=205.0
+=== RUN   TestWorkflowCost/32
+    cost_linux_test.go:122: workers=32 completed=512 runs/s=1251.4 p99_ms=28.66 records/run=7 append_groups/run=1.752 logical_disk_bytes/run=1648.2 cpu_us/run=197.0
+--- PASS: TestWorkflowCost (2.25s)
+    --- PASS: TestWorkflowCost/1 (1.44s)
+    --- PASS: TestWorkflowCost/8 (0.40s)
+    --- PASS: TestWorkflowCost/32 (0.41s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky/workflow	7.208s

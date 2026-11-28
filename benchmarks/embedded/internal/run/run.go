@@ -11,13 +11,14 @@ import (
 	"io"
 	"os"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/hist"
 )
 
 type Store interface {
@@ -140,7 +141,22 @@ func cutoffStatus() string {
 func Main(engine string, open func(string, bool) (Store, error)) {
 	count := flag.Int("count", 2000, "records per run")
 	workers := flag.Int("workers", 1, "concurrent synchronous producers")
+	window := flag.Duration("window", 0, "sustained mode: the fixed window (0: the ordinary trial)")
+	target := flag.Int64("target", 100_000_000, "sustained mode: stop at this many acknowledged messages")
+	bucket := flag.Duration("bucket", 5*time.Minute, "sustained mode: reporting bucket")
+	reopenEvery := flag.Int64("reopen-every", 0, "sustained mode: close, reopen and verify every this many messages (0: only at the end)")
+	keepLast := flag.Int64("keep-last", 0, "sustained mode: with a retaining engine, keep about this many recent records (0: none)")
+	retainEvery := flag.Duration("retain-every", 30*time.Second, "sustained mode: how often retention runs")
+	minFreeDisk := flag.Uint64("min-free-disk-mib", 3072, "sustained mode: stop when the data disk has less free space than this")
 	flag.Parse()
+	if *window > 0 {
+		o := Sustained{Window: *window, Target: *target, Workers: *workers, Bucket: *bucket, ReopenEvery: *reopenEvery, KeepLast: *keepLast, RetainEvery: *retainEvery, MinFreeDiskKiB: *minFreeDisk << 10}
+		if err := executeSustained(engine, open, o, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "FAILED:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := execute(engine, open, *count, *workers, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)
@@ -330,8 +346,17 @@ func execute(engine string, open func(string, bool) (Store, error), count, worke
 		}
 	}
 	readElapsed := time.Since(readStart)
-	sort.Slice(delays, func(i, j int) bool { return delays[i] < delays[j] })
-	line := fmt.Sprintf("engine=%s workers=%d verified=%d records/s=%.0f p95_us=%d p99_us=%d liveHeap_KiB=%d peakRSS_KiB=%d reopen_ms=%.2f verified_reads_per_s=%.0f", engine, workers, count, float64(count)/elapsed.Seconds(), delays[(95*len(delays)-1)/100].Microseconds(), delays[(99*len(delays)-1)/100].Microseconds(), mem.HeapAlloc/1024, usage.Maxrss, float64(reopen)/1e6, float64(count)/readElapsed.Seconds())
+	// Percentiles come from the shared 1% histogram (internal/hist), the same bins and rule the Python
+	// and JavaScript workers use, so a p99 means the same thing in every language: the upper edge of
+	// the bin holding it, accurate to 1%, never below the true value.
+	var lat hist.H
+	for _, d := range delays {
+		lat.Add(d)
+	}
+	// Microseconds with three decimals (the histogram holds nanoseconds): a short sample is not rounded
+	// down to a whole microsecond, so "never below the true value, within 1%" holds for it too.
+	us := func(q float64) string { return fmt.Sprintf("%.3f", float64(lat.Quantile(q))/1e3) }
+	line := fmt.Sprintf("engine=%s workers=%d verified=%d records/s=%.0f p50_us=%s p95_us=%s p99_us=%s p99_9_us=%s p99_99_us=%s quantiles=bin-upper-1pct liveHeap_KiB=%d peakRSS_KiB=%d reopen_ms=%.2f verified_reads_per_s=%.0f", engine, workers, count, float64(count)/elapsed.Seconds(), us(0.50), us(0.95), us(0.99), us(0.999), us(0.9999), mem.HeapAlloc/1024, usage.Maxrss, float64(reopen)/1e6, float64(count)/readElapsed.Seconds())
 	if measured {
 		// peakRSS_KiB stays the harness process alone. total_rss_KiB adds the server
 		// tree: a sum of sampled per-process peaks that can occur at different times

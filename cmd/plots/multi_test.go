@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -194,5 +195,32 @@ func TestAlternativeKeysAndEngineOrder(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "dostoevsky,redis,kafka,rabbitmq,zzz" {
 		t.Fatalf("series order %v", got)
+	}
+}
+
+// Every series needs a color of its own: styleMulti defines maxSeries of them, and one more is refused, not drawn.
+func TestAChartRefusesMoreSeriesThanItHasColors(t *testing.T) {
+	for i := 0; i < maxSeries; i++ {
+		for _, class := range []string{fmt.Sprintf(".s%d{", i), fmt.Sprintf(".d%d{", i)} {
+			if !strings.Contains(styleMulti, class) {
+				t.Errorf("no style for %s", class)
+			}
+		}
+	}
+	if strings.Contains(styleMulti, fmt.Sprintf(".s%d{", maxSeries)) {
+		t.Errorf("there are more colors than maxSeries")
+	}
+	meta := map[string]string{}
+	var engines []string
+	for i := 0; i <= maxSeries; i++ {
+		e := fmt.Sprintf("e%d", i)
+		engines = append(engines, e)
+		meta["label."+e], meta["arch."+e] = e, "in process"
+	}
+	if err := requireComparisonMeta(engines[:maxSeries], meta); err != nil {
+		t.Fatalf("%d engines: %v", maxSeries, err)
+	}
+	if err := requireComparisonMeta(engines, meta); err == nil || !strings.Contains(err.Error(), "series colors") {
+		t.Fatalf("%d engines: %v", len(engines), err)
 	}
 }

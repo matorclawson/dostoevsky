@@ -1,0 +1,9 @@
+engine=native round=1 workers=1 count=2048 rate=787.9 p50_us=1194.0 p95_us=1677.6 p99_us=3083.7 boot_KiB=20496 peak_KiB=26548 restart_verified_per_trial=6853 outstanding_at_kill=8 crash_acks=517
+engine=native round=1 workers=8 count=2048 rate=3242.7 p50_us=2354.2 p95_us=3405.6 p99_us=4307.6 boot_KiB=20496 peak_KiB=30412 restart_verified_per_trial=6853 outstanding_at_kill=8 crash_acks=517
+engine=native round=1 workers=32 count=2048 rate=7218.2 p50_us=3585.2 p95_us=8707.8 p99_us=13058.0 boot_KiB=20496 peak_KiB=30624 restart_verified_per_trial=6853 outstanding_at_kill=8 crash_acks=517
+engine=nats round=1 workers=1 count=2048 rate=582.7 p50_us=1613.8 p95_us=2384.8 p99_us=3375.5 boot_KiB=14360 peak_KiB=22420 restart_verified_per_trial=6850 outstanding_at_kill=8 crash_acks=514
+engine=nats round=1 workers=8 count=2048 rate=815.1 p50_us=9661.0 p95_us=13525.5 p99_us=15870.6 boot_KiB=14360 peak_KiB=26552 restart_verified_per_trial=6850 outstanding_at_kill=8 crash_acks=514
+engine=nats round=1 workers=32 count=2048 rate=903.7 p50_us=34210.7 p95_us=52838.2 p99_us=58102.0 boot_KiB=14360 peak_KiB=28840 restart_verified_per_trial=6850 outstanding_at_kill=8 crash_acks=514
+engine=kafka round=1 workers=1 count=2048 rate=276.8 p50_us=3251.7 p95_us=6014.8 p99_us=8098.8 boot_KiB=406600 peak_KiB=427316 restart_verified_per_trial=6848 outstanding_at_kill=8 crash_acks=512
+engine=kafka round=1 workers=8 count=2048 rate=395.0 p50_us=18946.6 p95_us=30859.0 p99_us=36003.9 boot_KiB=406600 peak_KiB=427316 restart_verified_per_trial=6848 outstanding_at_kill=8 crash_acks=512
+engine=kafka round=1 workers=32 count=2048 rate=373.8 p50_us=75612.8 p95_us=131587.4 p99_us=147839.5 boot_KiB=406600 peak_KiB=438448 restart_verified_per_trial=6848 outstanding_at_kill=8 crash_acks=512

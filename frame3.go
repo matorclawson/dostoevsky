@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"slices"
 	"time"
 )
 
 // Binary frame, format version 3 (design v2: DESIGN-reopen-v2-segmented-binary-log.md).
 //
-// This file is the codec only. Nothing in the engine writes or reads these frames yet;
-// the segmented log that will is a later change.
+// OpenSegmented uses these frames for journals and checkpoints.
 //
 //	0   4  length of the body (u32)
 //	4   1  type
@@ -153,6 +153,7 @@ func appendRecord3(dst []byte, r record3) ([]byte, error) {
 	if body > frame3Max {
 		return dst, ErrLimit
 	}
+	dst = slices.Grow(dst, frame3Header+body)
 	start := len(dst)
 	dst = append(dst, 0, 0, 0, 0, f3Record, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	binary.LittleEndian.PutUint32(dst[start:], uint32(body))

@@ -6,6 +6,10 @@
     ".": {
       "types": "./index.d.ts",
       "import": "./index.js"
+    },
+    "./native": {
+      "types": "./native.d.ts",
+      "import": "./native.js"
     }
   },
   "types": "./index.d.ts",
@@ -17,6 +21,9 @@
   "files": [
     "index.js",
     "index.d.ts",
+    "native.js",
+    "native.d.ts",
+    "wire.js",
     "LICENSE",
     "README.md"
   ],

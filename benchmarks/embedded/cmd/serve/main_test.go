@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -172,12 +174,27 @@ func TestTheCommandLineResolvesTheBinaryInTheDocumentedOrder(t *testing.T) {
 		{[]string{"-engine", "nats"}, "/generic"},
 		{[]string{"-engine=gateway"}, "/generic"},
 	} {
-		_, got, err := parseArgs(tc.args, get)
+		_, got, err := parseArgs(tc.args, get, io.Discard)
 		if err != nil || got != tc.want {
 			t.Errorf("%v: %q, %v; want %q", tc.args, got, err, tc.want)
 		}
 	}
-	if _, _, err := parseArgs([]string{"-nope"}, get); err == nil {
+	if _, _, err := parseArgs([]string{"-nope"}, get, io.Discard); err == nil {
 		t.Error("an unknown flag was accepted")
+	}
+}
+
+func TestHelpIsASuccessWithUsageOnTheWriterItWasGiven(t *testing.T) {
+	var usage bytes.Buffer
+	_, _, err := parseArgs([]string{"-help"}, func(string) string { return "" }, &usage)
+	if !errors.Is(err, flag.ErrHelp) || exitCodeForArgs(err) != 0 {
+		t.Fatalf("-help: err %v, exit %d; want flag.ErrHelp and exit 0", err, exitCodeForArgs(err))
+	}
+	if !strings.Contains(usage.String(), "-engine") || !strings.Contains(usage.String(), "-bin") {
+		t.Fatalf("no usage text: %q", usage.String())
+	}
+	_, _, err = parseArgs([]string{"-nope"}, func(string) string { return "" }, io.Discard)
+	if err == nil || exitCodeForArgs(err) != 2 {
+		t.Fatalf("an unknown flag: err %v, exit %d; want an error and exit 2", err, exitCodeForArgs(err))
 	}
 }

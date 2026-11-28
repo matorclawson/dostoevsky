@@ -1,0 +1,112 @@
+{
+ "about": "A write or sync that fails is not acknowledged, and the node refuses further writes until reopened. A failed write leaves nothing; after a failed sync the written record is there again on this host, since no power was lost, which also shows that the sync point comes after the write.",
+ "covers": [],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish",
+   "value": "a",
+   "id": ""
+  },
+  {
+   "do": "arm",
+   "point": "journal.write",
+   "kill": false,
+   "only": "legacy"
+  },
+  {
+   "do": "arm",
+   "point": "segment.write",
+   "kill": false,
+   "only": "segmented"
+  },
+  {
+   "do": "publish",
+   "value": "refused",
+   "id": "",
+   "fails": true
+  },
+  {
+   "do": "disarm",
+   "expect": {
+    "reached": true
+   }
+  },
+  {
+   "do": "publish",
+   "value": "fenced",
+   "id": "",
+   "fails": true
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "count",
+   "is": 1
+  },
+  {
+   "do": "arm",
+   "point": "journal.sync",
+   "kill": false,
+   "only": "legacy"
+  },
+  {
+   "do": "arm",
+   "point": "segment.sync",
+   "kill": false,
+   "only": "segmented"
+  },
+  {
+   "do": "publish",
+   "value": "unsynced",
+   "id": "",
+   "fails": true
+  },
+  {
+   "do": "disarm",
+   "expect": {
+    "reached": true
+   }
+  },
+  {
+   "do": "publish",
+   "value": "fenced",
+   "id": "",
+   "fails": true
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "count",
+   "is": 2
+  },
+  {
+   "do": "read",
+   "offset": 0,
+   "expect": {
+    "value": "a"
+   }
+  },
+  {
+   "do": "read",
+   "offset": 1,
+   "expect": {
+    "value": "unsynced"
+   }
+  }
+ ]
+}

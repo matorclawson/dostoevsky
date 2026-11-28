@@ -3,6 +3,7 @@ package seam
 import (
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync/atomic"
 	"syscall"
@@ -30,7 +31,7 @@ var Points = []string{
 	// Backup and migration: before the copy, before the copy is published, before the parent directory is synced.
 	"backup.write", "backup.rename", "backup.syncparent",
 	// A workflow commit: before anything is written, once the call has passed the closed, fenced and cancellation checks
-	// and before its items are examined; part-way through writing the group (on the pass where it fires, and only then,
+	// and after the check of their number, before the items themselves are examined; part-way through writing the group (on the pass where it fires, and only then,
 	// half the bytes are written first; it counts segment appends, so arm it only where a workflow store is the thing
 	// writing); after the segment is
 	// synced and before the witness is replaced; after the witness is replaced and before any caller is answered.
@@ -45,18 +46,20 @@ type armed struct {
 	name    string
 	kill    bool
 	skip    atomic.Int64
+	pass    int // the pass that fires, from 1
 	reached atomic.Bool
 }
 
 var current_ atomic.Pointer[armed]
 
 // Arm makes the named point fail, or kill the process, once: the first time it is reached after skip earlier times.
-// Every later pass goes through. One point is armed at a time. A test must check with Disarm that the point was reached: an unreached point proves nothing.
+// Every later pass goes through. One point is armed at a time. Arm and Disarm are called only while no operation that can
+// reach a point is in flight: the driver does one request at a time, and a test arms before it starts the operation. A test must check with Disarm that the point was reached: an unreached point proves nothing.
 func Arm(name string, kill bool, skip int) error {
 	if !slices.Contains(Points, name) {
 		return fmt.Errorf("seam: no point is named %q", name)
 	}
-	a := &armed{name: name, kill: kill}
+	a := &armed{name: name, kill: kill, pass: skip + 1}
 	a.skip.Store(int64(skip))
 	current_.Store(a)
 	return nil
@@ -83,6 +86,9 @@ func Fire(name string) error {
 	}
 	a.reached.Store(true)
 	if a.kill {
+		// Said before dying, so that whoever drives the process can tell this death from any other. Another
+		// implementation writes the same line to its standard error.
+		fmt.Fprintf(os.Stderr, "seam: killing at %s, pass %d\n", a.name, a.pass)
 		_ = syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
 		// The signal is not delivered synchronously: nothing may run on after a kill point.
 		for {

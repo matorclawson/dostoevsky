@@ -1,0 +1,73 @@
+{
+ "about": "A backup killed before it is published leaves no destination; one whose parent directory cannot be synced says it may not be durable.",
+ "covers": [
+  "5a25d90",
+  "5563045"
+ ],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish",
+   "value": "a",
+   "id": ""
+  },
+  {
+   "do": "arm",
+   "point": "backup.rename",
+   "kill": true
+  },
+  {
+   "do": "backup",
+   "dest": "$root/copy",
+   "dies": true
+  },
+  {
+   "do": "absent",
+   "file": "copy"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "count",
+   "is": 1
+  },
+  {
+   "do": "arm",
+   "point": "backup.syncparent",
+   "kill": false
+  },
+  {
+   "do": "backup",
+   "dest": "$root/durable",
+   "error": "backup_not_durable"
+  },
+  {
+   "do": "disarm",
+   "expect": {
+    "reached": true
+   }
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "open",
+   "dir": "$root/durable",
+   "segmented": false
+  },
+  {
+   "do": "count",
+   "is": 1
+  }
+ ]
+}

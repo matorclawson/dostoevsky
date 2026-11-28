@@ -1,8 +1,7 @@
 # Design: Dostoevsky against Apache Kafka, v1
 
-Companion to the workflow-streams design (v2, which revises v1 sha256 `cc4236c8…`). Written for the external council. 28 November 2026.
-Builds on the council candidate (pull request 84; council head `1745c8a2`, with review fixes on top). **That candidate is
-not merged, and its acceptance measurements are not in.** "Have" below means present in its source.
+Companion to the workflow-streams design (v2, which revises v1 sha256 `cc4236c8…`). Written for external review. 28 November 2026.
+Builds on the external candidate (pull request 84, head `ed99753f` with review fixes; approved for merge). "Have" below means present in its source.
 
 Every number is marked **measured** (with its source) or **proposed**.
 
@@ -12,7 +11,7 @@ Every number is marked **measured** (with its source) or **proposed**.
 partitions, balances consumers automatically, and comes with a large ecosystem. **Dostoevsky today is a single-copy log on one
 machine.** It cannot be offered as a Kafka replacement where losing a machine must not lose data.
 
-**Where we can win:** one small static binary with no JVM and no dependencies, low memory, fast start, low tail latency without
+**Where we can win:** one small static binary with no JVM and no dependencies, far less memory than Kafka (not the least of all brokers measured), fast start, low tail latency without
 batching, retry-safe publishing by ID, and consumer state committed with the offset.
 
 **What we measured, and its limits.** On a 2-vCPU Linux ARM64 server, one copy, fsync before acknowledgment, one record per
@@ -20,6 +19,23 @@ request: our HTTP gateway had higher throughput than Kafka at 8 and 32 producers
 producer in JavaScript, and used 13 to 36 MiB of server memory against Kafka's 567 to 645 MiB. **That setting removes Kafka's main
 strength, batching**, and Kafka's normal durability comes from replication, not from fsync. We have not measured either engine
 batched. We expect Kafka to be far ahead there until we batch.
+
+**Our own ARM64 measurements of the native server** (candidate `ed99753f`, Python clients, one record per request,
+512 bytes, durable acknowledgment, 5 rounds; medians in records/s):
+
+| Producers | Dostoevsky | Redis Streams | JetStream | Kafka |
+|---:|---:|---:|---:|---:|
+| 1 | 619 | 587 | 468 | 215 |
+| 8 | 2,268 | 2,128 | 626 | 302 |
+| 32 | 5,059 | 4,306 | 712 | 281 |
+
+- Faster than JetStream and Kafka in these unbatched runs (in an earlier run, one of our trials at 1 producer fell inside
+  JetStream's range).
+- p99 lower than Redis at 32 producers (13.4 against 52.9 ms).
+- **No throughput difference established against Redis** at 1, 8 or 32 producers: the trial ranges overlap. Redis ran without
+  publish deduplication.
+- **Not the smallest memory:** JetStream and Redis used less than Dostoevsky in the same runs (18 MiB ready and up to 32 MiB
+  peak, against JetStream's 14 and 28 and Redis's 8 and 11).
 
 **To compete we must add, in this order:** (1) replication and automatic failover; (2) batched and compressed publish and fetch;
 (3) server-side consumer group membership and assignment; (4) retention by time and size; (5) metrics, administration and
@@ -31,7 +47,7 @@ per-client authorization. Compaction and transactions follow.
 
 **Claim rule.** We say "beats Kafka" only for the exact cells of a pre-registered benchmark where every trial wins (section 7).
 
-**Decisions we ask of the council:** replication design (section 6), the wire-protocol recommendation (section 5), the
+**Decisions to be made:** replication design (section 6), the wire-protocol recommendation (section 5), the
 not-play list (section 4), and the benchmark rule (section 7).
 
 ## 1. What Kafka's game is
@@ -77,7 +93,7 @@ not-play list (section 4), and the benchmark rule (section 7).
 
 1. **Replication and failover.** Without it the comparison is not real (section 6).
 2. **Batching and compression**, end to end: wire operation, atomic batch append, fetch of many records. Standard library
-   compression only, or none; a new dependency is a council decision.
+   compression only, or none; a new dependency needs a separate decision.
 3. **Group coordination:** membership, heartbeats, partition assignment, fencing of a removed member's commits.
 4. **Retention policies** by age and size, per topic.
 5. **Operations:** metrics, topic and group administration, per-client credentials with read/write rights per topic, quotas.
@@ -89,10 +105,10 @@ not-play list (section 4), and the benchmark rule (section 7).
 
 | Axis | What is measured today | Still to measure |
 |---|---|---|
-| Server memory | **measured:** 13 to 36 MiB against Kafka's 567 to 645 MiB peak, 2-vCPU ARM64, one record per request, 120 s trials (our baseline; host log sha256 `f94a43ce…`). **Council, shared AMD64, not reproduced:** 12.2 against 404.0 MiB peak at 32 producers | long histories; replicated; batched |
-| Tail latency, unbatched | **council, shared AMD64, not reproduced:** p99 3.0 against 5.8 ms at 1 producer, 14.0 against 70.2 ms at 32 (native Python client) | ARM64; batched; at fixed rates |
-| Throughput, unbatched, one copy, fsync | **measured:** HTTP gateway above Kafka at 8 and 32 producers (for example Java 3,403 against 376 records/s at 32), below at 1 producer in JavaScript (270 against 351). **Council:** native Python 6,486 against 790 at 32 | the native server on our hardware (running) |
-| Start and restart | **measured:** fresh-process reopen, warm cache, of 160,000 records with the strict scanner 230 ms (legacy format, ARM64; embedded JetStream 89 ms). **Council:** 2.64 ms at 10M records on segmented storage, warm cache | **Kafka start and restart: never measured by us**; cold cache |
+| Server memory | **measured:** less than Kafka (18 to 32 MiB against 394 to 424, native server, ARM64). **JetStream and Redis used less than ours** in the same runs. In an earlier HTTP-gateway baseline ours was the smallest, 13 to 36 MiB (host log sha256 `f94a43ce…`) | long histories; replicated; batched; why ready memory varied between runs |
+| Tail latency, unbatched | **measured:** p99 4.5 against Kafka 10.3 ms at 1 producer and 13.4 against 177 ms at 32; lower than Redis at 32 (52.9 ms), not established at 1 or 8 | batched; at fixed rates |
+| Throughput, unbatched, one copy, fsync | **measured:** faster than JetStream and Kafka in these runs; no difference established against Redis. HTTP gateway (earlier): above Kafka at 8 and 32 producers, below at 1 producer in JavaScript (270 against 351) | batched; Redpanda |
+| Start and restart | **measured, ARM64:** segmented storage reopens in 8.6 to 12.4 ms with the store's files evicted from cache, 160,000 to 10M records; the older format takes 2.0 s at 1M | **Kafka start and restart: never measured by us** |
 | One binary, no JVM, no dependencies | a property of the source | deployment steps and files, counted side by side |
 | Operations cost | nothing measured | a written task list (install, upgrade, add a node, replace a failed node) timed on both |
 
@@ -129,13 +145,13 @@ against real client libraries, never inside the core binary. Ask users before bu
 - **Standard library only** means writing Raft ourselves. **That is the largest risk in this document.** Required before any claim:
   a model-checked or exhaustively simulated implementation, a deterministic fault simulator (reordering, loss, duplication, torn
   writes, disk full, clock jumps), and kill and partition tests on three real machines with an external history checker.
-- **Open for the council:** one group per node against one per partition; synchronous quorum fsync against replicated page cache
+- **Open questions:** one group per node against one per partition; synchronous quorum fsync against replicated page cache
   as an option (Kafka's usual trade); witness nodes for two-machine users; whether to adopt an audited external Raft library and
   give up "no dependencies".
 
 ## 7. Benchmark plan (proposed), in the shape of the OpenMessaging Benchmark
 
-**Scorecard (from the council's review of the workflow design; the same cells there).** Fresh durable publishes at 1 and 32
+**Scorecard (the same cells as in the workflow design).** Fresh durable publishes at 1 and 32
 producers; backlog drain while under load; reopen with 1M and 10M records. Measures: acknowledgments/s; publish p99 and
 consumer-visible p99; memory at boot and steady; disk bytes per record; records recovered. Every peer result is published with
 that system's acknowledgment, replication and failure settings. A third track measures the cost of combining: streams alone, the
@@ -170,11 +186,11 @@ are judged separately. "Beats Kafka" with no qualifier is used only if every cel
 on throughput and p99 with no more memory. Otherwise we publish the table of cells won and lost. Failed trials are published, not
 retried.
 
-## 8. Order of work and gates (proposed; no dates)
+## 8. Order of work and conditions (proposed; no dates)
 
-| Step | Gate to pass before the next |
+| Step | Condition before the next |
 |---|---|
-| 0. Merge the candidate | gate, review, acceptance receipts |
+| 0. Merge the candidate | tests, review, acceptance measurements |
 | 1. Batched publish and fetch, atomic batch | our cells against our own unbatched numbers; crash tests |
 | 2. Metrics and administration | used by the benchmark itself |
 | 3. Replication | simulator and three-machine fault tests with zero acknowledged loss |

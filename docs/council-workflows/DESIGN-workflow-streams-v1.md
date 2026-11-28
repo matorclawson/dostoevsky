@@ -1,18 +1,13 @@
 # Design: workflow streams v1 (Dostoevsky + Ephemeral as one product)
 
-Architect 12189 (operator decision, 27 November 2026). Lead: dostoevsky-maintainer. Co-author: ephemeral-maintainer.
-**Merged draft.** Sections 1.4, 2 and 5 are ephemeral-maintainer's (source reading of Ephemeral dbf27040; file sha256
-640c204759205de21cb32ebf22f87b6372f55bebf191a33e68387a1710517b4e,
-plus its change file sha256 81dfb337941dd7ae20649aa8d77e498d5c5810517179d1b56a9c0d88a01e6867); nothing was built or run for them.
-The statements about Dostoevsky in 1.4, 2 and 5 describe main 93870fe2, not the candidate.
+**Superseded by v2.** Sections on Ephemeral come from a source reading of Ephemeral `dbf27040`; nothing was built or run for them.
 No code is merged by this note. Statements about today's behavior come from source or from the named receipts;
 everything about the combined product is a proposal and has not been built or measured.
 
-## 0. Rulings this note asks for
+## 0. Decisions this note asks for
 
 1. **Each workflow transition is one ordinary record** that holds all its effects. One record is already all-or-nothing, so
-   version 1 needs no new journal format (1.1). An earlier draft of mine proposed a new frame kind; the co-author's approach is
-   simpler and I withdraw it.
+   version 1 needs no new journal format (1.1). An earlier draft proposed a new frame kind; one record per transition is simpler.
 2. **Activities and workflow state are not built on today's consumer groups or `Fold`.** This departs from the mapping in 12189 (1.2).
 3. **One process owns the data.** Ephemeral allows several processes to use one database; the combined product would not (1.3).
 4. **"Beat Redis" means publishing**, with a fixed pass rule. Workflow throughput is measured and reported separately (4).
@@ -74,7 +69,7 @@ here only one process may own the directory, so the CLI must talk to the running
 behavior change. Ephemeral builds with system SQLite through cgo or, with `CGO_ENABLED=0` as in the release
 binary, with the modernc SQLite module. The combined core takes neither, so reading old databases needs a separate tool (5).
 
-### 1.4 Ephemeral's side of the mapping (co-author)
+### 1.4 Ephemeral's side of the mapping
 
 #### Proposed shape
 
@@ -103,7 +98,7 @@ Why decide before append: Ephemeral rejects synchronously (stale lease, signal I
 #### Constraints this puts on the core
 
 - v1 uses a single transition partition, so parent and child atomicity, queue order and today's global history cursor follow
-  directly. Partitioning by root run ID is a council question (6).
+  directly. Partitioning by root run ID is an open question (6).
 - **Size limits.** Value 1 MiB, frame 4 MiB. Ephemeral sets no payload limit of its own. A 64-way parallel step passes the same input to every child, so the record must hold the input once and reference it. A hard input and result limit would be a compatibility break and must be stated.
 - **Retention.** `Retain` drops records and their IDs. Workflow records for live runs, receipts and signals must be snapshotted first. Proposed rule for v1: no retention on workflow logs until snapshot and restore are tested.
 - **Heartbeat cost.** Each heartbeat becomes a durable append, as it is a durable write today.
@@ -170,94 +165,13 @@ Must be one atomic transition each:
 
 One `Poll` may apply up to 32 due transitions (timers, expiries, child starts, joins) and then grant a lease, all in one SQLite transaction today. Splitting these into separate records is acceptable only if each stays atomic by itself. Cancel of a large tree has no size bound and may not fit one 1 MiB record if written out; see the rule in 1.1.
 
-## 3. Dependencies, in order (revised for the council candidate)
+## 3. Dependencies, in order
 
-**Revised 27 November after Architect 12230:** this design builds on the council candidate, PR 84, head
-`1745c8a2ddf9f4cb2f668dfae9306b79e378a316`. It is **not merged, gated or reviewed yet**, and its figures are the council's own
-(shared Linux AMD64), **not reproduced by us**. It contains PR 81, the native server (PR 72), the native clients, opt-in
-segmented storage with migration and rollback, and per-segment filters for producer-ID lookups.
+See v2.
 
-Nothing workflow-related starts before 1 and 2 are in.
+## 4. Performance plan
 
-1. **PR 84 merged**: gate, both readers, acceptance runs, Architect approval.
-2. **Memory and reopen bounds on segmented storage, measured by us.** The council reports a 2.64 ms warm-cache reopen at 10M
-   512-byte records, and 28,822 ack/s at 52.1 MiB against the legacy engine's 29,854 at 459.9 MiB with 10M retained IDs, 32
-   producers. Our own measurement of the reopen step alone (PR 81, same-host A/B, ARM64, legacy format): 160,000 records 946 ms on
-   main, 230 ms with PR 81, embedded JetStream 83.5 ms. **Gate for workflows:** reopen time and memory after open measured at
-   16k, 160k, 1M and 10M records, cold and warm cache, with a stated bound that holds. Segmented storage stays opt-in until its
-   throughput gate passes, so the workflow module must say which storage it requires; proposed: segmented.
-   **These bounds are for the stream core.** A segment checkpoint holds no application state. Workflow reopen is a separate gate:
-   load the module snapshot and replay the log after it, measured with 16k to 10M transitions and with many closed runs. Without
-   module snapshots it replays the whole workflow log, so the cost grows with history.
-3. **Segmented storage fit for workflow logs**: one-record atomicity and torn-tail recovery confirmed for it by review and crash
-   tests; what its prefix retention may remove (workflow logs of live and closed runs must stay); rollover latency (the council
-   saw 8 to 18 ms on first acknowledgments), which every lease and finish would feel.
-4. **Native server** security decision (inside PR 84).
-5. **Conformance suite** from Ephemeral's guarantees, green on the SQLite engine (2), then the **transition record** with crash
-   tests at every append. Writing the suite can start now.
-6. **Work queue with leases, the due-time index, and the on-disk index for closed runs.** The segmented ID filters and indexes
-   index producer IDs only; they are not a run index. Includes module snapshots and their crash tests.
-7. **Workflow module**, then the compatibility layer, then migration.
-
-No date is offered for 5 (after the suite) to 7 until PR 84 is decided and 2 is measured.
-
-## 4. Performance plan against Redis Streams
-
-### 4.1 Where we are (measured; Dostoevsky over HTTP/1.1, not the native server)
-
-Task 29, one Linux ARM64 host (2 vCPU), ext4, 512-byte records, durable acknowledgment, 5 rounds of 120 s. Median records/s
-(median p99 ms). Source d7b967a, HOST.log sha256 `f94a43ce...0ac1ca`.
-
-| Client | Producers | Dostoevsky | Redis 8.12.0 |
-|---|---:|---:|---:|
-| Python | 1 / 8 / 32 | 561 (4.44) / 1,908 (9.46) / 2,825 (26.88) | 625 (4.27) / 2,395 (7.83) / 5,505 (14.94) |
-| JavaScript | 1 / 8 / 32 | 270 (7.16) / 1,309 (22.47) / 2,181 (51.83) | 643 (4.10) / 2,756 (6.74) / 8,249 (8.06) |
-| Java | 1 / 8 / 32 | 490 (5.15) / 1,980 (10.34) / 3,403 (23.15) | 709 (3.90) / 3,218 (5.92) / 9,046 (8.56) |
-| Rust (client stalled; fixed since) | 1 / 8 / 32 | 23 / 185 / 735 | 735 / 3,218 / 10,299 |
-
-Redis is ahead in every cell, by up to about 3.8 times outside the stalled Rust rows. The Go control in the same run: embedded
-(no network) 933 / 5,858 / 18,988; through the HTTP gateway 655 / 2,686 / 6,550. The gap between those two is the cost of the
-server path on this host. Redis was not run with the Go client, so **embedded figures are not a comparison with Redis**; they only
-bound what a server over this journal might reach. Dostoevsky's server memory was the smallest in all 36 comparisons (13 to
-36 MiB peak) in 120 s trials; that says nothing about long histories.
-
-The Rust fix (PR 74) was measured separately, Dostoevsky only: 587 / 2,419 / 6,617. Not a head-to-head with the table.
-
-### 4.2 Levers, in the order to try them
-
-Each is an A/B against main on the same host with a rule fixed before the run. None has a promised gain.
-
-1. **Native binary protocol and clients** (in PR 84). Replaces HTTP parsing and base64 or JSON work. CPU per message through the
-   gateway was about 200 to 400 µs against about 31 to 58 µs embedded (PR 64 A/B, 2 vCPU host), so the server path is where the
-   time is. The council reports Python 1 and 32 producers at 1,310 and 6,486 ack/s against JetStream's 1,022 and 1,743 and Kafka's
-   620 and 790 (shared AMD64, not reproduced), and that Redis won its 32-producer group-of-16 comparison. Our reproduction,
-   including Redis on ARM64, is in progress.
-2. **Pipelining and reply coalescing**, so one connection can keep many publishes in flight and replies share writes.
-3. **Binary records**: the candidate's segmented storage already uses binary frames, so this is no longer separate work. Its
-   effect on server throughput against Redis has not been measured by us.
-4. **Profile-led write path work** (allocation, locking, syncs).
-5. Not counted: the group-commit gather change (PR 64) was measured and did not meet its rule.
-
-At one producer both servers wait for one sync per record, so per-request overhead is all that differs; **my judgment** is that a
-tie is more likely than a win there.
-
-### 4.3 Measurement design
-
-- **Host:** the smallest ARM server we use (2 vCPU, under 4 GiB), local ext4, runner lock, nothing else running.
-- **Equal durability:** Redis `appendonly yes`, `appendfsync always`; Dostoevsky as shipped. Weaker settings are never compared.
-- **Matrix:** native protocol, Python, JavaScript, Java, Rust, plus one Go load generator that drives both servers; 1, 8 and 32
-  producers; 512 bytes; unbatched and pipelined measured and labeled separately; 5 rotated rounds of 120 s.
-- **Pass rule per cell, fixed in advance:** throughput is won only if every Dostoevsky trial is faster than every Redis trial;
-  p99 only if every Dostoevsky p99 is lower. Anything overlapping is "no difference established". "Beats Redis" requires all
-  cells of both; otherwise we list the cells won and lost.
-- **Reported with it:** server CPU per message, server memory (sum of per-process sampled peaks, with that caveat), disk bytes
-  per record, and the same figures after preloading 1M records (10M where disk allows).
-- **Workflow benchmark (once the module exists):** start, three activities, complete; and one with a signal wait. For Redis the
-  harness must do the same durable work (state and history changed atomically with the acknowledgment, through a script or
-  transaction); comparing a workflow with a bare stream append would be dishonest. Also against Ephemeral on SQLite, so users
-  know what the move costs or gains. Today's only Ephemeral figure is its one-run serial benchmark (160.8 runs/s on a 2 vCPU
-  Linux ARM64 host, from its README), which is not comparable with any number above.
-- Failed trials are published, not retried.
+See v2.
 
 ## 5. Migration for existing Ephemeral users
 
@@ -288,9 +202,9 @@ On disk: one SQLite database in WAL mode (with sidecar files). Tables `definitio
 2. One database file as the argument to `Open` and as the unit users copy or inspect. Direct SQL access by users, if any do it, ends; this was never an API.
 3. Unbounded transaction size (large cancel trees, 64-way fan-out with large input).
 4. Payloads over the stream's value limit.
-5. History and indexes held on disk and read on demand: unless the module keeps them on disk, memory grows with history. This depends on the lead's reopen and history-memory fix.
+5. History and indexes held on disk and read on demand: unless the module keeps them on disk, memory grows with history. This depends on the reopen and history-memory work.
 
-## 6. For the next council round
+## 6. Open questions for review
 
 1. **One record per transition with decide-before-append** (including what apply derives), against a command log with
    deterministic apply; its size limit,
@@ -306,5 +220,5 @@ On disk: one SQLite database in WAL mode (with sidecar files). Tables `definitio
 9. **Size bounds and derived effects**: do acceptance-time limits and values computed on apply guarantee that no run becomes
    impossible to cancel or join, with the same history on every replay?
 
-Open risk, plainly: "fastest" and "smallest footprint" pull against each other once run state and indexes exist. The memory bound
+Open risk, plainly: speed and a small footprint pull against each other once run state and indexes exist. The memory bound
 in section 3 has to be restated for workflows and measured; it is not inherited from the stream core.

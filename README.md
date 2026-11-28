@@ -19,7 +19,7 @@ Dostoevsky keeps topics, idempotent publish and consumer checkpoints in one fsyn
 
 ## Quick start
 
-On Linux or macOS with Go 1.22+, Python 3.10+, Git and Make. Start the gateway in the background, on loopback port 8787:
+On Linux or macOS with Go 1.22+ (in this repository it fetches Go 1.27.0 on first use), Python 3.10+, Git and Make. Start the gateway in the background, on loopback port 8787:
 
 ```sh
 git clone https://github.com/rodriveracom/dostoevsky.git && cd dostoevsky
@@ -170,6 +170,8 @@ Synchronous, fsync-backed publishes of 512-byte records to one topic, five alter
 ## Embed it in Go
 
 Go 1.22 or later; the module has no dependencies outside the standard library.
+
+Inside this repository `go.mod` names `toolchain go1.27.0`. A Go 1.22 to 1.26 install fetches it on first use under automatic toolchain selection; commands that run offline (`make test`, `make verify`, `make release`) need it already installed or cached. Applications that import the library need only Go 1.22 or later.
 
 ```sh
 go get github.com/rodriveracom/dostoevsky@latest

@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 version=$1
+# Release builds are made with one Go release: the one whose output defines the stored and sent bytes.
+want=go1.27.0
+got=$("${GO:-go}" env GOVERSION)
+[ "$got" = "$want" ] || { echo "release needs $want, found $got" >&2; exit 1; }
 root=$(pwd -P)
 name=dostoevsky-$version
 mkdir -p dist

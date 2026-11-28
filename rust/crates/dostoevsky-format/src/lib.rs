@@ -6,6 +6,7 @@
 pub mod base64;
 pub mod crc32c;
 pub mod gojson;
+pub mod gotime;
 pub mod sha256;
 
 pub mod checkpoint3;

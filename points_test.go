@@ -110,6 +110,42 @@ func TestAPointFiresOnce(t *testing.T) {
 	}
 }
 
+// countingFile counts the writes made to a segment.
+type countingFile struct {
+	fsFile
+	writes int
+}
+
+func (f *countingFile) WriteAt(b []byte, at int64) (int, error) {
+	f.writes++
+	return f.fsFile.WriteAt(b, at)
+}
+
+// On a pass it is to skip, the mid-append point adds nothing: the append is one write. On the pass it fires, it makes the
+// half write and no other.
+func TestMidAppendAddsNoWriteOnASkippedPass(t *testing.T) {
+	n, err := OpenSegmented(t.TempDir(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	publishOne(t, n)
+	file := &countingFile{fsFile: n.segments.active.f}
+	n.segments.active.f = file
+	if err := seam.Arm("workflow.mid_append", false, 1); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { seam.Disarm() })
+	publishOne(t, n)
+	if file.writes != 1 {
+		t.Fatalf("a skipped pass made %d writes, want 1", file.writes)
+	}
+	_, err = n.Publish(context.Background(), p.Topic, Message{Value: []byte("cut")})
+	if !errors.Is(err, seam.ErrInjected) || file.writes != 2 {
+		t.Fatalf("the firing pass: %v after %d writes, want the injected error after 2", err, file.writes)
+	}
+}
+
 func TestAnUnknownPointIsRefusedAndAnUnreachedOneSaysSo(t *testing.T) {
 	if err := seam.Arm("no.such.point", false, 0); err == nil {
 		t.Fatal("an unknown name was armed")

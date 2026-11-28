@@ -30,7 +30,7 @@ var Points = []string{
 	// Backup and migration: before the copy, before the copy is published, before the parent directory is synced.
 	"backup.write", "backup.rename", "backup.syncparent",
 	// A workflow commit: before anything is written, once the call has passed the closed, fenced and cancellation checks
-	// and before its items are examined; part-way through writing the group (on the pass where it fires, and only then,
+	// after the check of their number and before the items themselves are examined; part-way through writing the group (on the pass where it fires, and only then,
 	// half the bytes are written first; it counts segment appends, so arm it only where a workflow store is the thing
 	// writing); after the segment is
 	// synced and before the witness is replaced; after the witness is replaced and before any caller is answered.
@@ -51,7 +51,8 @@ type armed struct {
 var current_ atomic.Pointer[armed]
 
 // Arm makes the named point fail, or kill the process, once: the first time it is reached after skip earlier times.
-// Every later pass goes through. One point is armed at a time. A test must check with Disarm that the point was reached: an unreached point proves nothing.
+// Every later pass goes through. One point is armed at a time. Arm and Disarm are called only while no operation that can
+// reach a point is in flight: the driver does one request at a time, and a test arms before it starts the operation. A test must check with Disarm that the point was reached: an unreached point proves nothing.
 func Arm(name string, kill bool, skip int) error {
 	if !slices.Contains(Points, name) {
 		return fmt.Errorf("seam: no point is named %q", name)

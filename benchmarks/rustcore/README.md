@@ -1,5 +1,10 @@
 # Rust write path against the Go engine
 
+**Frozen benchmark record.** The code here is exactly what was measured and is not maintained. It is superseded by the
+faithful Rust port of the engine, and it is not part of that port's workspace or its format and lint checks. On Rust 1.100
+`cargo fmt --check` fails, and `cargo clippy -- -D warnings` reports three errors (a constant-size `chunks_exact`, a manual
+`is_multiple_of` and a very complex type); both are left as they are.
+
 A prototype of the segmented log's write path in Rust (`benchmarks/rustcore/dostoevsky-core`), measured against
 the Go engine on one machine. Results and receipts are in `RESULT.md` and `receipts/`.
 

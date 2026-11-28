@@ -18,7 +18,7 @@ and reopen the store in one process; they do not kill the process. An activity c
 a key and must be idempotent for it.
 
 Trust: `webhook` accepts an event only with an HMAC-SHA256 of the body under a shared secret (`WEBHOOK_SECRET`, header
-`X-Signature`, hex). It serves plain HTTP: listen on loopback, or put TLS in front of it. The other programs listen on
+`X-Signature`, lowercase hex). It serves plain HTTP: listen on loopback, or put TLS in front of it. The other programs listen on
 nothing. None of these is a production service.
 
 Not here because the package lacks what they need: per-key objects, delayed sends and timers, child runs with joins,

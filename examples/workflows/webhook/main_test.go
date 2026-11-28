@@ -65,6 +65,8 @@ func TestCrashAndResume(t *testing.T) {
 	post(t, s, body+`{}`, http.StatusBadRequest)
 	post(t, s, `{"id":"`+strings.Repeat("x", 300)+`","invoice":"i1"}`, http.StatusBadRequest)
 	post(t, s, body+strings.Repeat(" ", bodyLimit), http.StatusRequestEntityTooLarge)
+	// Inside the wire limit, but six bytes per character once re-encoded.
+	post(t, s, `{"id":"e2","invoice":"i1","type":"`+strings.Repeat("<", 30000)+`"}`, http.StatusRequestEntityTooLarge)
 
 	// Die after the effect and before Finish.
 	task, err := s.Poll(queue, 50*time.Millisecond)

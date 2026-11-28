@@ -5,7 +5,7 @@
 // go/patterns-use-cases/src/webhookcallbacks.
 //
 // Trust: an event is accepted only with an HMAC-SHA256 of the exact body under a
-// secret shared with the sender, in hex, in the X-Signature header. This program
+// secret shared with the sender, in lowercase hex, in the X-Signature header. This program
 // serves plain HTTP, so use TLS in front of it on any untrusted network. A
 // captured request can be sent again; the event ID keeps it from being applied
 // twice.
@@ -29,6 +29,11 @@ import (
 const name = "payment-event"
 const queue = "payment-events"
 const bodyLimit = 64 << 10
+
+// inputLimit bounds the re-encoded event, which can be several times the size of
+// the body because of JSON escaping. It stays well inside the store's record
+// limit, so an event is never refused there and retried for ever.
+const inputLimit = 128 << 10
 
 // labelLimit is the longest run ID the store accepts.
 const labelLimit = 256
@@ -80,6 +85,10 @@ func intake(s *workflow.Store, secret []byte) http.HandlerFunc {
 			return
 		}
 		input, err := json.Marshal(e)
+		if err == nil && len(input) > inputLimit {
+			http.Error(w, "event too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		if err == nil {
 			_, err = s.StartOnce(name+"/"+e.ID, name, 1, queue, input, nil)
 		}

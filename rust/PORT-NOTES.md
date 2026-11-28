@@ -11,7 +11,8 @@ Go behavior the port keeps on purpose, each it changes, and what is not yet know
 | 0 | Workspace, layout, JSON as Go writes and reads it, the test seam, the conformance driver, the differential driver | Done |
 | 1 | Wire codec | Done |
 | 2 | Segment frames, checkpoints, the record scanner | Done, except the replayer, which is ported with the log state (note 16) |
-| 3 to 14 | Everything that opens a store | Not started |
+| 3 | Index sidecars and ID structures | Done, except what acts on the segment layer or the stream (note 24) |
+| 4 to 14 | Everything that opens a store | Not started |
 
 No engine request works yet. The Rust driver answers each one with the error `other` and names the row that brings it.
 
@@ -33,11 +34,14 @@ says so in its first line and names its row.
 | 2 | `recordscan.go` | `dostoevsky-format` | `recordscan` | ported |
 | 2 | `crcTable` in `journal.go` | `dostoevsky-format` | `crc32c` | ported |
 | 2 | `Time.UnmarshalJSON` | `dostoevsky-format` | `gotime` | ported (reading) |
-| 3 | `admission.go` | `dostoevsky-core` | `admission` | stub |
-| 3 | `id_index.go` | `dostoevsky-core` | `id_index` | stub |
-| 3 | `idfilter.go` | `dostoevsky-format` | `idfilter` | stub |
-| 3 | `location_index.go` | `dostoevsky-core` | `location_index` | stub |
-| 3 | `segindex.go` | `dostoevsky-format` | `segindex` | stub |
+| 3 | `admission.go` (the sketch) | `dostoevsky-core` | `admission` | ported |
+| 5 | `admission.go` (admission and eviction) | `dostoevsky-core` | with `seglayer` | not started |
+| 3 | `id_index.go` (the index) | `dostoevsky-core` | `id_index` | ported |
+| 6 | `id_index.go` (`storedID`) | `dostoevsky-core` | with `stream` | not started |
+| 3 | `idfilter.go` (the filter) | `dostoevsky-format` | `idfilter` | ported |
+| 5 | `idfilter.go` (the cache, the `.bloom` file, `PrepareIDFilters`) | `dostoevsky-core` | with `seglayer` | not started |
+| 3 | `location_index.go` | `dostoevsky-core` | `location_index` | ported |
+| 3 | `segindex.go` | `dostoevsky-format` | `segindex` | ported |
 | 4 | `journal.go` | `dostoevsky-core` | `journal` | stub |
 | 4 | `logstate.go` | `dostoevsky-core` | `logstate` | stub |
 | 4 | `sync_linux.go, sync_other.go` | `dostoevsky-core` | `sync` | stub |
@@ -78,7 +82,7 @@ clients. `benchmarks/rustcore` is a frozen record of an earlier prototype: it li
 member, and the gates do not touch it.
 
 Where a Go file mixes encoding with file access, the encoding goes to `dostoevsky-format` and the file access to
-`dostoevsky-core`. The placement of the row 3 and row 4 files in the table is provisional until they are ported.
+`dostoevsky-core`. The placement of the row 4 files in the table is provisional until they are ported.
 
 ## What Go does, and what Rust does
 
@@ -160,7 +164,7 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
     to be listed). Cargo's build output therefore goes to `.dev/rust-target`, outside `rust/`.
 21. **Fuzz targets.** `wire_test.go` and `frame3_test.go` have Go fuzz targets. Rust has none yet. In their place the
     tests replay the Go functions' own results on inputs damaged in many small ways (7,998 wire frames; 4,018 frame
-    rows; 535 checkpoint streams).
+    rows; 535 checkpoint streams; 812 index rows).
 
 ## Observed in the Go engine
 
@@ -173,6 +177,23 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
     engines, and uses the second only after a `switch`. `incomplete-backup-directory` has none, so its pairing "Go then
     Rust" is the Go engine alone and passes whatever the Rust driver does. Two of the 28 passes of a run with both
     drivers are of this kind (`receipts/seam/conformance-pairings.txt`).
+
+## Index structures
+
+24. **Three of the five files are split.** `segindex.go` and `location_index.go` are ported whole, apart from
+    `startNextOf`, which reads the log state and comes with it. Of `idfilter.go` the filter is ported; its cache, the
+    `.bloom` side file and `PrepareIDFilters` are methods of the segment layer and come with it. Of `id_index.go` the
+    index is ported; `storedID` reads the journal and comes with the stream. Of `admission.go` the sketch is ported;
+    admission and eviction act on the segment layer's cache and come with it.
+25. **The ID table visits entries in Go's order.** A lookup stops at the first entry the caller confirms, so the order
+    in which equal hashes are visited is behavior. Rust uses Go's slot function, growth rule and probe order; `each`
+    and `lookup` are checked to visit in the same order as Go's.
+26. **Partitions are held in maps and written sorted.** Go's index holds partitions in maps and sorts the keys when it
+    writes the idx file. Rust holds them in ordered maps. The bytes are the same.
+27. **The producer-ID fingerprint is seeded per process in both engines.** Go uses `maphash.MakeSeed`; Rust seeds its
+    hasher once per process. The fingerprint is never stored, so the two need not agree.
+28. **The location index stores a negative gap as a large unsigned number,** and adding it back wraps to the right
+    address. Rust uses wrapping arithmetic there, as Go's integers do.
 
 ## Not yet known
 

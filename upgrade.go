@@ -103,7 +103,7 @@ func UpgradeJournal(dir string) (string, error) {
 	if err := copyDurably(dir, name, io.NewSectionReader(j.file, 0, r.Size)); err != nil {
 		return "", fmt.Errorf("journal left unchanged, the copy before upgrading failed: %w", err)
 	}
-	if err := j.recover(func(entry, location) error { return nil }); err != nil {
+	if err := j.recover(nil, func(entry, location) error { return nil }); err != nil {
 		return name, fmt.Errorf("upgrade stopped while reading the journal, after the copy: %w", err)
 	}
 	if j.end == 0 { // there was only an interrupted first write: the journal is empty now and opens as new

@@ -1,6 +1,7 @@
 package io.github.rodriveracom.dostoevsky.bench;
 
 import io.github.rodriveracom.dostoevsky.Client;
+import io.github.rodriveracom.dostoevsky.NativeClient;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -68,6 +69,27 @@ public final class Adapters {
 
             public String clientName() { return name; }
 
+            public String clientBuild() { return build; }
+        };
+    }
+
+    static Core.Adapter nativeSocket(String addr, String token, int workers) throws Exception {
+        int split = addr.lastIndexOf(':');
+        String name = ownClientName(), build = buildId();
+        NativeClient c = NativeClient.connect(addr.substring(0, split), Integer.parseInt(addr.substring(split+1)), token);
+        return new Core.Adapter() {
+            public long publish(byte[] data) throws Exception {
+                try { return c.publish(TOPIC, data, "", "").offset(); }
+                catch (NativeClient.ConnectionLost e) {
+                    if (e.sent) throw new Core.AmbiguousOutcome("connection ended after submission", e);
+                    throw e;
+                }
+            }
+            public byte[] read(long offset) throws Exception {
+                return c.read(TOPIC, 0, offset, 0).orElseThrow().value();
+            }
+            public void close() { c.close(); }
+            public String clientName() { return name; }
             public String clientBuild() { return build; }
         };
     }
@@ -197,5 +219,5 @@ public final class Adapters {
     }
 
     public static final Map<String, Worker.Factory> ENGINES = Map.of(
-        "dostoevsky", Adapters::dostoevsky, "kafka", Adapters::kafka, "nats", Adapters::nats, "redis", Adapters::redis);
+        "native", Adapters::nativeSocket, "dostoevsky", Adapters::dostoevsky, "kafka", Adapters::kafka, "nats", Adapters::nats, "redis", Adapters::redis);
 }

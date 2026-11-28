@@ -48,7 +48,7 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 		if owner != n.cfg.Node {
 			return ErrOwner
 		}
-		s := n.streams[p]
+		s := n.lookupStream(p)
 		if s == nil {
 			if floor != 0 {
 				return ErrInvalid
@@ -63,6 +63,9 @@ func (n *Node) Retain(ctx context.Context, floors map[Partition]int64) error {
 				return fmt.Errorf("partition %v has a lagging consumer: %w", p, ErrConflict)
 			}
 		}
+	}
+	if n.segments != nil {
+		return n.segmentRetain(floors)
 	}
 	dir := filepath.Dir(n.j.path)
 	f, err := os.CreateTemp(dir, ".retention-*")

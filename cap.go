@@ -35,10 +35,14 @@ func (n *Node) SetJournalCap(maxBytes int64) error {
 	return nil
 }
 
-// JournalSize is the number of bytes of journal that Open would replay.
+// JournalSize reports physical journal bytes, including checkpoints in segmented stores.
+// Derived indexes, lock files and directory metadata are excluded.
 func (n *Node) JournalSize() int64 {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
+	if n.segments != nil {
+		return n.segments.bytes
+	}
 	return n.j.end
 }
 

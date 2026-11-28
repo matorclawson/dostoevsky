@@ -1,3 +1,4 @@
 /.dev/
 /dist/
 /build/
+/benchmarks/clients/javascript/node_modules/

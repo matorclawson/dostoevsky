@@ -11,8 +11,7 @@ import (
 
 // Binary frame, format version 3 (design v2: DESIGN-reopen-v2-segmented-binary-log.md).
 //
-// This file is the codec only. Nothing in the engine writes or reads these frames yet;
-// the segmented log that will is a later change.
+// OpenSegmented uses these frames for journals and checkpoints.
 //
 //	0   4  length of the body (u32)
 //	4   1  type

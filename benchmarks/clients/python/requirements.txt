@@ -2,6 +2,7 @@
 # Each is the newest release at least 14 days old when chosen (25 Nov 2026); see the PR for the dependency check.
 # confluent-kafka 2.16.1: Apache-2.0 (LICENSE in the sdist, sha256 of the sdist ec1474347615b9dd1bd0e269d37e31fa442782e67c4942661751e81b09d9f0c8); wheels bundle librdkafka.
 confluent-kafka==2.16.1 \
+    --hash=sha256:fdb2c4d53e84e10f4e567f4e74bba45d0ce90276b81259c3fc58df6960caabf5 \
     --hash=sha256:9deb0aa8920d567d09dd6258db6428f16ab9d229ee93aaf35a014aec771c2500 \
     --hash=sha256:ef8b8ea6b237aec595f5254b59a37e1cf5f0b7851b6739afa93ed0bb1c0be77f \
     --hash=sha256:4be5eecc098288ea6cf76762198404ee5b6827b389bb152d90f51b3d2ddbda1f \

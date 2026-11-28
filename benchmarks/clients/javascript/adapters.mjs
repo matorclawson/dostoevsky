@@ -51,6 +51,7 @@ const ambiguousIfTimeout = (e) => (/timeout|timed out/i.test(`${e?.name} ${e?.me
 // What each engine's client reports as its identity, without connecting to anything.
 export function identity(engine) {
   switch (engine) {
+    case "native":
     case "dostoevsky": return ownClientName();
     case "kafka": return version("kafkajs");
     case "nats": return version("@nats-io/transport-node") + "+" + version("@nats-io/jetstream");
@@ -98,6 +99,15 @@ export async function kafka(addr, token) {
   const loaded = new Map();
   return {
     clientName: identity("kafka"),
+    async publishBatch(values) {
+      try {
+        const [meta] = await producer.send({ topic: TOPIC, acks: -1, timeout: 60000,
+          messages: values.map(value => ({ value, partition: 0 })) });
+        const base = BigInt(meta.baseOffset);
+        if (base < 0n) throw new Error("missing offset");
+        return values.map((_, index) => base + BigInt(index));
+      } catch (error) { throw ambiguousIfTimeout(error); }
+    },
     publish: async (data) => {
       try {
         const [meta] = await producer.send({ topic: TOPIC, acks: -1, timeout: 60000, messages: [{ value: data }] });
@@ -191,8 +201,8 @@ export async function nats(addr, token) {
   const js = jetstream(nc);
   return {
     clientName: identity("nats"),
-    publish: async (data) => {
-      try { return BigInt((await js.publish(TOPIC, data, { timeout: 60000 })).seq); } catch (e) { throw ambiguousIfTimeout(e); }
+    publish: async (data, msgID) => {
+      try { return BigInt((await js.publish(TOPIC, data, { timeout: 60000, msgID })).seq); } catch (e) { throw ambiguousIfTimeout(e); }
     },
     read: async (offset) => (await jsm.streams.getMessage("EVENTS", { seq: Number(offset) })).data,
     close: async () => { await nc.close(); },
@@ -226,4 +236,20 @@ export async function redis(addr, token) {
   };
 }
 
-export const ENGINES = { dostoevsky, kafka, nats, redis };
+// Same receipt and verification loop as the other engines, using the v1 socket client.
+export async function native(addr, token) {
+  const { NativeClient } = await import("../../../clients/javascript/native.js");
+  const endpoint = new URL("tcp://" + addr);
+  const c = await NativeClient.connect({host: endpoint.hostname, port: Number(endpoint.port)}, token);
+  return {
+    clientName: ownClientName(), clientBuild: buildId(),
+    publish: async (data, id = "") => (await c.publish(TOPIC, data, {id})).offset,
+    read: async (offset) => {
+      const record = await c.read(TOPIC, 0, offset);
+      if (record === null) throw new Error(`missing offset ${offset}`);
+      return record.value;
+    },
+    close: async () => c.close(),
+  };
+}
+export const ENGINES = { dostoevsky, native, kafka, nats, redis };

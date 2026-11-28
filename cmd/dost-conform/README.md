@@ -76,7 +76,8 @@ stores, and any past workflow fix (their `covers` lists are empty).
 
 They set the clock, randomness and the named points of `internal/seam`, whose comments are the contract; another engine
 uses the same point names at the same boundaries. A step with `"dies": true` is a request the driver must not answer:
-it must end by SIGKILL, at a point armed to kill. A case that arms a point to fail checks `reached`.
+it must write `seam: killing at POINT, pass N` to its standard error and end by SIGKILL. A point armed to fail is
+followed by `disarm` with the expected `reached` before the driver ends; the runner fails a case that leaves one armed.
 
 ## Case files
 

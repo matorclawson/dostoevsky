@@ -3,6 +3,7 @@ package seam
 import (
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync/atomic"
 	"syscall"
@@ -45,6 +46,7 @@ type armed struct {
 	name    string
 	kill    bool
 	skip    atomic.Int64
+	pass    int // the pass that fires, from 1
 	reached atomic.Bool
 }
 
@@ -57,7 +59,7 @@ func Arm(name string, kill bool, skip int) error {
 	if !slices.Contains(Points, name) {
 		return fmt.Errorf("seam: no point is named %q", name)
 	}
-	a := &armed{name: name, kill: kill}
+	a := &armed{name: name, kill: kill, pass: skip + 1}
 	a.skip.Store(int64(skip))
 	current_.Store(a)
 	return nil
@@ -84,6 +86,9 @@ func Fire(name string) error {
 	}
 	a.reached.Store(true)
 	if a.kill {
+		// Said before dying, so that whoever drives the process can tell this death from any other. Another
+		// implementation writes the same line to its standard error.
+		fmt.Fprintf(os.Stderr, "seam: killing at %s, pass %d\n", a.name, a.pass)
 		_ = syscall.Kill(syscall.Getpid(), syscall.SIGKILL)
 		// The signal is not delivered synchronously: nothing may run on after a kill point.
 		for {

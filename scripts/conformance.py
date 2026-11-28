@@ -46,33 +46,32 @@ class Failed(Exception):
 class Engine:
     def __init__(self, name, path):
         self.name = name
-        self.process = subprocess.Popen([path], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        # Standard error goes to a file: a driver armed to kill says there which point it died at. The driver leads its
+        # own process group, so that a deadline also ends whatever it started and nothing keeps its output open.
+        self.errors = tempfile.TemporaryFile()
+        self.process = subprocess.Popen([path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.errors,
+                                        start_new_session=True)
 
-    def call(self, request):
-        timer = threading.Timer(TIMEOUT, self.process.kill)
-        timer.start()
+    def end_group(self):
         try:
-            self.process.stdin.write(json.dumps(request).encode() + b"\n")
-            self.process.stdin.flush()
-            line = self.process.stdout.readline()
-        except BrokenPipeError:
-            line = b""
-        finally:
-            timer.cancel()
-        if not line:
-            raise Failed("the %s driver stopped answering during %s" % (self.name, request["op"]))
-        return json.loads(line)
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
-    def die(self, request):
-        """Sends a request the driver is to die in, at a point armed to kill. It must not answer, and it must end by
-        SIGKILL on its own: a driver the watchdog had to kill hung, which is not the same thing."""
-        hung = threading.Event()
+    def said(self):
+        self.errors.seek(0)
+        return self.errors.read().decode("utf-8", "replace")
 
-        def watchdog():
-            hung.set()
-            self.process.kill()
+    def exchange(self, request):
+        """Writes one request and reads one line, ending the process group after TIMEOUT. Returns the line (empty when
+        there was none) and whether the deadline was what ended it."""
+        expired = threading.Event()
 
-        timer = threading.Timer(TIMEOUT, watchdog)
+        def deadline():
+            expired.set()
+            self.end_group()
+
+        timer = threading.Timer(TIMEOUT, deadline)
         timer.start()
         try:
             try:
@@ -80,14 +79,35 @@ class Engine:
                 self.process.stdin.flush()
                 line = self.process.stdout.readline()
             except BrokenPipeError:
-                raise Failed("the %s driver had already gone before %s" % (self.name, request["op"]))
-            status = self.process.wait()
+                line = b""
         finally:
             timer.cancel()
-        if hung.is_set():
+        return line, expired.is_set()
+
+    def call(self, request):
+        line, expired = self.exchange(request)
+        if expired:
+            raise Failed("the %s driver did not answer %s in time" % (self.name, request["op"]))
+        if not line:
+            raise Failed("the %s driver stopped answering during %s: %s" % (self.name, request["op"], self.said()[-300:]))
+        return json.loads(line)
+
+    def die(self, request, point, passes):
+        """Sends a request the driver is to die in, at the named point on the given pass. It must not answer, must say
+        that this point fired, and must end by SIGKILL. A driver the deadline had to end hung, which is not a death."""
+        if self.process.poll() is not None:
+            raise Failed("the %s driver had already gone before %s" % (self.name, request["op"]))
+        line, expired = self.exchange(request)
+        if expired:
             raise Failed("the %s driver hung in %s instead of dying" % (self.name, request["op"]))
         if line:
             raise Failed("the %s driver answered %s instead of dying: %r" % (self.name, request["op"], line[:200]))
+        status = self.process.wait(TIMEOUT)
+        self.end_group()
+        want = "seam: killing at %s, pass %d" % (point, passes)
+        if want not in self.said().splitlines():
+            raise Failed("the %s driver died in %s without saying %r: %s" % (self.name, request["op"], want,
+                                                                             self.said()[-300:]))
         if status != -signal.SIGKILL:
             raise Failed("the %s driver ended with status %d, not by SIGKILL" % (self.name, status))
 
@@ -101,25 +121,28 @@ class Engine:
         try:
             status = self.process.wait(TIMEOUT)
         except subprocess.TimeoutExpired:
+            self.end_group()
             raise Failed("the %s driver did not exit" % self.name)
         if status != 0:
-            raise Failed("the %s driver exited with status %d" % (self.name, status))
+            raise Failed("the %s driver exited with status %d: %s" % (self.name, status, self.said()[-300:]))
 
     def kill(self):
         """Kills a driver that must still be running: one that has already exited was not killed at this point."""
         status = self.process.poll()
         if status is not None:
             raise Failed("the %s driver had already exited with status %d before the kill" % (self.name, status))
-        self.process.kill()
-        status = self.process.wait()
+        self.end_group()
+        status = self.process.wait(TIMEOUT)
         if status != -signal.SIGKILL:
             raise Failed("the %s driver ended with status %d, not by the kill" % (self.name, status))
 
     def discard(self):
         """Cleanup after a failure: never raises, so the first error is the one reported."""
-        if self.process.poll() is None:
-            self.process.kill()
-            self.process.wait()
+        self.end_group()
+        try:
+            self.process.wait(TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def text(value):
@@ -186,6 +209,8 @@ def check_case(name, case):
         if "dies" in step and (do not in OPERATIONS or step["dies"] is not True
                                or set(step) & {"error", "fails", "expect", "nonzero", "save"}):
             bad("step %d: dies is true, on an engine request that expects nothing else" % number)
+        if do == "disarm" and not isinstance(step.get("expect", {}).get("reached"), bool):
+            bad("step %d: disarm states whether the point was reached" % number)
         if do in ACTIONS:
             unknown = set(step) - ACTIONS[do] - {"do", "only"}
             if unknown:
@@ -201,6 +226,7 @@ class Run:
         self.saved = {}
         self.marks = {}
         self.vars = {}
+        self.armed = None  # (point, kill, skip) armed in the running driver and not yet accounted for
 
     def path(self, value):
         return value.replace("$root", self.root)
@@ -281,8 +307,15 @@ class Run:
             raise Failed("no file matches %s" % pattern)
         return found[-1]
 
+    def check_armed(self):
+        """A point armed in a driver that is about to end was never reached or never checked."""
+        if self.armed is not None:
+            raise Failed("%s was armed and neither killed the driver nor was checked with disarm" % self.armed[0])
+
     def step(self, step):
         do = step["do"]
+        if do in ("switch", "kill"):
+            self.check_armed()
         if do == "switch":
             if self.driver is not None:
                 self.driver.stop()
@@ -357,8 +390,10 @@ class Run:
             request = self.request(step)
             if self.driver is None:
                 raise Failed("no driver is running")
-            self.driver.die(request)
-            self.driver = None
+            if self.armed is None or not self.armed[1]:
+                raise Failed("no point is armed to kill")
+            self.driver.die(request, self.armed[0], self.armed[2] + 1)
+            self.driver, self.armed = None, None
         else:
             answer = self.call(self.request(step))
             if "error" in step:
@@ -369,6 +404,10 @@ class Run:
                     raise Failed("want a failure, got %r" % answer)
             elif not answer["ok"]:
                 raise Failed("%s: %s" % (answer.get("error"), answer.get("message")))
+            if answer["ok"] and step["do"] == "arm":
+                self.armed = (step["point"], step.get("kill", False), step.get("skip", 0))
+            elif answer["ok"] and step["do"] == "disarm":
+                self.armed = None
             if "expect" in step:
                 want = step["expect"]
                 want = expected(want) if step["do"].startswith("wf_") else encoded(want)
@@ -394,6 +433,7 @@ class Run:
                     self.step(step)
                 except Failed as error:
                     raise Failed("step %d (%s): %s" % (number, step["do"], error))
+            self.check_armed()
             if self.driver is not None:
                 self.driver.stop()
                 self.driver = None

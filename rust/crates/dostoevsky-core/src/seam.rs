@@ -20,6 +20,7 @@
 //! The clock and the random source are checked against vectors written by the Go package (`rust/testdata`). The
 //! named points ([`POINTS`], [`arm`], [`at`], [`disarm`]) mirror Go's `internal/seam/points.go`.
 
+use dostoevsky_format::goquote::quote;
 use dostoevsky_format::sha256;
 use std::io::Write;
 use std::sync::Mutex;
@@ -181,16 +182,19 @@ fn armed() -> std::sync::MutexGuard<'static, Option<Armed>> {
 /// is refused. One point is armed at a time, and an armed point stays until [`disarm`] has reported it: arming again
 /// before that is refused, so that no test replaces a point it never checked.
 ///
-/// Mirrors `seam.Arm`, with the rule that an unchecked point refuses a second `arm`.
+/// Mirrors `seam.Arm`. The order and the texts are Go's: a name that is not a point is refused first, with
+/// `seam: no point is named "<name>"`; then an armed point, with `seam: point "<armed>" is armed and disarm has not
+/// reported it`, which names the point that is armed and not the one asked for. Names are quoted as Go's `%q`
+/// quotes them.
 pub fn arm(name: &str, kill: bool, skip: i64) -> Result<(), String> {
     if !POINTS.contains(&name) {
-        return Err(format!("seam: no point is named {name:?}"));
+        return Err(format!("seam: no point is named {}", quote(name)));
     }
     let mut armed = armed();
     if let Some(a) = armed.as_ref() {
         return Err(format!(
-            "seam: point {:?} is armed and disarm has not reported it",
-            a.name
+            "seam: point {} is armed and disarm has not reported it",
+            quote(&a.name)
         ));
     }
     *armed = Some(Armed {
@@ -349,6 +353,11 @@ mod tests {
             arm("dirsync", false, 0),
             Err("seam: point \"dirsync\" is armed and disarm has not reported it".to_string()),
             "also for the same name"
+        );
+        assert_eq!(
+            arm("no\u{1}such\n\"point\"", false, 0),
+            Err("seam: no point is named \"no\\x01such\\n\\\"point\\\"\"".to_string()),
+            "an unknown name is refused first, and quoted as Go quotes it"
         );
         assert_eq!(at("segment.write"), Ok(()), "the refused arm changed nothing");
         assert!(!disarm(), "reached once, but it had not fired");

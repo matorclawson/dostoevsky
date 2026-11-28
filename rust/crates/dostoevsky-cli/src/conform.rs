@@ -15,6 +15,7 @@ use dostoevsky_core::errors::Error;
 use dostoevsky_core::seam;
 use dostoevsky_format::base64;
 use dostoevsky_format::gojson::{self, ParseError, Value};
+use dostoevsky_format::goquote;
 use std::io::{BufRead, Write};
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -334,7 +335,7 @@ fn members<'a>(v: &'a Value, what: &str) -> Decoded<Option<&'a [(String, Value)]
 }
 
 fn unknown<T>(key: &str) -> Decoded<T> {
-    Err(format!("json: unknown field {key:?}"))
+    Err(format!("json: unknown field {}", goquote::quote(key)))
 }
 
 fn message(m: &mut Message, v: &Value) -> Decoded<()> {
@@ -566,8 +567,10 @@ impl Driver {
             "wf_close" | "wf_register" | "wf_start_once" | "wf_poll" | "wf_finish" | "wf_signal" | "wf_history" => {
                 Err(Error::not_ported(&q.op, 10))
             }
-            // Go quotes the name here with strconv.Quote; for the names a test sends that is the same text.
-            _ => Err(Error::other(format!("dost-conform: unknown op {:?}", q.op))),
+            _ => Err(Error::other(format!(
+                "dost-conform: unknown op {}",
+                goquote::quote(&q.op)
+            ))),
         }
     }
 }

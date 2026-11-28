@@ -6,6 +6,8 @@
 pub mod base64;
 pub mod crc32c;
 pub mod gojson;
+pub mod goquote;
+mod goquote_table;
 pub mod gotime;
 pub mod sha256;
 

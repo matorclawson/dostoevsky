@@ -8,7 +8,7 @@ everything about the combined product is a proposal and has not been built or me
 
 1. **Each workflow transition is one ordinary record** that holds all its effects. One record is already all-or-nothing, so
    version 1 needs no new journal format (1.1). An earlier draft proposed a new frame kind; one record per transition is simpler.
-2. **Activities and workflow state are not built on today's consumer groups or `Fold`.** This departs from the mapping in 12189 (1.2).
+2. **Activities and workflow state are not built on today's consumer groups or `Fold`.** This departs from the originally proposed mapping (1.2).
 3. **One process owns the data.** Ephemeral allows several processes to use one database; the combined product would not (1.3).
 4. **"Beat Redis" means publishing**, with a fixed pass rule. Workflow throughput is measured and reported separately (4).
    Today Redis has the higher publish throughput in every cell we measured.
@@ -165,13 +165,95 @@ Must be one atomic transition each:
 
 One `Poll` may apply up to 32 due transitions (timers, expiries, child starts, joins) and then grant a lease, all in one SQLite transaction today. Splitting these into separate records is acceptable only if each stays atomic by itself. Cancel of a large tree has no size bound and may not fit one 1 MiB record if written out; see the rule in 1.1.
 
-## 3. Dependencies, in order
+## 3. Dependencies, in order (historical)
 
-See v2.
+**Written before pull request 84 merged:** it describes the candidate as it stood on 27 November, when its figures were
+the external reviewers' own and not yet reproduced.
 
-## 4. Performance plan
+Nothing workflow-related starts before 1 and 2 are in.
 
-See v2.
+1. **PR 84 merged**: tests, review and acceptance measurements.
+2. **Memory and reopen bounds on segmented storage, measured by us.** The external reviewers report a 2.64 ms warm-cache reopen at 10M
+   512-byte records, and 28,822 ack/s at 52.1 MiB against the legacy engine's 29,854 at 459.9 MiB with 10M retained IDs, 32
+   producers. Our own measurement of the reopen step alone (PR 81, same-host A/B, ARM64, legacy format): 160,000 records 946 ms on
+   main, 230 ms with PR 81, embedded JetStream 83.5 ms. **Condition for workflows:** reopen time and memory after open measured at
+   16k, 160k, 1M and 10M records, cold and warm cache, with a stated bound that holds. Segmented storage stays opt-in until its
+   throughput condition is met, so the workflow module must say which storage it requires; proposed: segmented.
+   **These bounds are for the stream core.** A segment checkpoint holds no application state. Workflow reopen is a separate bound:
+   load the module snapshot and replay the log after it, measured with 16k to 10M transitions and with many closed runs. Without
+   module snapshots it replays the whole workflow log, so the cost grows with history.
+3. **Segmented storage fit for workflow logs**: one-record atomicity and torn-tail recovery confirmed for it by review and crash
+   tests; what its prefix retention may remove (workflow logs of live and closed runs must stay); rollover latency (the external reviewers
+   saw 8 to 18 ms on first acknowledgments), which every lease and finish would feel.
+4. **Native server** security decision (inside PR 84).
+5. **Conformance suite** from Ephemeral's guarantees, green on the SQLite engine (2), then the **transition record** with crash
+   tests at every append. Writing the suite can start now.
+6. **Work queue with leases, the due-time index, and the on-disk index for closed runs.** The segmented ID filters and indexes
+   index producer IDs only; they are not a run index. Includes module snapshots and their crash tests.
+7. **Workflow module**, then the compatibility layer, then migration.
+
+No date is offered for 5 (after the suite) to 7 until PR 84 is decided and 2 is measured.
+
+## 4. Performance plan against Redis Streams (historical)
+
+Superseded by v2 section 4 for pass rules and tracks. Kept for its baseline, durability settings and controls, which still
+apply where v2 does not name a replacement. Later measurements of the native server are in v2.
+
+### 4.1 Where we are (measured; Dostoevsky over HTTP/1.1, not the native server)
+
+Task 29, one Linux ARM64 host (2 vCPU), ext4, 512-byte records, durable acknowledgment, 5 rounds of 120 s. Median records/s
+(median p99 ms). Source d7b967a, HOST.log sha256 `f94a43ce...0ac1ca`.
+
+| Client | Producers | Dostoevsky | Redis 8.12.0 |
+|---|---:|---:|---:|
+| Python | 1 / 8 / 32 | 561 (4.44) / 1,908 (9.46) / 2,825 (26.88) | 625 (4.27) / 2,395 (7.83) / 5,505 (14.94) |
+| JavaScript | 1 / 8 / 32 | 270 (7.16) / 1,309 (22.47) / 2,181 (51.83) | 643 (4.10) / 2,756 (6.74) / 8,249 (8.06) |
+| Java | 1 / 8 / 32 | 490 (5.15) / 1,980 (10.34) / 3,403 (23.15) | 709 (3.90) / 3,218 (5.92) / 9,046 (8.56) |
+| Rust (client stalled; fixed since) | 1 / 8 / 32 | 23 / 185 / 735 | 735 / 3,218 / 10,299 |
+
+Redis is ahead in every cell, by up to about 3.8 times outside the stalled Rust rows. The Go control in the same run: embedded
+(no network) 933 / 5,858 / 18,988; through the HTTP gateway 655 / 2,686 / 6,550. The gap between those two is the cost of the
+server path on this host. Redis was not run with the Go client, so **embedded figures are not a comparison with Redis**; they only
+bound what a server over this journal might reach. Dostoevsky's server memory was the smallest in all 36 comparisons (13 to
+36 MiB peak) in 120 s trials; that says nothing about long histories.
+
+The Rust fix (PR 74) was measured separately, Dostoevsky only: 587 / 2,419 / 6,617. Not a head-to-head with the table.
+
+### 4.2 Levers, in the order to try them
+
+Each is an A/B against main on the same host with a rule fixed before the run. None has a promised gain.
+
+1. **Native binary protocol and clients** (in PR 84). Replaces HTTP parsing and base64 or JSON work. CPU per message through the
+   gateway was about 200 to 400 µs against about 31 to 58 µs embedded (PR 64 A/B, 2 vCPU host), so the server path is where the
+   time is. The external reviewers report Python 1 and 32 producers at 1,310 and 6,486 ack/s against JetStream's 1,022 and 1,743 and Kafka's
+   620 and 790 (shared AMD64, not reproduced), and that Redis won its 32-producer group-of-16 comparison. Our reproduction,
+   including Redis on ARM64, is in progress.
+2. **Pipelining and reply coalescing**, so one connection can keep many publishes in flight and replies share writes.
+3. **Binary records**: the candidate's segmented storage already uses binary frames, so this is no longer separate work. Its
+   effect on server throughput against Redis has not been measured by us.
+4. **Profile-led write path work** (allocation, locking, syncs).
+5. Not counted: the group-commit gather change (PR 64) was measured and did not meet its rule.
+
+At one producer both servers wait for one sync per record, so per-request overhead is all that differs; **my judgment** is that a
+tie is more likely than a win there.
+
+### 4.3 Measurement design
+
+- **Host:** the smallest ARM server we use (2 vCPU, under 4 GiB), local ext4, nothing else running.
+- **Equal durability:** Redis `appendonly yes`, `appendfsync always`; Dostoevsky as shipped. Weaker settings are never compared.
+- **Matrix:** native protocol, Python, JavaScript, Java, Rust, plus one Go load generator that drives both servers; 1, 8 and 32
+  producers; 512 bytes; unbatched and pipelined measured and labeled separately; 5 rotated rounds of 120 s.
+- **Pass rule per cell, fixed in advance:** throughput is won only if every Dostoevsky trial is faster than every Redis trial;
+  p99 only if every Dostoevsky p99 is lower. Anything overlapping is "no difference established". "Beats Redis" requires all
+  cells of both; otherwise we list the cells won and lost.
+- **Reported with it:** server CPU per message, server memory (sum of per-process sampled peaks, with that caveat), disk bytes
+  per record, and the same figures after preloading 1M records (10M where disk allows).
+- **Workflow benchmark (once the module exists):** start, three activities, complete; and one with a signal wait. For Redis the
+  harness must do the same durable work (state and history changed atomically with the acknowledgment, through a script or
+  transaction); comparing a workflow with a bare stream append would be dishonest. Also against Ephemeral on SQLite, so users
+  know what the move costs or gains. Today's only Ephemeral figure is its one-run serial benchmark (160.8 runs/s on a 2 vCPU
+  Linux ARM64 host, from its README), which is not comparable with any number above.
+- Failed trials are published, not retried.
 
 ## 5. Migration for existing Ephemeral users
 

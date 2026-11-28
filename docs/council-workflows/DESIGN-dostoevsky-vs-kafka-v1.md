@@ -1,7 +1,7 @@
 # Design: Dostoevsky against Apache Kafka, v1
 
-Companion to the workflow-streams design (v2, which revises v1 sha256 `cc4236c8…`). Written for external review. 28 November 2026.
-Builds on the external candidate (pull request 84, head `ed99753f` with review fixes; approved for merge). "Have" below means present in its source.
+Companion to the workflow-streams design (v2, which revises v1; original v1 text sha256 `cc4236c8…`, the public copy was edited). Written for external review. 28 November 2026.
+Builds on the external candidate (pull request 84, head `ed99753f` with review fixes; merged). "Have" below means present in its source.
 
 Every number is marked **measured** (with its source) or **proposed**.
 
@@ -34,8 +34,9 @@ batched. We expect Kafka to be far ahead there until we batch.
 - p99 lower than Redis at 32 producers (13.4 against 52.9 ms).
 - **No throughput difference established against Redis** at 1, 8 or 32 producers: the trial ranges overlap. Redis ran without
   publish deduplication.
-- **Not the smallest memory:** JetStream and Redis used less than Dostoevsky in the same runs (18 MiB ready and up to 32 MiB
-  peak, against JetStream's 14 and 28 and Redis's 8 and 11).
+- **Not the smallest memory:** JetStream and Redis used less than Dostoevsky in the same runs (median ready 18.2 MiB and
+  largest per-cell median peak 31.6 MiB, against JetStream's 13.9 and 28.3 and Redis's 7.5 and 10.8; 512-byte records with
+  32-character IDs, 2,048 per cell).
 
 **To compete we must add, in this order:** (1) replication and automatic failover; (2) batched and compressed publish and fetch;
 (3) server-side consumer group membership and assignment; (4) retention by time and size; (5) metrics, administration and
@@ -105,10 +106,10 @@ not-play list (section 4), and the benchmark rule (section 7).
 
 | Axis | What is measured today | Still to measure |
 |---|---|---|
-| Server memory | **measured:** less than Kafka (18 to 32 MiB against 394 to 424, native server, ARM64). **JetStream and Redis used less than ours** in the same runs. In an earlier HTTP-gateway baseline ours was the smallest, 13 to 36 MiB (host log sha256 `f94a43ce…`) | long histories; replicated; batched; why ready memory varied between runs |
+| Server memory | **measured:** less than Kafka (native server, ARM64: median ready 18.2 MiB and per-cell median peaks 26.5 to 31.6, against Kafka's 394 ready and 419 to 424 peak). **JetStream and Redis used less than ours** in the same runs. In an earlier HTTP-gateway baseline ours was the smallest, 13 to 36 MiB (host log sha256 `f94a43ce…`) | long histories; replicated; batched; why ready memory varied between runs |
 | Tail latency, unbatched | **measured:** p99 4.5 against Kafka 10.3 ms at 1 producer and 13.4 against 177 ms at 32; lower than Redis at 32 (52.9 ms), not established at 1 or 8 | batched; at fixed rates |
 | Throughput, unbatched, one copy, fsync | **measured:** faster than JetStream and Kafka in these runs; no difference established against Redis. HTTP gateway (earlier): above Kafka at 8 and 32 producers, below at 1 producer in JavaScript (270 against 351) | batched; Redpanda |
-| Start and restart | **measured, ARM64:** segmented storage reopens in 8.6 to 12.4 ms with the store's files evicted from cache, 160,000 to 10M records; the older format takes 2.0 s at 1M | **Kafka start and restart: never measured by us** |
+| Start and restart | **measured, ARM64:** segmented storage reopens in per-size medians of 8.6 to 12.4 ms with the store's files evicted from cache, 160,000 to 10M records; the older format takes 2.0 s at 1M | **Kafka start and restart: never measured by us** |
 | One binary, no JVM, no dependencies | a property of the source | deployment steps and files, counted side by side |
 | Operations cost | nothing measured | a written task list (install, upgrade, add a node, replace a failed node) timed on both |
 

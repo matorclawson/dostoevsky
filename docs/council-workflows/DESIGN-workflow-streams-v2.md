@@ -1,6 +1,6 @@
 # Design: workflow streams v2 (Dostoevsky + Ephemeral as one product)
 
-Revision of v1 (sha256 `cc4236c8…`) after external review, 28 November 2026. Sections on Ephemeral come from a source
+Revision of v1 (original text sha256 `cc4236c8…`; the copy beside this was edited for publication) after external review, 28 November 2026. Sections on Ephemeral come from a source
 reading of Ephemeral `dbf27040`. Statements about Dostoevsky in 1.4, 2 and 5 describe main `93870fe2`. No code is merged by
 this note. Statements about today's behavior come from source or from named receipts; everything about the combined product is
 a proposal and has not been built or measured.
@@ -186,7 +186,7 @@ Also kill **before the record is written**: the retry behaves as a first call. A
 leaves the bytes in the page cache, so either outcome is correct there; the test must accept both and require that exactly one
 holds. Only a power-loss test could show what the sync adds, and none is planned. The comparison side needs no kill hooks in
 Ephemeral: make the call, discard its result, close, reopen and retry, through the public API. These go into the conformance
-suite after PR 20.
+suite (Ephemeral pull request 20, merged).
 
 ### 1.8 Workflows triggered by a stream
 
@@ -270,19 +270,17 @@ One `Poll` may apply up to 32 due transitions (timers, expiries, child starts, j
 
 ## 3. Dependencies, order and first milestone
 
-This design builds on pull request 84 (head `ed99753f`, approved for merge). Our ARM64 measurements of it are used below.
+This design builds on pull request 84 (head `ed99753f`, merged). Our ARM64 measurements of it are used below.
 
-1. **Conformance suite** for today's Ephemeral guarantees through the public API: started. Ephemeral pull request 20 (test
-   only, open at `624cb475`, reviewed with three low findings, tests passed, **not merged**) covers
-   the default single attempt, heartbeat, a lease across reopen, buffered signal order, repeats on closed runs, `History` and
-   `List` pages, a timer not firing early and a parallel parent with a failed child. A follow-up (the three lows, plus
-   lost-reply tests for `StartOnce`, `Poll` and `Finish`) is **written, not yet run**. Still missing: kill-during-write cases,
-   clock steps, storage failures during a transition.
-2. **Candidate merged** after tests, review and acceptance measurements.
-3. **Bounds on segmented storage measured by us.** The one measurement of ours so far is of the reopen change in the older format
-   (ARM64, fresh process, warm cache, 160,000 records: 979 ms on main, 230 ms with the change, embedded JetStream 89 ms).
-   Segment checkpoints hold no application state, so workflow reopen needs its own test and bound: load the module snapshot and replay after
-   it, with 16k to 10M transitions and many closed runs.
+1. **Conformance suite** for today's Ephemeral guarantees through the public API: Ephemeral pull requests 20 and 21 are
+   merged (defaults, heartbeat, lease across reopen, signal order, repeats on closed runs, paging, timers, parallel failure,
+   and lost-reply cases for `StartOnce`, `Poll` and `Finish`); a tightening of those tests is open. Still missing:
+   kill-during-write cases, clock steps, storage failures during a transition.
+2. **Candidate merged** (pull request 84).
+3. **Bounds on segmented storage measured by us** (stream core only): per-size medians of 8.6 to 12.4 ms to reopen with the
+   store's files evicted from cache, 160,000 to 10M records, about 7 MiB resident; memory grew with history when all of it was
+   kept (24 to 68 MiB over 5M records). Segment checkpoints hold no application state, so workflow reopen needs its own
+   test and bound: load the module snapshot and replay after it, with 16k to 10M transitions and many closed runs.
 4. **Workflow store:** the separate directory, the writer of 1.6, transition records, module snapshots, each with crash tests.
 5. **Work queue with leases, due-time index, on-disk index for closed runs.** The candidate's ID filters index producer IDs only.
 6. **Workflow module**, then the compatibility layer, then migration.
@@ -292,7 +290,7 @@ This design builds on pull request 84 (head `ed99753f`, approved for merge). Our
 - measured cost per completed workflow: durable writes, bytes, CPU, latency;
 - evidence that a streams-only user pays no measurable penalty.
 
-No dates are offered for 4 to 6 until 2 and 3 are done.
+No dates are offered for 4 to 6 until the workflow bounds in 3 are measured.
 
 ## 4. Scorecards
 
@@ -328,8 +326,9 @@ What we know today, all of it about publishing only and none of it about workflo
 - p99 lower than Redis at 32 producers (13.4 against 52.9 ms).
 - **No throughput difference established against Redis** at 1, 8 or 32 producers: the trial ranges overlap. Redis ran without
   publish deduplication.
-- **Not the smallest memory:** JetStream and Redis used less than Dostoevsky in the same runs (18 MiB ready and up to 32 MiB
-  peak, against JetStream's 14 and 28 and Redis's 8 and 11).
+- **Not the smallest memory:** JetStream and Redis used less than Dostoevsky in the same runs (median ready 18.2 MiB and
+  largest per-cell median peak 31.6 MiB, against JetStream's 13.9 and 28.3 and Redis's 7.5 and 10.8; 512-byte records with
+  32-character IDs, 2,048 per cell).
 
 Ephemeral's only workflow figure is its serial benchmark: 160.8 one-activity runs per second on a 2-vCPU Linux ARM64 host
 (its README).

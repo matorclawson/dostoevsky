@@ -1,6 +1,6 @@
 # Design: workflows against Temporal, v1
 
-Companion to the workflow-streams design (written against v1, sha256 `cc4236c8…`, "the v1 design"; updated for the
+Companion to the workflow-streams design (written against v1, original text sha256 `cc4236c8…`, "the v1 design"; updated for the
 changes that go into v2). For external review. November 27, 2026.
 
 **How to read the numbers.** **[measured]** has a receipt named beside it. **[documented]** is what Temporal's own documentation says,
@@ -121,7 +121,7 @@ to see and cancel runs (CLI first); retention and purge; backup and restore; met
 |---|---|---|
 | Footprint and operating cost | No external database or search cluster; one process | Publishing only, not workflows: the HTTP gateway peaked at 13 to 36 MiB in 120 s trials **[measured]** (source `d7b967a`, `HOST.log` sha256 `f94a43ce…0ac1ca`); the native server used more memory than JetStream and Redis in a later publishing comparison (table in the Kafka design, same directory), so no "smallest" claim is made. Says nothing about long histories |
 | Start and activity-dispatch latency | No network hop to a database; one durable write per transition | None for the combined product |
-| Cold start | Open a directory, no schema service | For the stream core only, not for this design: segmented storage reopened in 8.6 to 12.4 ms in our run on Linux ARM64 (candidate `ed99753f`, store files evicted from the page cache, directory entries still cached, 160,000 to 10M records, 512-byte values). Excludes workflow state, which has not been measured |
+| Cold start | Open a directory, no schema service | For the stream core only, not for this design: segmented storage reopened in per-size medians of 8.6 to 12.4 ms in our run on Linux ARM64 (candidate `ed99753f`, store files evicted from the page cache, directory entries still cached, 160,000 to 10M records, 512-byte values). Excludes workflow state, which has not been measured |
 | Workflows next to streams | One server can serve both | Design only. They use **separate stores** with no shared commit; a stream-triggered workflow starts through `StartOnce` keyed by (topic, partition, offset) |
 
 For scale, the only workflow figure we have: Ephemeral on SQLite completed 160.8 one-activity runs per second, p99 10.48 ms,
@@ -222,8 +222,8 @@ a rule written before the run.
 ## 7. Dependencies and risks
 
 First milestone: a crash-tested activity lifecycle, a measured cost per completed workflow, and evidence that a
-streams-only user pays no measurable penalty. Order: v1 design steps 1 to 7; wire operations for workflows and authentication; clients; step-graph additions; operator
-tooling; benchmark. No dates: the first dependency, PR 84, is undecided.
+streams-only user pays no measurable penalty. Order: the dependency steps of the v2 workflow design (section 3); wire operations for workflows and authentication; clients; step-graph additions; operator
+tooling; benchmark. No dates: the first dependency, pull request 84, has merged, and the workflow bounds are not yet measured.
 
 - **Footprint against indexes.** Run state, per-run history and attribute indexes will add memory and disk to the stream core.
 - **One node.** Until replication exists, say "single node" wherever we compare.

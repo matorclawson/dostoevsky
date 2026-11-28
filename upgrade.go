@@ -8,7 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
+
+	"github.com/rodriveracom/dostoevsky/internal/seam"
 )
 
 // A journal written only by 0.2.x (frames signed DOST0001) is not opened as it is: this version would have to mark it,
@@ -99,7 +100,7 @@ func UpgradeJournal(dir string) (string, error) {
 	if err != nil || !old {
 		return "", err
 	}
-	name := filepath.Join(dir, fmt.Sprintf("journal.v1.pre-upgrade-%d", time.Now().UnixNano()))
+	name := filepath.Join(dir, fmt.Sprintf("journal.v1.pre-upgrade-%d", seam.Now().UnixNano()))
 	if err := copyDurably(dir, name, io.NewSectionReader(j.file, 0, r.Size)); err != nil {
 		return "", fmt.Errorf("journal left unchanged, the copy before upgrading failed: %w", err)
 	}

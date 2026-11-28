@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/rodriveracom/dostoevsky/internal/seam"
 )
 
 var (
@@ -508,7 +510,7 @@ func (n *Node) publishLocked(ctx context.Context, p Partition, m Message) (Recor
 		}
 		return *r, nil
 	}
-	r := Record{Partition: p, Message: m, Offset: s.base + s.count(), Time: time.Now().UTC()}
+	r := Record{Partition: p, Message: m, Offset: s.base + s.count(), Time: seam.Now().UTC()}
 	ev := entry{Record: &r}
 	loc, e := n.j.appendWithin(ev, n.maxBytes)
 	if e == nil {

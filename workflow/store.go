@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	d "github.com/rodriveracom/dostoevsky"
+	"github.com/rodriveracom/dostoevsky/internal/seam"
 )
 
 const topic = "transitions"
@@ -112,7 +112,7 @@ type Store struct {
 }
 
 func Open(dir string) (*Store, error) {
-	s := &Store{calls: make(chan command, 16), stopped: make(chan struct{}), defs: make(map[definition][]Step), runs: make(map[string]*run), queues: make(map[string]*dueQueue), now: time.Now}
+	s := &Store{calls: make(chan command, 16), stopped: make(chan struct{}), defs: make(map[definition][]Step), runs: make(map[string]*run), queues: make(map[string]*dueQueue), now: seam.Now}
 	n, e := d.OpenWorkflowLogReplaying(dir, s.replay)
 	if e != nil {
 		return nil, e
@@ -444,7 +444,7 @@ func (s *Store) Poll(queue string, lease time.Duration) (*Task, error) {
 			// Acquire entropy before staging any expirations in this Poll.
 			if token == "" {
 				var b [16]byte
-				if _, err := rand.Read(b[:]); err != nil {
+				if _, err := seam.Random(b[:]); err != nil {
 					return err
 				}
 				token = hex.EncodeToString(b[:])

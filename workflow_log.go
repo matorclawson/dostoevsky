@@ -3,7 +3,6 @@ package dostoevsky
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -12,6 +11,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/rodriveracom/dostoevsky/internal/seam"
 )
 
 // The witness replaces journal.v1 by rename while the directory's journal.lock
@@ -147,7 +148,7 @@ func OpenWorkflowLogReplaying(dir string, replay func(*WorkflowLog) error) (*Wor
 		}
 		if identityErr == nil {
 			copy(l.w.generation[:], identity)
-		} else if _, e = rand.Read(l.w.generation[:]); e != nil {
+		} else if _, e = seam.Random(l.w.generation[:]); e != nil {
 			return nil, e
 		}
 		l.digest.Write(l.w.generation[:])

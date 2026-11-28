@@ -23,7 +23,8 @@ Linux, Python 3.10 or later, standard library only. The engines are driven throu
   differs, in every record time at least.
 - **Refusals that may differ in code.** A request marked `"refuses": true` in a trace is one where engines may report
   different error codes: retention given several invalid floors may report any one of them. For it the runner requires
-  only that every engine refuses and that the refusal leaves the engine's own directory unchanged.
+  that every engine refuses, with `"ok": false` and a non-empty error code, and that the refusal leaves the engine's
+  own directory unchanged.
 - **What is compared,** against the first engine named:
   - the bytes of each reply line. One thing is masked first: the text of the top-level `message` member, when it is a
     string, because the suite compares error codes and never their text. Nothing is parsed into numbers, booleans or
@@ -31,16 +32,18 @@ Linux, Python 3.10 or later, standard library only. The engines are driven throu
     differences. The number of lines identical without the mask is reported beside it;
   - the two directory trees: the set of paths, each file's bytes, each symbolic link's target;
   - for a stream (below), the exit status of each driver.
-- **A deadline on every read.** A driver has `--deadline` seconds (120 unless given) for each reply and for its exit.
-  One that does not answer in time is killed and the comparison is reported as broken.
+- **A deadline on every read and write.** A driver has `--deadline` seconds (120 unless given) for each reply, for
+  taking each request, and for its exit. One that does not answer or does not read in time is killed and the
+  comparison is reported as broken.
 - **Exit status:** 0 identical, 1 different, 2 anything else: a driver that could not run a trace, a trace that is not
   well formed, a format a trace names but has no request for, a missing trace, wrong arguments.
 - `--receipt FILE` writes the counts of every comparison as JSON. `--keep DIR` keeps the directories for inspection.
   `--traces DIR` reads traces from another directory.
 
 `scripts/differential_selftest.py` runs the runner against stand-in drivers whose replies are known and checks the
-status it ends with: 13 kinds of reply pair that must or must not count as a difference, a driver that hangs, one
-that stops, and every malformed trace. `make differential` runs it first.
+status it ends with, in 38 cases: 13 kinds of reply pair that must or must not count as a difference, a driver that
+hangs, one that stops, one that stops reading, seven replies to a request that must be refused, every malformed trace,
+and paths that cannot be written. `make differential` runs it first.
 
 ## Traces
 
@@ -63,6 +66,7 @@ runs into the deadline.
 | `retention` | 16, 16 | retention refused above a group's position, retention with two invalid floors, retention twice, an ID reused after retention, a reopen |
 | `backup-and-migrate` | 16, 11 | a backup, a backup onto an existing directory, migration to the segmented format, inspection |
 | `seam-requests` | 12 (one format) | the seam requests themselves, with nothing open: arming a point that exists and one that does not, a negative skip, what `disarm` replies. Each point is armed only after `disarm` reported the one before |
+| `seam-rearm` | 10 (one format) | arming while a point is armed: an unknown name first, then the refusal for another point and for the same one, arming again after `disarm`, and a name with a control character and quotes. It needs drivers that refuse a second `arm` |
 | `request-binding` | 22 streams | how a driver reads its input: bytes as numbers, folded names, `null` for a request and for elements, a key given twice (text, lists, bytes, maps, two cases), what ends the driver with status 1, and two requests answered with no newline while the input stays open |
 
 Requests that must fail (an unknown topic, a stale commit, a read past the end) are part of the traces: the error codes

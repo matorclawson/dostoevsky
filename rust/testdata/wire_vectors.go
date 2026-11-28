@@ -6,7 +6,8 @@
 //
 // Run from the repository root. Every frame of wire/testdata/vectors.json is damaged in many small ways, and each
 // result is given to the Go decoders. One line per input and decoder: the decoder ("Q" request, "P" reply, "L" hello,
-// "W" welcome), the input in hex, Go's verdict, and the fields Go decoded.
+// "W" welcome), the input in hex, Go's verdict, and the fields Go decoded. Frames of megabytes, and the encoders, are
+// in wire_more_vectors.go.
 package main
 
 import (
@@ -60,7 +61,7 @@ func main() {
 	seen := map[string]bool{}
 	var inputs [][]byte
 	add := func(b []byte) {
-		if !seen[string(b)] && len(b) <= 200 {
+		if !seen[string(b)] {
 			seen[string(b)] = true
 			inputs = append(inputs, bytes.Clone(b))
 		}
@@ -78,11 +79,20 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		if len(b) > 200 {
-			continue
-		}
 		add(b)
-		for i := range b {
+		// A long frame is damaged at every byte of its header and at 48 places in its body: enough to reach each
+		// rule without a row for every byte.
+		places := make([]int, len(b))
+		for i := range places {
+			places[i] = i
+		}
+		if len(b) > 200 {
+			places = places[:wire.HeaderSize]
+			for len(places) < wire.HeaderSize+48 {
+				places = append(places, wire.HeaderSize+rng.Intn(len(b)-wire.HeaderSize))
+			}
+		}
+		for _, i := range places {
 			c := bytes.Clone(b)
 			c[i] ^= byte(1 << rng.Intn(8))
 			add(c)

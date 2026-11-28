@@ -1,5 +1,5 @@
 {
- "about": "A write or sync that fails is not acknowledged; the node then refuses further writes until reopened.",
+ "about": "A write or sync that fails is not acknowledged, and the node refuses further writes until reopened. A failed write leaves nothing; after a failed sync the written record is there again on this host, since no power was lost, which also shows that the sync point comes after the write.",
  "covers": [],
  "formats": [
   "legacy",
@@ -91,10 +91,21 @@
    "do": "open"
   },
   {
+   "do": "count",
+   "is": 2
+  },
+  {
    "do": "read",
    "offset": 0,
    "expect": {
     "value": "a"
+   }
+  },
+  {
+   "do": "read",
+   "offset": 1,
+   "expect": {
+    "value": "unsynced"
    }
   }
  ]

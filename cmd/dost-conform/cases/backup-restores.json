@@ -1,5 +1,5 @@
 {
- "about": "A backup opens with the same records and checkpoint; an existing destination, even empty, is refused.",
+ "about": "A backup opens with the same records and checkpoint. An existing destination is refused: an empty directory and a regular file. For the empty directory Go's own os.Rename also refuses, so removing the engine's check is not detected by that step (it is when the rename is made with the raw system call); the regular file detects it either way, because the rename then fails with another error.",
  "covers": [
   "825a794"
  ],
@@ -34,6 +34,26 @@
   {
    "do": "make_dir",
    "file": "taken"
+  },
+  {
+   "do": "make_file",
+   "file": "occupied",
+   "content": "x"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "occupied",
+   "as": "occupied"
+  },
+  {
+   "do": "backup",
+   "dest": "$root/occupied",
+   "error": "exists"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "occupied",
+   "as": "occupied"
   },
   {
    "do": "backup",

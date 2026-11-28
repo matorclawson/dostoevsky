@@ -79,10 +79,31 @@ Otherwise the core stays in Go.
 
 ## Run
 
+**`run.sh` is a record of how the numbers were made, not a safe tool. Run it only on an isolated, disposable Linux host.**
+It is kept as it was, with these properties:
+
+- It does not check its two arguments. `WORKDIR` and `OUTDIR` must be new, empty, disposable directories. With an empty or
+  mistaken `WORKDIR` it writes `bin/` and removes `conf-*`, `w-*`, `s-*` and `r-*` paths under whatever that expands to; as
+  root with an empty `WORKDIR` that means `/bin/goab` and matching names directly under `/`. It overwrites files in `OUTDIR`.
+- The `reopen` and `read` stages drop the **whole host's** page cache and need root.
+- It builds inside the checkout (`dostoevsky-core/target/`).
+- The `sustained` stage needs `SUSTAINED_ORDER` and runs a background helper that deletes segment files. If an engine fails,
+  the script stops without stopping that helper.
+
+**Its exit status certifies nothing.** The `conform` stage writes both engines' digests to `conformance.txt` but does not
+compare them, and some timed pipelines return the status of the text filter, not of the engine. Agreement in the published
+receipts was checked by reading them.
+
 ```sh
-benchmarks/rustcore/run.sh /path/to/workdir /path/to/outdir            # all stages
-benchmarks/rustcore/run.sh /path/to/workdir /path/to/outdir conform    # one stage
+benchmarks/rustcore/run.sh /path/to/new-workdir /path/to/new-outdir conform           # one stage
+SUSTAINED_ORDER="go rust" benchmarks/rustcore/run.sh /path/to/new-workdir /path/to/new-outdir   # all stages
 ```
 
-Stages: `env`, `conform`, `write`, `sustained`, `reopen`, `read`. The sustained stage needs
-`SUSTAINED_ORDER="go rust"`.
+Stages: `env`, `conform`, `write`, `sustained`, `reopen`, `read`.
+
+## Provenance and rounding
+
+These files were published from an original commit (`bb439264`) that is not public; the code and receipts are byte for byte
+the same, and only wording in the two documents differs. Two figures in `RESULT.md` are rounded or partial: the warm
+sequential-read ratio reaches 3.95 (written as 3.9), and 28.7 records per sync is from the short runs (28.9 in the
+30-minute run).

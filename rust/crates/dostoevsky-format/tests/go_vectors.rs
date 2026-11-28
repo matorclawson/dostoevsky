@@ -361,12 +361,18 @@ fn times_match_go() {
 #[test]
 fn base64_matches_go() {
     let (mut accepted, mut refused) = (0, 0);
+    // What a strict decoder would get wrong: text whose last group leaves bits that are not zero, and text with
+    // line ends in it. Go takes both, so the rows must hold both and this decoder must take them.
+    let (mut loose_bits, mut line_ends) = (0, 0);
     for line in rows(include_str!("../../../testdata/base64-go.txt")) {
         let f: Vec<&str> = line.split(' ').collect();
         let input = String::from_utf8(unhex(f[0])).unwrap();
         let got = match base64::decode(&input) {
             Some(out) => {
                 accepted += 1;
+                let plain: String = input.chars().filter(|c| *c != '\r' && *c != '\n').collect();
+                loose_bits += usize::from(base64::encode(&out) != plain);
+                line_ends += usize::from(plain != input);
                 format!("{} ok {}", f[0], x(&out))
             }
             None => {
@@ -377,9 +383,24 @@ fn base64_matches_go() {
         assert_eq!(got, line, "{input:?}");
     }
     assert!(
-        accepted > 300 && refused > 500,
-        "{accepted} accepted, {refused} refused"
+        accepted > 300 && refused > 500 && loose_bits >= 8 && line_ends >= 100,
+        "{accepted} accepted, {refused} refused, {loose_bits} with loose bits, {line_ends} with line ends"
     );
+    // The same by name, so that the rule is readable here and fails here if the rows are ever lost.
+    assert_eq!(
+        base64::decode("Zh==").as_deref(),
+        Some(&b"f"[..]),
+        "the unused bits are ignored"
+    );
+    assert_eq!(base64::decode("Zm9=").as_deref(), Some(&b"fo"[..]));
+    assert_eq!(
+        base64::decode("Z\ng=\r\n=").as_deref(),
+        Some(&b"f"[..]),
+        "line ends are skipped anywhere"
+    );
+    assert_eq!(base64::decode("\r\n").as_deref(), Some(&b""[..]));
+    assert_eq!(base64::decode("Zg==Zg=="), None, "nothing may follow the padding");
+    assert_eq!(base64::decode("Zm9v Ymfy"), None, "a space is not a line end");
 }
 
 #[test]

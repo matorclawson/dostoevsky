@@ -388,6 +388,12 @@ func TestWriteRustVectors(t *testing.T) {
 			one64(s + string("=A\n"[rng.Intn(3)]))
 		}
 	}
+	// Text that only a permissive decoder takes, named one by one so that none depends on chance: a final group
+	// whose unused bits are not zero, and line ends in every place. A strict decoder refuses the first kind.
+	for _, s := range []string{"Zh==", "Zi==", "Zv==", "Zm9=", "Zm+=", "Zm/=", "Zm9vYh==", "Zm9vYmF=", "Zg==\n", "\nZg==", "Z\ng==", "Zg\n==", "Zg=\n=", "Zg=\r\n=\r\n",
+		"\r", "\n", "\r\n\r\n", "Zm9v\r\nYmFy", "Zh==\n", "Zg==\nZg==", "Zg=", "Zg", "Z", "Zg===", "=", "==", "Zg==Zg", "Zm9v Ymfy", "Zm9v\tYmFy", "Zm9v\x00"} {
+		one64(s)
+	}
 	b64.write(t, "base64-go.txt")
 
 	// ----- the record scanner -----

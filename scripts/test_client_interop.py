@@ -44,6 +44,12 @@ class StartupLineTest(unittest.TestCase):
         with start("pass") as proc:
             self.assertEqual(client_interop.startup_line(proc, timeout=10), "")
 
+    def test_a_line_cut_off_by_the_gateway_exiting_is_not_taken_as_whole(self):
+        with start("import sys; sys.stdout.write('listening 127.0')") as proc:
+            with self.assertRaises(RuntimeError) as e:
+                client_interop.startup_line(proc, timeout=10)
+            self.assertIn("listening 127.0", str(e.exception))
+
     def test_the_first_line_is_returned(self):
         with start("print('listening 127.0.0.1:1', flush=True)") as proc:
             self.assertEqual(client_interop.startup_line(proc, timeout=10), "listening 127.0.0.1:1")

@@ -5,6 +5,7 @@ package dostoevsky
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +85,28 @@ func TestEveryEnginePointIsReached(t *testing.T) {
 				t.Fatalf("got %v, want %v", err, c.want)
 			}
 		})
+	}
+}
+
+// A point fires on the chosen pass and never again.
+func TestAPointFiresOnce(t *testing.T) {
+	ctx := context.Background()
+	n := openTest(t, t.TempDir(), config())
+	defer n.Close()
+	publishOne(t, n)
+	root := t.TempDir()
+	if err := seam.Arm("backup.write", false, 1); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { seam.Disarm() })
+	for i, want := range []error{nil, seam.ErrInjected, nil, nil} {
+		err := n.Backup(ctx, filepath.Join(root, fmt.Sprintf("copy-%d", i)))
+		if !errors.Is(err, want) || (want == nil && err != nil) {
+			t.Fatalf("pass %d: %v, want %v", i, err, want)
+		}
+	}
+	if !seam.Disarm() {
+		t.Fatal("the point was not reported as reached")
 	}
 }
 

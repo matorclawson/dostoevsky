@@ -1,5 +1,5 @@
 {
- "about": "A value over 1 MiB is refused and writes nothing.",
+ "about": "A value of exactly 1 MiB is stored; one byte more is refused and writes nothing.",
  "covers": [],
  "formats": [
   "legacy",
@@ -22,8 +22,16 @@
    "value_size": 1048577
   },
   {
+   "do": "publish",
+   "value_size": 1048576,
+   "id": "",
+   "expect": {
+    "offset": 1
+   }
+  },
+  {
    "do": "count",
-   "is": 1
+   "is": 2
   },
   {
    "do": "close"
@@ -36,7 +44,7 @@
   },
   {
    "do": "count",
-   "is": 1
+   "is": 2
   }
  ]
 }

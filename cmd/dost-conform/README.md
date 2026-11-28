@@ -47,6 +47,9 @@ those cases require a failure and unchanged bytes.
 is an engine request (with `error`, `fails` or `expect`), or an action of the runner: `switch` (close, continue with the
 other engine), `kill`, `publish_many`, `snapshot`, `same`, `count`, and edits to files (`mark`, `truncate`, `flip`,
 `remember_bytes`, `bytes_unchanged`, `make_file`, `make_dir`, `remove_first`, `absent`). `only` limits a step to one format.
+`nonzero` names result fields that must be present and not zero. In `expect`, `value` and `state` are written as text, and
+values must have the same JSON type as the reply's. The runner refuses a case with an unknown format, action or action
+key, refuses an unknown `--case` name, and fails when nothing ran. A driver must exit with status 0 at end of input.
 
 ## Coverage of past fixes
 
@@ -69,4 +72,5 @@ Not yet covered, by what each needs:
   `cc081d4`, `ddc0cc8`, `d711c94`, `a0f24fa`, `b845b69` (as byte vectors), `a0d8420`.
 - **No test of any kind today:** `ed99753`.
 
-Also not covered: the workflow store, the wire protocol, and interrupted migration.
+Also not covered: the workflow store, the wire protocol, interrupted migration, retention that removes whole segment
+files (the retention case stays within one segment), and whether removed sidecar files are written again.

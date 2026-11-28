@@ -27,8 +27,18 @@
    "do": "switch"
   },
   {
+   "do": "remember_bytes",
+   "file": "store/segments/RANGE",
+   "as": "range"
+  },
+  {
    "do": "open",
-   "fails": true
+   "error": "corrupt_log"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "store/segments/RANGE",
+   "as": "range"
   }
  ]
 }

@@ -47,7 +47,10 @@
    "do": "switch"
   },
   {
-   "do": "open"
+   "do": "open",
+   "nonzero": [
+    "truncated_bytes"
+   ]
   },
   {
    "do": "same",

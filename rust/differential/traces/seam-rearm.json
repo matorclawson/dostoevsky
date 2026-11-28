@@ -1,0 +1,16 @@
+{
+  "about": "Arming while a point is armed. An unknown name is refused first; then the armed point refuses a second arm, for another point and for itself, until disarm has reported it. It needs a driver that has this rule.",
+  "formats": ["legacy"],
+  "requests": [
+    {"op": "arm", "point": "segment.write", "kill": false, "skip": 0},
+    {"op": "arm", "point": "no.such.point", "kill": false, "skip": 0},
+    {"op": "arm", "point": "dirsync", "kill": false, "skip": 0},
+    {"op": "arm", "point": "segment.write", "kill": true, "skip": 2},
+    {"op": "disarm"},
+    {"op": "arm", "point": "dirsync", "kill": false, "skip": -1},
+    {"op": "arm", "point": "dirsync", "kill": false, "skip": 0},
+    {"op": "disarm"},
+    {"op": "disarm"},
+    {"op": "arm", "point": "bad\u0001name\n\"quoted\"", "kill": false, "skip": 0}
+  ]
+}

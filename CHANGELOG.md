@@ -4,6 +4,40 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — durable workflow signal waits
+
+- Added a named signal step and a durable, step-addressed Signal call. Waiting runs hold no leases or worker slots. A signal supplies the input to the next activity.
+- Added replay, stale-signal, repeated-name and process-kill tests. Older readers reject the new transition format when a signal definition first appears.
+- Added a Linux scale benchmark for 100,000 waiting runs and a 1,024-signal burst with one and 32 polling workers. Extended the existing three-activity workload to 30 activities and measured fresh-process recovery. See the [scale report](docs/workflow-wait-scale.md).
+
+## Unreleased — workflow crash recovery
+
+- Added a durable workflow commit boundary and per-store identity. Recovery verifies committed segments and repairs unacknowledged suffixes, including an interrupted rollover. It preserves committed corruption for inspection.
+- Added strict adoption of existing segmented workflow stores, fencing of uncertain writes and reads, and bounded grouping of waiting workflow commands.
+- Added process-kill, corruption, migration and payload-budget tests plus paired ext4 performance and reopen measurements. See the [recovery report](docs/workflow-commit-boundary.md).
+
+## Unreleased — experimental embedded workflow lifecycle
+
+- Added a separate segmented workflow store with immutable sequential activity definitions, exact-input StartOnce, leased Poll, successful or failed Finish, bounded attempts, fixed backoff and paginated History.
+- Added bounded group validation, post-sync replies, replay and fail-closed handling of uncertain writes. Preserved independent stream-only builds.
+- Added shared SQLite conformance cases, abrupt-exit and damaged-tail tests, a runnable Go example, development Make targets and per-completion measurements. See the [workflow guide](docs/workflow-lifecycle.md).
+
+## Unreleased — fresh durable publishing
+
+- Reduced allocation during segmented publication through bounded frame-buffer reuse, frame size reservation and fewer intermediate batch allocations.
+- Added paired fresh-publish benchmarks, single-producer storage timing, a Linux sync comparison, and process-kill recovery tests for one and 32 segmented publishers. See the [benchmark report](benchmarks/fresh/README.md).
+
+## Unreleased — review fixes for the workflow candidate
+
+- An interrupted first initialization of a segmented or workflow directory can be started again.
+- A workflow directory in the older format is converted only after its history replays.
+
+## Unreleased — cache admission and hot-topic analytics
+
+- Added optional frequency-based admission for verified sealed indexes, charged to the ID-table budget. FIFO remains the default. A duplicate receipt can reuse the index already decoded during lookup.
+- Added a bounded time-decayed hot-topic tracker for Go consumers. Updates retain fixed-size names and probation fingerprints. Top-k queries use O(k) scratch space.
+- Added reproducible comparisons with the original FIFO commit, three-way raw benchmark results and analytics accuracy and allocation measurements. See the [benchmark report](benchmarks/admission/README.md).
+
 ## Unreleased — review fixes for the council candidate
 
 - `Open` syncs the parent of every directory it creates.

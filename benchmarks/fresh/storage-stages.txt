@@ -1,0 +1,12 @@
+=== RUN   TestFreshDurableStages
+    fresh_bench_test.go:147: records=2048 write_us/record=5.2 fdatasync_us/record=393.8 elapsed_us/record=405.6 sync_share_pct=97.1
+--- PASS: TestFreshDurableStages (0.83s)
+PASS
+=== RUN   TestFreshDurableStages
+    fresh_bench_test.go:147: records=2048 write_us/record=5.7 fdatasync_us/record=428.5 elapsed_us/record=441.3 sync_share_pct=97.1
+--- PASS: TestFreshDurableStages (0.91s)
+PASS
+=== RUN   TestFreshDurableStages
+    fresh_bench_test.go:147: records=2048 write_us/record=10.6 fdatasync_us/record=447.5 elapsed_us/record=473.8 sync_share_pct=94.5
+--- PASS: TestFreshDurableStages (0.99s)
+PASS

@@ -86,13 +86,28 @@ func TestConcurrentPublishKill(t *testing.T) {
 		select {}
 	}
 	for _, workers := range []int{1, 8} {
-		t.Run(strconv.Itoa(workers), func(t *testing.T) { verifyPublishKill(t, workers) })
+		t.Run(strconv.Itoa(workers), func(t *testing.T) { verifyPublishKill(t, workers, false) })
 	}
 }
 
-func verifyPublishKill(t *testing.T, workers int) {
+func TestSegmentedPublishKill(t *testing.T) {
+	for _, workers := range []int{1, 32} {
+		t.Run(strconv.Itoa(workers), func(t *testing.T) { verifyPublishKill(t, workers, true) })
+	}
+}
+
+func verifyPublishKill(t *testing.T, workers int, segmented bool) {
 	t.Helper()
 	dir := t.TempDir()
+	if segmented {
+		n, err := OpenSegmented(dir, config())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = n.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	deadline, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(deadline, os.Args[0], "-test.run=^TestConcurrentPublishKill$")

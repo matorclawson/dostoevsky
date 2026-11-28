@@ -1,0 +1,28 @@
+ok  	github.com/rodriveracom/dostoevsky	2.915s
+?   	github.com/rodriveracom/dostoevsky/benchmarks/catalog	[no test files]
+?   	github.com/rodriveracom/dostoevsky/benchmarks/history	[no test files]
+?   	github.com/rodriveracom/dostoevsky/benchmarks/idpublish	[no test files]
+ok  	github.com/rodriveracom/dostoevsky/clienthttp	0.232s
+ok  	github.com/rodriveracom/dostoevsky/cmd/dost-repair	0.012s
+?   	github.com/rodriveracom/dostoevsky/cmd/dost-storage	[no test files]
+ok  	github.com/rodriveracom/dostoevsky/cmd/dostoevsky-gateway	0.012s
+--- FAIL: TestUnixSocketIsPrivate (0.00s)
+    main_test.go:24: listen unix /tmp/ds3902348263/run/s: socket: operation not permitted
+--- FAIL: TestAStaleSocketOfOursIsReplaced (0.00s)
+    main_test.go:75: listen unix /tmp/ds435447346/run/s: socket: operation not permitted
+--- FAIL: TestALiveSocketIsNotDisplaced (0.00s)
+    main_test.go:91: listen unix /tmp/ds1264087074/run/s: socket: operation not permitted
+FAIL
+FAIL	github.com/rodriveracom/dostoevsky/cmd/dostoevsky-server	0.007s
+ok  	github.com/rodriveracom/dostoevsky/cmd/plots	3.113s
+?   	github.com/rodriveracom/dostoevsky/cmd/sketchreport	[no test files]
+?   	github.com/rodriveracom/dostoevsky/examples/burst	[no test files]
+?   	github.com/rodriveracom/dostoevsky/examples/mesh	[no test files]
+ok  	github.com/rodriveracom/dostoevsky/examples/openai	0.006s
+ok  	github.com/rodriveracom/dostoevsky/examples/taskqueue	0.004s
+?   	github.com/rodriveracom/dostoevsky/examples/wordcount	[no test files]
+ok  	github.com/rodriveracom/dostoevsky/sketch	(cached)
+ok  	github.com/rodriveracom/dostoevsky/wire	(cached)
+ok  	github.com/rodriveracom/dostoevsky/wireserver	3.028s
+ok  	github.com/rodriveracom/dostoevsky/workflow	0.775s
+FAIL

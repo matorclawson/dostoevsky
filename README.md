@@ -343,3 +343,11 @@ Run `make dev-bench-embedded` on Linux to compare embedded single-node publisher
 Concurrent calls to `Node.Publish` can share a journal sync. A lone producer writes immediately. Acknowledgments follow the sync, and messages from different calls keep their own receipts. Run `make dev-bench-publish` on Linux for the [concurrent publishing comparison](docs/concurrent-publishing.md).
 
 Run `make dev-bench-publish-gate` on Linux to compare synchronous publishers at one, eight and 32 producers. The command checks median throughput and peak process memory against embedded JetStream. See [measurements and reproduction](docs/publisher-gate.md).
+
+### High-cardinality workloads
+
+Go consumers can use `sketch.HotTopics` to rank recent activity with a fixed resident budget. Segmented nodes can enable frequency-based cache admission for historical producer-ID retries. See the [usage examples and benchmark results](benchmarks/admission/README.md).
+
+### Embedded workflows (experimental)
+
+Use a dedicated segmented directory for durable sequential activities. The [workflow guide](docs/workflow-lifecycle.md) covers leases, retries, history, crash behavior and the release boundary.

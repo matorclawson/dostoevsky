@@ -3,7 +3,8 @@
 //!
 //! Besides the engine requests it serves the test seam (`dostoevsky_core::seam`): `fix_inputs` (`start`, `step`,
 //! and `seed` as an unsigned 64-bit number), `advance` (`nanoseconds`), `arm` (`point`, `kill`, `skip`) and `disarm`
-//! (which replies `reached`). `fix_inputs` must come before anything is opened.
+//! (which replies `reached`: whether the armed point fired). `fix_inputs` must come before anything is opened, and
+//! `arm` refuses a name that is not one of the engine's points.
 //!
 //! A request whose module is not ported yet answers with the error `other` and names the row that brings it. The
 //! parts that do not depend on the engine are complete and tested: reading requests as Go's decoder does, the order
@@ -74,7 +75,7 @@ pub struct Request {
     pub nanoseconds: i64,
     pub point: String,
     pub kill: bool,
-    pub skip: u64,
+    pub skip: i64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -379,7 +380,7 @@ pub fn decode(v: &Value) -> Decoded<Request> {
             "nanoseconds" => set_int(&mut q.nanoseconds, name, v)?,
             "point" => set_string(&mut q.point, name, v)?,
             "kill" => set_bool(&mut q.kill, name, v)?,
-            "skip" => set_unsigned(&mut q.skip, name, v)?,
+            "skip" => set_int(&mut q.skip, name, v)?,
             _ => unreachable!("every name in FIELDS is handled"),
         }
     }
@@ -418,9 +419,7 @@ impl Driver {
                 if self.node.is_some() || self.store.is_some() {
                     return (
                         None,
-                        Err(Error::other(
-                            "dost-conform: fix_inputs must come before anything is opened",
-                        )),
+                        Err(Error::other("dost-conform: fix_inputs comes before anything is opened")),
                     );
                 }
                 seam::fix(q.start, q.step, q.seed);
@@ -430,14 +429,10 @@ impl Driver {
                 seam::advance(q.nanoseconds);
                 return (None, Ok(()));
             }
-            "arm" => {
-                seam::arm(&q.point, q.kill, q.skip);
-                return (None, Ok(()));
-            }
+            "arm" => return (None, seam::arm(&q.point, q.kill, q.skip).map_err(Error::other)),
             "disarm" => {
-                let reached = seam::disarm();
                 return (
-                    Some(Value::map(vec![("reached".into(), Value::Number(reached.to_string()))])),
+                    Some(Value::map(vec![("reached".into(), Value::Bool(seam::disarm()))])),
                     Ok(()),
                 );
             }
@@ -574,7 +569,7 @@ mod tests {
             r#"{"seed":"c2VlZA=="}"#,
             r#"{"seed":-1}"#,
             r#"{"seed":18446744073709551616}"#,
-            r#"{"skip":-1}"#,
+            r#"{"skip":1.5}"#,
             r#"{"kill":1}"#,
             r#"{"steps":[{"nope":1}]}"#,
         ] {
@@ -640,7 +635,8 @@ mod tests {
         let (out, status) = served(concat!(
             "{\"op\":\"wf_poll\",\"queue\":\"q\"}\n{\"op\":\"wf_open\",\"dir\":\"w\"}\n",
             "{\"op\":\"fix_inputs\",\"start\":1,\"step\":2,\"seed\":3}\n{\"op\":\"advance\",\"nanoseconds\":5}\n",
-            "{\"op\":\"arm\",\"point\":\"p\",\"kill\":false,\"skip\":1}\n{\"op\":\"disarm\"}\n"
+            "{\"op\":\"arm\",\"point\":\"segment.write\",\"kill\":true,\"skip\":-1}\n{\"op\":\"disarm\"}\n",
+            "{\"op\":\"arm\",\"point\":\"p\",\"kill\":false,\"skip\":1}\n"
         ));
         assert_eq!(status, Ok(()));
         let lines: Vec<&str> = out.lines().collect();
@@ -652,14 +648,14 @@ mod tests {
             lines[1],
             r#"{"ok":false,"error":"other","message":"dostoevsky: workflow.Open is not ported yet (row 10)"}"#
         );
+        assert_eq!(&lines[2..5], [r#"{"ok":true}"#, r#"{"ok":true}"#, r#"{"ok":true}"#]);
         assert_eq!(
-            &lines[2..],
-            [
-                r#"{"ok":true}"#,
-                r#"{"ok":true}"#,
-                r#"{"ok":true}"#,
-                r#"{"ok":true,"result":{"reached":0}}"#
-            ]
+            lines[5], r#"{"ok":true,"result":{"reached":false}}"#,
+            "armed, never reached"
+        );
+        assert_eq!(
+            lines[6],
+            r#"{"ok":false,"error":"other","message":"seam: no point is named \"p\""}"#
         );
         assert_eq!(
             (seam::now_nanos(), seam::now_nanos()),

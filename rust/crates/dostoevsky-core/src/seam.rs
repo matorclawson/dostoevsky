@@ -18,9 +18,7 @@
 //! [`fix`] is not safe while a node or store is open: call it before opening anything.
 //!
 //! The clock and the random source are checked against vectors written by the Go package (`rust/testdata`). The
-//! named points ([`arm`], [`reach`], [`disarm`]) follow the driver requests of the same names; the list of points
-//! and the exact meaning of `kill` and `skip` are those of Go's `internal/seam/points.go`, which this file must be
-//! checked against.
+//! named points ([`POINTS`], [`arm`], [`at`], [`disarm`]) mirror Go's `internal/seam/points.go`.
 
 use dostoevsky_format::sha256;
 use std::sync::Mutex;
@@ -108,11 +106,65 @@ fn system_random(_out: &mut [u8]) -> std::io::Result<()> {
 
 // ----- named points -----
 
+/// The named places where a test can make the engine fail or die. Mirrors `Points` in Go's `internal/seam/points.go`:
+/// the same names at the same boundaries. A point named for an operation is reached before that operation, unless its
+/// name says when.
+pub const POINTS: [&str; 18] = [
+    // A legacy journal append: before the write, and between the write and its sync.
+    "journal.write",
+    "journal.sync",
+    // A segment append, likewise.
+    "segment.write",
+    "segment.sync",
+    // Before the new range file replaces the old one.
+    "range.publish",
+    // A directory sync made by the engine's own directory-sync function: the directory chain at open, segmented and
+    // workflow initialization and the cleanup of an abandoned one, a staged backup and its parent, after the range
+    // file is replaced, after retention removes a segment file, and after a workflow metadata file is replaced. NOT
+    // counted: the syncs the segment layer makes when it creates a segment or publishes an index or filter side file,
+    // the one made when a legacy journal file is created, those of repair and upgrade, and legacy retention's, which
+    // is retention.dirsync.
+    "dirsync",
+    // Legacy retention: each frame of the replacement, its sync, the rename, the directory sync and the release of
+    // the replaced journal.
+    "retention.write",
+    "retention.sync",
+    "retention.rename",
+    "retention.dirsync",
+    "retention.truncate",
+    // Backup and migration: before the copy, before the copy is published, before the parent directory is synced.
+    "backup.write",
+    "backup.rename",
+    "backup.syncparent",
+    // A workflow commit: before anything is written, once the call has passed the closed, fenced and cancellation
+    // checks and before its items are examined; part-way through writing the group (on the pass where it fires, and
+    // only then, half the bytes are written first; it counts segment appends, so arm it only where a workflow store
+    // is the thing writing); after the segment is synced and before the witness is replaced; after the witness is
+    // replaced and before any caller is answered.
+    "workflow.before_append",
+    "workflow.mid_append",
+    "workflow.after_segment_sync_before_witness",
+    "workflow.after_witness_before_reply",
+];
+
+/// The error a point armed to fail returns. Go's `ErrInjected`, with the point's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Injected(pub String);
+
+impl std::fmt::Display for Injected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "injected failure at {}", self.0)
+    }
+}
+
+impl std::error::Error for Injected {}
+
 struct Armed {
-    point: String,
+    name: String,
     kill: bool,
-    skip: u64,
-    reached: u64,
+    /// Counts down by one per pass; the pass that takes it to -1 fires.
+    skip: i64,
+    reached: bool,
 }
 
 static ARMED: Mutex<Option<Armed>> = Mutex::new(None);
@@ -121,49 +173,62 @@ fn armed() -> std::sync::MutexGuard<'static, Option<Armed>> {
     ARMED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Arms one named point. It fires exactly once, on pass number `skip + 1`: the process kills itself (`kill`) or the
-/// operation at the point fails. Passes before that do nothing, and so do passes after it.
-pub fn arm(point: &str, kill: bool, skip: u64) {
+/// Makes the named point fail, or kill the process, once: the first time it is reached after `skip` earlier times.
+/// Every later pass goes through, and with a negative `skip` the point never fires. One point is armed at a time. A
+/// name that is not in [`POINTS`] is refused. Mirrors `seam.Arm`.
+pub fn arm(name: &str, kill: bool, skip: i64) -> Result<(), String> {
+    if !POINTS.contains(&name) {
+        return Err(format!("seam: no point is named {name:?}"));
+    }
     *armed() = Some(Armed {
-        point: point.to_string(),
+        name: name.to_string(),
         kill,
         skip,
-        reached: 0,
+        reached: false,
     });
+    Ok(())
 }
 
-/// Disarms, and returns how many times the armed point was reached.
-pub fn disarm() -> u64 {
-    armed().take().map_or(0, |a| a.reached)
+/// Removes the armed point and reports whether it fired. Mirrors `seam.Disarm`.
+pub fn disarm() -> bool {
+    armed().take().is_some_and(|a| a.reached)
 }
 
-/// Called by the engine at the point `name`. `Err` means the operation at this point must fail.
-pub fn reach(name: &str) -> Result<(), PointFailure> {
-    let mut guard = armed();
-    let Some(a) = guard.as_mut().filter(|a| a.point == name) else {
-        return Ok(());
-    };
-    a.reached += 1;
-    if a.reached != a.skip + 1 {
-        return Ok(());
+/// Counts one pass of the named point and reports whether this is the pass that fires. A point that has to do work
+/// before it fires calls `due`, does the work and then calls [`fire`]; every other point uses [`at`]. Mirrors
+/// `seam.Due`.
+pub fn due(name: &str) -> bool {
+    match armed().as_mut().filter(|a| a.name == name) {
+        Some(a) => {
+            a.skip = a.skip.wrapping_sub(1);
+            a.skip == -1
+        }
+        None => false,
     }
-    if a.kill {
+}
+
+/// Fails or kills at the armed point, after [`due`] has said that this pass is the one. Mirrors `seam.Fire`.
+pub fn fire(name: &str) -> Result<(), Injected> {
+    let kill = match armed().as_mut().filter(|a| a.name == name) {
+        Some(a) => {
+            a.reached = true;
+            a.kill
+        }
+        None => return Ok(()),
+    };
+    if kill {
         kill_this_process();
     }
-    Err(PointFailure)
+    Err(Injected(name.to_string()))
 }
 
-/// The failure an armed point injects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PointFailure;
-
-impl std::fmt::Display for PointFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("failure injected at a named point")
+/// Called by the engine at a point. `Ok` unless a test armed this point and this is its pass. Mirrors `seam.At`.
+pub fn at(name: &str) -> Result<(), Injected> {
+    if !due(name) {
+        return Ok(());
     }
+    fire(name)
 }
-
-impl std::error::Error for PointFailure {}
 
 #[cfg(unix)]
 fn kill_this_process() -> ! {
@@ -229,22 +294,43 @@ mod tests {
         assert!(!is_fixed());
 
         // Named points.
-        assert_eq!(reach("nothing-armed"), Ok(()));
-        arm("after-write", false, 2);
-        assert_eq!(reach("another-point"), Ok(()));
+        assert_eq!(at("segment.write"), Ok(()), "nothing is armed");
+        assert!(!disarm());
+        assert_eq!(
+            arm("no.such.point", false, 0),
+            Err("seam: no point is named \"no.such.point\"".to_string())
+        );
+        arm("segment.write", false, 2).unwrap();
+        assert_eq!(at("segment.sync"), Ok(()), "another point");
         let passes = [
-            reach("after-write"),
-            reach("after-write"),
-            reach("after-write"),
-            reach("after-write"),
+            at("segment.write"),
+            at("segment.write"),
+            at("segment.write"),
+            at("segment.write"),
         ];
         assert_eq!(
             passes,
-            [Ok(()), Ok(()), Err(PointFailure), Ok(())],
+            [Ok(()), Ok(()), Err(Injected("segment.write".into())), Ok(())],
             "it fires once, on pass skip + 1"
         );
-        assert_eq!(disarm(), 4);
-        assert_eq!(disarm(), 0);
-        assert_eq!(reach("after-write"), Ok(()));
+        assert!(disarm(), "it fired");
+        assert!(!disarm());
+        arm("dirsync", false, 1).unwrap();
+        assert_eq!(at("dirsync"), Ok(()));
+        assert!(!disarm(), "reached once, but it had not fired");
+        arm("dirsync", true, -1).unwrap();
+        assert_eq!(
+            [at("dirsync"), at("dirsync"), at("dirsync")],
+            [Ok(()), Ok(()), Ok(())],
+            "a negative skip never fires"
+        );
+        assert!(!disarm());
+        // The two halves, for a point that does work before it fires.
+        arm("workflow.mid_append", false, 0).unwrap();
+        assert!(due("workflow.mid_append"));
+        assert_eq!(fire("workflow.mid_append"), Err(Injected("workflow.mid_append".into())));
+        assert!(!due("workflow.mid_append"));
+        assert!(disarm());
+        assert_eq!(POINTS.len(), 18);
     }
 }

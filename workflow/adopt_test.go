@@ -75,3 +75,39 @@ func TestInterruptedWorkflowInitializationCanBeStartedAgain(t *testing.T) {
 		}
 	}
 }
+
+// The other shapes a stopped initialization leaves, through the workflow opener.
+func TestWorkflowOpensEveryAbandonedShape(t *testing.T) {
+	const first, staged = "seg-0000000000000001.log", "seg-0000000000000001.tmp"
+	shapes := map[string]func(segments string) error{
+		"no range file": func(p string) error { return os.Remove(filepath.Join(p, "RANGE")) },
+		"empty": func(p string) error {
+			return errors.Join(os.Remove(filepath.Join(p, "RANGE")), os.Remove(filepath.Join(p, first)))
+		},
+		"staging only": func(p string) error {
+			return errors.Join(os.Remove(filepath.Join(p, "RANGE")), os.Rename(filepath.Join(p, first), filepath.Join(p, staged)))
+		},
+	}
+	for name, shape := range shapes {
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err = errors.Join(os.Remove(filepath.Join(dir, "WORKFLOW-ID")), os.Truncate(filepath.Join(dir, "journal.v1"), 0)); err != nil {
+			t.Fatal(err)
+		}
+		if err = shape(filepath.Join(dir, "segments")); err != nil {
+			t.Fatal(err)
+		}
+		if s, err = Open(dir); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err = s.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -180,3 +180,30 @@ func TestAbandonedInitializationShapes(t *testing.T) {
 		}
 	}
 }
+
+// A segments entry that is a link is never cleaned: what it points at may be another
+// store's.
+func TestALinkedSegmentsDirectoryIsNotCleared(t *testing.T) {
+	cfg := Config{Node: "n", Nodes: []string{"n"}, Topics: map[string]int{"events": 1}}
+	other := abandoned(t, cfg, 0)
+	dir := abandoned(t, cfg, 0)
+	if err := os.RemoveAll(filepath.Join(dir, "segments")); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(other, "segments")
+	if err := os.Symlink(target, filepath.Join(dir, "segments")); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := OpenSegmented(dir, cfg); err == nil {
+		n.Close()
+		t.Fatal("initialized through a linked segments directory")
+	}
+	for _, name := range []string{"RANGE", segName(1)} {
+		if _, err := os.Stat(filepath.Join(target, name)); err != nil {
+			t.Fatalf("the link target lost %s: %v", name, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "segments")); err != nil {
+		t.Fatalf("the link was removed: %v", err)
+	}
+}

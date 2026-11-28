@@ -51,11 +51,13 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 		return false, nil
 	}
 	if !marked {
-		if _, e := os.Lstat(path); e == nil {
+		if info, e := os.Lstat(path); e == nil {
 			// The marker is written before the first append, so a first initialization that
-			// stopped short of it acknowledged nothing. Only its own leftovers are removed.
+			// stopped short of it acknowledged nothing. Only its own leftovers are removed,
+			// and only from a real directory: through a link they could be another store's,
+			// which this lock does not cover.
 			abandoned := false
-			if requested {
+			if requested && info.IsDir() {
 				if abandoned, err = abandonedFirstInit(path); err != nil {
 					return false, err
 				}

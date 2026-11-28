@@ -151,6 +151,7 @@ conformance-rust: rust-driver ## Run the conformance cases against both engines,
 differential: rust-driver ## Compare the bytes both engines write for the same requests (needs the test seam in both)
 	@mkdir -p .dev/bin
 	@CGO_ENABLED=0 "$(GO)" build -o .dev/bin/dost-conform ./cmd/dost-conform
+	@PYTHONDONTWRITEBYTECODE=1 python3 scripts/differential_selftest.py
 	@PYTHONDONTWRITEBYTECODE=1 python3 scripts/differential.py --engine go=.dev/bin/dost-conform --engine rust=$(RUST_DRIVER)
 
 # Clients in other languages (see docs/clients.md). Each target needs only its own toolchain.

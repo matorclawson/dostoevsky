@@ -62,15 +62,33 @@ JavaScript, TypeScript, Java and Rust: [client guide](docs/clients.md). In Go, [
 * **Library or server.** The same journal runs inside a Go program or behind a gateway with clients for Python, JavaScript, TypeScript, Java and Rust.
 * **Small.** Standard library only. In the published [publisher gate](docs/publisher-gate.md) on Linux AMD64, median peak memory at 32 producers was 11.1 MiB, against 43.6 MiB for embedded JetStream.
 
-**Choose something else if** you need replication or automatic failover (each partition has one durable copy), the highest server throughput (over the HTTP gateway, Redis Streams was ahead in every cell [we measured](#measured-results-language-clients)), or a fast restart over a long history with the default storage (it replays its whole journal when it opens; the opt-in [segmented store](docs/segmented-recovery.md) does not).
+**Choose something else if** you need replication or automatic failover (each partition has one durable copy), a proven throughput lead over Redis Streams (none is established with the [native server](#measured-results-native-protocol-server); over the HTTP gateway Redis was ahead in every cell [we measured](#measured-results-language-clients)), or a fast restart over a long history with the default storage (it replays its whole journal when it opens; the opt-in [segmented store](docs/segmented-recovery.md) does not).
 
 <p align="center">
 <img src="docs/img/architecture.svg" alt="Producers feed a group commit queue, which writes checksummed frames to the journal with one fdatasync per group before acknowledging. Consumer groups commit state and offset together. A notifier wakes subscribers.">
 </p>
 
+## Measured results: native protocol server
+
+Python clients, one 512-byte record per request (**no batching**), durable acknowledgment, 2,048 timed messages per cell, five rounds, loopback on one Linux ARM64 host with ext4. Dostoevsky ran `dostoevsky-server` at commit `ed99753f` **with segmented storage, which is opt-in and not the default**. Median records per second (median p99 in ms):
+
+| Producers | Dostoevsky (native) | Redis Streams | NATS JetStream | Kafka |
+|---:|---:|---:|---:|---:|
+| 1 | 619 (4.5) | 587 (5.1) | 468 (5.4) | 215 (10.3) |
+| 8 | 2,268 (10.1) | 2,128 (8.3) | 626 (26.9) | 302 (46.1) |
+| 32 | 5,059 (13.4) | 4,306 (52.9) | 712 (83.9) | 281 (176.8) |
+
+* Faster than JetStream and Kafka in these unbatched runs (in an earlier run without Redis, one Dostoevsky trial at 1 producer fell inside JetStream's range).
+* p99 lower than Redis at 32 producers.
+* **No throughput difference from Redis is established** at 1, 8 or 32 producers: the trials overlap. Redis ran without publish deduplication.
+* **Not the smallest memory.** Server memory when ready and the per-cell median peaks, in MiB: Redis 7.5 and 9.1 to 10.8; JetStream 13.9 and 21.9 to 28.3; Dostoevsky 18.2 and 26.5 to 31.6; Kafka 394 and 419 to 424.
+* These are short runs over a short history. They say nothing about sustained rates, batching or long histories.
+
+Every trial line, including the runs without Redis and the two failed runs, is in [docs/results](docs/results/README.md).
+
 ## Measured results: language clients
 
-**Redis Streams has the highest throughput in all 12 cells below.** Dostoevsky was measured **over HTTP/1.1** through its gateway; Kafka, NATS and Redis used their native protocols. These numbers say nothing about Dostoevsky's native protocol. A rerun with it is planned for 2 December 2026.
+**Redis Streams has the highest throughput in all 12 cells below.** Dostoevsky was measured **over HTTP/1.1** through its gateway; Kafka, NATS and Redis used their native protocols. These numbers say nothing about Dostoevsky's native protocol, which is measured [above](#measured-results-native-protocol-server).
 
 Median records per second (median p99 in ms), 5 trials of 120 s each, 512-byte records, acknowledged after each engine's durable acknowledgment, loopback on one Linux ARM64 host with ext4:
 
@@ -91,7 +109,7 @@ Median records per second (median p99 in ms), 5 trials of 120 s each, 512-byte r
 
 Latency percentiles are upper bin edges, at most 1% above the true value. All 240 trials completed, and every acknowledged record was read back.
 
-* **Server memory:** the Dostoevsky gateway's median peak was 13 to 36 MiB, the smallest in all 36 comparisons. The figure is the sum of each server process's highest sampled resident peak (`VmHWM`): the peaks need not occur at the same time, and pages shared between processes (Redis's append-only-file children) can be counted more than once. NATS used 67 to 76 MiB and Kafka 567 to 645 MiB; Redis's lowest was 53 MiB, and it grows with the records it holds in memory. Whether Dostoevsky's memory stays flat as history grows was **not measured** by this run.
+* **Server memory:** the Dostoevsky gateway's median peak was 13 to 36 MiB, the smallest in all 36 comparisons of this run. The later native-server runs did not repeat that: JetStream and Redis used less. The figure is the sum of each server process's highest sampled resident peak (`VmHWM`): the peaks need not occur at the same time, and pages shared between processes (Redis's append-only-file children) can be counted more than once. NATS used 67 to 76 MiB and Kafka 567 to 645 MiB; Redis's lowest was 53 MiB, and it grows with the records it holds in memory. Whether Dostoevsky's memory stays flat as history grows was **not measured** by this run.
 * **Where Dostoevsky loses besides Redis:** NATS is faster with one producer in Java, JavaScript and Rust; Kafka is faster with one producer in JavaScript; the unfixed Rust client was behind every competitor at 1 and 8 producers, and behind NATS and Redis at 32. The Dostoevsky client processes in JavaScript and Java used more memory than most or all competitor clients in those languages.
 
 Durability settings:
@@ -103,7 +121,7 @@ Durability settings:
 | NATS JetStream | `sync_interval: always`, file storage, 1 replica | each publish awaits its ack, no retries |
 | Kafka | `log.flush.interval.messages=1`, `min.insync.replicas=1`, replication factor 1 (fsync per message is inferred from the setting) | `acks=all`, no idempotence, no retries; `linger.ms=0` where set (Python also `batch.num.messages=1`), KafkaJS one message per send |
 
-These settings are read from the source; the run did not trace `fsync` calls. Source commit `d7b967ae805b14817b47a8c83314f3735e100198`. Receipt `HOST.log` SHA-256: `f94a43ce457981f8d76128099a1ebb73caae675d09cfbe2d73a6987fac0201ca` (the receipts are kept in the project's evidence record, not in this repository).
+These settings are read from the source; the run did not trace `fsync` calls. Source commit `d7b967ae805b14817b47a8c83314f3735e100198`. The [trial lines](docs/results/2026-11-26-language-clients.log) are published; `HOST.log` SHA-256 `f94a43ce457981f8d76128099a1ebb73caae675d09cfbe2d73a6987fac0201ca` is of the original unredacted log, held privately.
 
 ### Rust: the `TCP_NODELAY` fix
 
@@ -115,7 +133,7 @@ The Rust client stalled for about 43 ms per request. [PR 74](https://github.com/
 | 8 | 182 | 2,419 | 54.48 | 8.31 |
 | 32 | 728 | 6,617 | 52.35 | 10.65 |
 
-Receipt `HOST.log` SHA-256: `baae763942642f13ca52f6a45edf7c5260955367123e08435c1d29df82f0d27c`. These rows come from a different run and are not a head-to-head with the table above.
+The [trial lines](docs/results/2026-11-27-rust-nodelay-ab.log) are published; `HOST.log` SHA-256 `baae763942642f13ca52f6a45edf7c5260955367123e08435c1d29df82f0d27c` is of the original unredacted log, held privately. These rows come from a different run and are not a head-to-head with the table above.
 
 ## Measured results: embedded Go library
 

@@ -1,0 +1,54 @@
+{
+ "about": "A process killed before a record is written leaves no trace of it, and writing continues.",
+ "covers": [],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish",
+   "value": "a",
+   "id": ""
+  },
+  {
+   "do": "arm",
+   "point": "journal.write",
+   "kill": true,
+   "only": "legacy"
+  },
+  {
+   "do": "arm",
+   "point": "segment.write",
+   "kill": true,
+   "only": "segmented"
+  },
+  {
+   "do": "publish",
+   "value": "never",
+   "id": "",
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "count",
+   "is": 1
+  },
+  {
+   "do": "publish",
+   "value": "b",
+   "id": "",
+   "expect": {
+    "offset": 1
+   }
+  }
+ ]
+}

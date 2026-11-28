@@ -1,0 +1,71 @@
+{
+ "about": "Retention killed before the replacement is installed leaves the old journal whole.",
+ "covers": [],
+ "formats": [
+  "legacy"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish",
+   "value": "a",
+   "id": ""
+  },
+  {
+   "do": "publish",
+   "value": "b",
+   "id": ""
+  },
+  {
+   "do": "publish",
+   "value": "c",
+   "id": ""
+  },
+  {
+   "do": "arm",
+   "point": "retention.rename",
+   "kill": true
+  },
+  {
+   "do": "retain",
+   "floors": [
+    {
+     "floor": 2
+    }
+   ],
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "read",
+   "offset": 0,
+   "expect": {
+    "value": "a"
+   }
+  },
+  {
+   "do": "count",
+   "is": 3
+  },
+  {
+   "do": "retain",
+   "floors": [
+    {
+     "floor": 2
+    }
+   ]
+  },
+  {
+   "do": "read",
+   "offset": 0,
+   "error": "expired"
+  }
+ ]
+}

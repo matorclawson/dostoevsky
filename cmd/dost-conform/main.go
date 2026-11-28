@@ -12,8 +12,10 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+	"time"
 
 	d "github.com/rodriveracom/dostoevsky"
+	"github.com/rodriveracom/dostoevsky/internal/seam"
 	"github.com/rodriveracom/dostoevsky/workflow"
 )
 
@@ -74,6 +76,14 @@ type request struct {
 	Step    int               `json:"step"`
 	After   int64             `json:"after"`
 	Limit   int               `json:"limit"`
+
+	// Fields of the test seam requests. fix_inputs also takes "step", the clock's step in nanoseconds.
+	Start       int64  `json:"start"`
+	Seed        uint64 `json:"seed"`
+	Nanoseconds int64  `json:"nanoseconds"`
+	Point       string `json:"point"`
+	Kill        bool   `json:"kill"`
+	Skip        int    `json:"skip"`
 }
 
 // record is one stored record. Time is nanoseconds since the Unix epoch, as a string so that no reader rounds it.
@@ -154,6 +164,19 @@ func (s *driver) run(q request) (any, error) {
 	}
 	ctx := context.Background()
 	switch q.Op {
+	case "fix_inputs":
+		if s.node != nil || s.store != nil {
+			return nil, errors.New("dost-conform: fix_inputs comes before anything is opened")
+		}
+		seam.Fix(q.Start, int64(q.Step), q.Seed)
+		return nil, nil
+	case "advance":
+		seam.Advance(time.Duration(q.Nanoseconds))
+		return nil, nil
+	case "arm":
+		return nil, seam.Arm(q.Point, q.Kill, q.Skip)
+	case "disarm":
+		return map[string]any{"reached": seam.Disarm()}, nil
 	case "open":
 		if s.node != nil || s.store != nil {
 			return nil, errors.New("dost-conform: a node or store is already open")

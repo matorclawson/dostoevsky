@@ -1,0 +1,63 @@
+{
+ "about": "With the clock fixed before opening, record times are the documented ones. Another engine must give the same.",
+ "covers": [],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "fix_inputs",
+   "start": 1000000000000000000,
+   "step": 1000,
+   "seed": 7
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish",
+   "value": "a",
+   "id": "",
+   "expect": {
+    "time": "1000000000000000000"
+   }
+  },
+  {
+   "do": "publish",
+   "value": "b",
+   "id": "",
+   "expect": {
+    "time": "1000000000000001000"
+   }
+  },
+  {
+   "do": "advance",
+   "nanoseconds": 500
+  },
+  {
+   "do": "publish",
+   "value": "c",
+   "id": "",
+   "expect": {
+    "time": "1000000000000002500"
+   }
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "read",
+   "offset": 2,
+   "expect": {
+    "time": "1000000000000002500"
+   }
+  }
+ ]
+}

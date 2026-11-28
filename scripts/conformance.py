@@ -35,7 +35,8 @@ ACTIONS = {
 # Engine requests. The driver itself refuses a field it does not know.
 OPERATIONS = {"open", "close", "publish", "publish_batch", "read", "read_batch", "position", "commit_batch", "retain",
               "backup", "migrate", "verify", "inspect", "repair", "upgrade",
-              "wf_open", "wf_close", "wf_register", "wf_start_once", "wf_poll", "wf_finish", "wf_signal", "wf_history"}
+              "wf_open", "wf_close", "wf_register", "wf_start_once", "wf_poll", "wf_finish", "wf_signal", "wf_history",
+              "fix_inputs", "advance", "arm", "disarm"}
 
 
 class Failed(Exception):
@@ -61,6 +62,34 @@ class Engine:
         if not line:
             raise Failed("the %s driver stopped answering during %s" % (self.name, request["op"]))
         return json.loads(line)
+
+    def die(self, request):
+        """Sends a request the driver is to die in, at a point armed to kill. It must not answer, and it must end by
+        SIGKILL on its own: a driver the watchdog had to kill hung, which is not the same thing."""
+        hung = threading.Event()
+
+        def watchdog():
+            hung.set()
+            self.process.kill()
+
+        timer = threading.Timer(TIMEOUT, watchdog)
+        timer.start()
+        try:
+            try:
+                self.process.stdin.write(json.dumps(request).encode() + b"\n")
+                self.process.stdin.flush()
+                line = self.process.stdout.readline()
+            except BrokenPipeError:
+                raise Failed("the %s driver had already gone before %s" % (self.name, request["op"]))
+            status = self.process.wait()
+        finally:
+            timer.cancel()
+        if hung.is_set():
+            raise Failed("the %s driver hung in %s instead of dying" % (self.name, request["op"]))
+        if line:
+            raise Failed("the %s driver answered %s instead of dying: %r" % (self.name, request["op"], line[:200]))
+        if status != -signal.SIGKILL:
+            raise Failed("the %s driver ended with status %d, not by SIGKILL" % (self.name, status))
 
     def stop(self):
         """Ends the driver cleanly (end of input closes an open node). It must exit with status 0, also when it had
@@ -154,6 +183,9 @@ def check_case(name, case):
             bad("step %d: unknown action %r" % (number, do))
         if "only" in step and step["only"] not in case["formats"]:
             bad("step %d: only names a format the case does not run" % number)
+        if "dies" in step and (do not in OPERATIONS or step["dies"] is not True
+                               or set(step) & {"error", "fails", "expect", "nonzero", "save"}):
+            bad("step %d: dies is true, on an engine request that expects nothing else" % number)
         if do in ACTIONS:
             unknown = set(step) - ACTIONS[do] - {"do", "only"}
             if unknown:
@@ -188,7 +220,7 @@ class Run:
     def request(self, step):
         request = {"op": step["do"]}
         for key, value in step.items():
-            if key in ("do", "error", "fails", "expect", "nonzero", "save"):
+            if key in ("do", "error", "fails", "expect", "nonzero", "save", "dies"):
                 continue
             if isinstance(value, str) and value.startswith("$") and not value.startswith("$root"):
                 if value[1:] not in self.vars:
@@ -321,6 +353,12 @@ class Run:
         elif do == "absent":
             if glob.glob(os.path.join(self.root, step["file"])):
                 raise Failed("%s exists" % step["file"])
+        elif step.get("dies"):
+            request = self.request(step)
+            if self.driver is None:
+                raise Failed("no driver is running")
+            self.driver.die(request)
+            self.driver = None
         else:
             answer = self.call(self.request(step))
             if "error" in step:

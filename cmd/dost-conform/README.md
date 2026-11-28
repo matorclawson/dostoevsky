@@ -65,6 +65,19 @@ Workflow cases have `"formats": ["workflow"]`. Their runner steps: `"save": {NAM
 Not covered for workflows: named kill and failure points, concurrent polls, size limits, damaged and half-initialized
 stores, and any past workflow fix (their `covers` lists are empty).
 
+## Test seam requests
+
+| op | fields | result |
+|---|---|---|
+| `fix_inputs` | `start`, `step` (ns), `seed` (unsigned 64-bit number); only with nothing open | |
+| `advance` | `nanoseconds` | |
+| `arm` | `point`, `kill`, `skip` | |
+| `disarm` | | `reached` |
+
+They set the clock, randomness and the named points of `internal/seam`, whose comments are the contract; another engine
+uses the same point names at the same boundaries. A step with `"dies": true` is a request the driver must not answer:
+it must end by SIGKILL, at a point armed to kill. A case that arms a point to fail checks `reached`.
+
 ## Case files
 
 `cases/*.json`: `formats` (`legacy`, `segmented`), `covers` (commits that fixed what the case checks) and `steps`. A step
@@ -86,13 +99,15 @@ This is the first set. It covers only what can be provoked through public operat
 | `d8a84ab` | an interrupted backup opened as an empty node | `incomplete-backup-directory` |
 | `f20ffa0` | no way back from a damaged journal | `damaged-frame-before-later-frames` |
 | `614c3ed` | recovery stops at a damaged frame | `damaged-frame-before-later-frames` (the offset in the message is not compared) |
+| `5a25d90` | a partial backup was visible; the parent directory was not synced | `backup-interrupted` (the sync failure is injected after the rename; leftovers of a failed copy are not checked) |
+| `5563045` | the destination was visible and empty during the copy | `backup-interrupted` (killed before the rename) |
 
 Not yet covered, by what each needs:
 
 - **File edits and old-format fixtures:** `d810947`, `05b5b04`, `f5e3a70`, `7b176a7`, `4885808`, `1988457`, `42c1cc3`,
   `ccbedeb`, `737c853`, `af93562`, `08d8da9`, `a323ebe`, `28bfbbd`, `f189e01`, `3af0eee`, and two checks of crafted
   segments (a retention floor past a lagging group; a fence frame with a body).
-- **Named failure or kill points in the engine, not yet built:** `f65462a`, `ea2240a`, `5a25d90`, `1092515`, `5563045`,
+- **Cases using the named points, not yet written** (some may need further points): `f65462a`, `ea2240a`, `1092515`,
   `cc081d4`, `ddc0cc8`, `d711c94`, `a0f24fa`, `b845b69` (as byte vectors), `a0d8420`.
 - **No test of any kind today:** `ed99753`.
 

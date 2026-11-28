@@ -477,3 +477,163 @@ fn the_record_scanner_matches_go() {
         "{accepted} accepted, {refused} refused"
     );
 }
+
+fn list(field: &str) -> Vec<&str> {
+    let inner = field.trim_start_matches('[').trim_end_matches(']');
+    if inner.is_empty() {
+        Vec::new()
+    } else {
+        inner.split(',').collect()
+    }
+}
+
+#[test]
+fn the_id_table_and_filter_match_go() {
+    use dostoevsky_format::idfilter::{filter_positions, make_id_filter, mix_filter_hash};
+    use dostoevsky_format::segindex::{id_hash, IdTable};
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for line in rows(include_str!("../../../testdata/idtable-go.txt")) {
+        let f: Vec<&str> = line.split(' ').collect();
+        match f[0] {
+            "H" => assert_eq!(id_hash(f[1].parse().unwrap(), &unhex(f[2])).to_string(), f[3], "{line}"),
+            "P" => {
+                let (h, bits): (u64, u32) = (f[1].parse().unwrap(), f[2].parse().unwrap());
+                let (pos, step) = filter_positions(h, bits);
+                assert_eq!(format!("P {h} {bits} {} {pos} {step}", mix_filter_hash(h)), line);
+            }
+            "T" => {
+                let mut table = IdTable::default();
+                for add in list(f[3]) {
+                    let (h, off) = add.split_once(':').unwrap();
+                    table.add(h.parse().unwrap(), off.parse().unwrap());
+                }
+                assert_eq!(
+                    (table.len().to_string().as_str(), table.keys.len().to_string().as_str()),
+                    (f[1], f[2]),
+                    "{line}"
+                );
+                // The order of each() and of every lookup is the order Go visits in.
+                let mut each = Vec::new();
+                table.each(|h, off| each.push(format!("{h}:{off}")));
+                assert_eq!(format!("[{}]", each.join(",")), f[4], "{line}");
+                for look in list(f[5]) {
+                    let (query, want) = look.split_once('=').unwrap();
+                    let (h, stop) = query.split_once('/').unwrap();
+                    let stop: usize = stop.parse().unwrap();
+                    let mut found = Vec::new();
+                    table.lookup(h.parse().unwrap(), |off| {
+                        found.push(off.to_string());
+                        found.len() == stop
+                    });
+                    assert_eq!(found.join("+"), want, "{look} in {line}");
+                }
+                let filter = make_id_filter(&table);
+                assert_eq!(x(&filter.0), f[6], "{line}");
+                for check in list(f[7]) {
+                    let (h, want) = check.split_once('=').unwrap();
+                    assert_eq!(
+                        filter.contains(mix_filter_hash(h.parse().unwrap())).to_string(),
+                        want,
+                        "{check} in {line}"
+                    );
+                }
+            }
+            other => panic!("unknown row {other}"),
+        }
+        *counts.entry(f[0]).or_default() += 1;
+    }
+    assert_eq!((counts["H"], counts["T"], counts["P"]), (200, 60, 200));
+}
+
+#[test]
+fn the_segment_index_matches_go() {
+    use dostoevsky_format::segindex::{decode_seg_index, encode_seg_index, IdxFooterInfo, SegIndex};
+    let footer = |text: &str| {
+        let n: Vec<u64> = text.split(',').map(|v| v.parse().unwrap()).collect();
+        IdxFooterInfo {
+            segment: n[0],
+            size: n[1],
+            last_pos: n[2],
+            last_crc: n[3] as u32,
+        }
+    };
+    let (mut built, mut accepted, mut refused) = (0, 0, 0);
+    for line in rows(include_str!("../../../testdata/segindex-go.txt")) {
+        let f: Vec<&str> = line.split(' ').collect();
+        match f[0] {
+            "X" => {
+                let start = list(f[1])
+                    .iter()
+                    .map(|e| e.split_once('=').unwrap())
+                    .map(|(p, n)| (p.parse().unwrap(), n.parse().unwrap()))
+                    .collect();
+                let mut index = SegIndex::new(start);
+                for rec in list(f[2]) {
+                    let r: Vec<&str> = rec.split(':').collect();
+                    let id = unhex(r[3]);
+                    let record = Record3 {
+                        partition: r[0].parse().unwrap(),
+                        offset: r[1].parse().unwrap(),
+                        time: r[2].parse().unwrap(),
+                        id: &id,
+                        ..Default::default()
+                    };
+                    index.observe(&record, r[4].parse().unwrap());
+                }
+                assert_eq!(
+                    x(&encode_seg_index(&index, footer(f[3]))),
+                    f[4],
+                    "{}",
+                    &line[..line.len().min(200)]
+                );
+                for query in list(f[5]) {
+                    let (q, want) = query.split_once('=').unwrap();
+                    let got = match q.split_once('@') {
+                        None => {
+                            let pid = q.parse().unwrap();
+                            format!("{}/{}", index.first(pid), index.count(pid))
+                        }
+                        Some((pid, off)) => {
+                            let at = index.find(pid.parse().unwrap(), off.parse().unwrap());
+                            format!("{}/{}", at.unwrap_or(0), at.is_some())
+                        }
+                    };
+                    assert_eq!(got, want, "{query}");
+                }
+                built += 1;
+            }
+            "D" => {
+                let b = unhex(f[1]);
+                let got = decode_seg_index(&b);
+                let (foot, text, again) = match &got {
+                    Ok((index, foot)) => {
+                        accepted += 1;
+                        (*foot, "--".to_string(), x(&encode_seg_index(index, *foot)))
+                    }
+                    Err((foot, e)) => {
+                        refused += 1;
+                        (*foot, x(e.to_string().as_bytes()), "--".to_string())
+                    }
+                };
+                let want = format!(
+                    "D {} {},{},{},{} {text} {again}",
+                    f[1], foot.segment, foot.size, foot.last_pos, foot.last_crc
+                );
+                assert_eq!(want, line, "{}", &line[..line.len().min(200)]);
+                if let Ok((index, foot)) = &got {
+                    assert_eq!(
+                        encode_seg_index(index, *foot),
+                        b,
+                        "what was read writes back as the bytes it was read from"
+                    );
+                    assert!(index.same_as(index, *foot));
+                }
+            }
+            other => panic!("unknown row {other}"),
+        }
+    }
+    assert!(
+        built == 22 && accepted >= 22 && refused > 300,
+        "{built} built, {accepted} accepted, {refused} refused"
+    );
+}

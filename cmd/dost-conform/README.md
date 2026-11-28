@@ -71,12 +71,15 @@ history must equal those of a second store given the same requests without the k
 `wf_snapshot` with `runs`, `same`).
 
 The `workflow-rollover-*` cases kill at each point during the commit that starts a second segment. A start step may give
-`input_size` instead of `input`. Where the roll falls is arithmetic of this format: a segment rolls once the frames
-appended to it reach 8 MiB, an `input_size` of 189000 makes a record of about 252 KiB (base64 in JSON), so 34 such
-starts fill the first segment and the 35th starts the second. The cases check that the successor is absent after 34;
-a change to the threshold or the encoding fails them there. The rollover cases therefore depend on the Go engine's frame
-sizes and roll threshold, which the Rust engine must reproduce. `at_least` requires a `mark` of that many bytes. The runner
-refuses a `wf_snapshot` of no run, and a `compare` or `equal_files` of one thing with itself.
+`input_size` instead of `input`. Where the roll falls is arithmetic of this format. Before each append, a segment rolls if
+the frames already appended to it have reached 8 MiB, so the append that crosses that size stays in the old segment. An
+`input_size` of 189000 makes a record of about 252 kB (base64 in JSON): 34 such starts pass 8 MiB and the 35th starts the
+second segment. The cases check that the successor is absent after 34 starts and present during or after the 35th, so a
+change that moves the roll away from the 35th start fails them; a smaller change may not. The rollover cases therefore
+depend on the Go engine's frame sizes and roll threshold, which the Rust engine must reproduce. `at_least` requires a
+`mark` of at least that many bytes; the number must be a positive whole one. The mid-append case asks for 100000: half of the record is about
+126 kB, and a new segment holding no record is a few hundred bytes. The runner refuses a
+`wf_snapshot` of no run, and a `compare` or `equal_files` of one thing with itself.
 
 The other workflow cases stay within one segment, and no case covers a third segment.
 

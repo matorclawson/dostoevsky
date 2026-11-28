@@ -225,6 +225,8 @@ def check_case(name, case):
         if do == "equal_files" and (len(step.get("files", [])) != 2
                                     or len({os.path.normpath(f) for f in step["files"]}) != 2):
             bad("step %d: equal_files takes two different files" % number)
+        if do == "at_least" and (type(step.get("bytes")) is not int or step["bytes"] <= 0):
+            bad("step %d: at_least takes a positive whole number of bytes" % number)
         if do == "disarm" and not isinstance(step.get("expect", {}).get("reached"), bool):
             bad("step %d: disarm states whether the point was reached" % number)
         if do in ACTIONS:

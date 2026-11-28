@@ -146,6 +146,30 @@ func TestMidAppendAddsNoWriteOnASkippedPass(t *testing.T) {
 	}
 }
 
+// A second arm is refused until Disarm has reported the first, whether it fired or not.
+func TestArmingOverAnUncheckedPointIsRefused(t *testing.T) {
+	n := openTest(t, t.TempDir(), config())
+	defer n.Close()
+	arm(t, "journal.write")
+	const held = `seam: point "journal.write" is armed and disarm has not reported it`
+	if err := seam.Arm("backup.write", false, 0); err == nil || err.Error() != held {
+		t.Fatalf("before the point fired: %v", err)
+	}
+	if err := seam.Arm("no.such.point", false, 0); err == nil || err.Error() == held {
+		t.Fatalf("an unknown name is refused first: %v", err)
+	}
+	if _, err := n.Publish(context.Background(), p.Topic, Message{Value: []byte("x")}); !errors.Is(err, seam.ErrInjected) {
+		t.Fatalf("the armed point: %v", err)
+	}
+	if err := seam.Arm("backup.write", false, 0); err == nil || err.Error() != held {
+		t.Fatalf("after the point fired: %v", err)
+	}
+	if !seam.Disarm() {
+		t.Fatal("the point was not reported as reached")
+	}
+	arm(t, "backup.write")
+}
+
 func TestAnUnknownPointIsRefusedAndAnUnreachedOneSaysSo(t *testing.T) {
 	if err := seam.Arm("no.such.point", false, 0); err == nil {
 		t.Fatal("an unknown name was armed")

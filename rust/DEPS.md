@@ -35,5 +35,7 @@ release date, when it is first needed.
 | Code | Where | Why |
 | --- | --- | --- |
 | JSON reader and writer | `dostoevsky-format::gojson` | The format is the output of Go's encoder, byte for byte, and what Go's decoder accepts |
+| Reading times | `dostoevsky-format::gotime` | What Go's `Time.UnmarshalJSON` accepts is wider than RFC 3339 |
 | base64 | `dostoevsky-format::base64` | Part of the same Go-compatible encoding |
+| CRC-32C | `dostoevsky-format::crc32c` | Small, and uses the processor's instructions directly |
 | SHA-256 | `dostoevsky-format::sha256` | **Temporary.** `sha2` replaces it as soon as a registry can be reached. Until then it is checked against the standard vectors and 200 digests from another implementation |

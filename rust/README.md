@@ -4,7 +4,8 @@ Dostoevsky is being rebuilt in Rust, in two phases. Phase 1, here, is a faithful
 repository root: module by module, the same bytes on disk and on the wire, the same error codes. The Go engine keeps
 shipping until the Rust engine passes every gate.
 
-**State: rows 0 and 1 of 14.** The layout, the test drivers and the wire codec exist. Nothing opens a store yet.
+**State: rows 0 to 2 of 14.** The layout, the test drivers, the wire codec and the frame formats exist. Nothing opens
+a store yet.
 
 | Read | For |
 | --- | --- |

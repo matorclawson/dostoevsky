@@ -10,7 +10,7 @@ Go behavior the port keeps on purpose, each it changes, and what is not yet know
 | ---: | --- | --- |
 | 0 | Workspace, layout, JSON as Go writes and reads it, the test seam, the conformance driver, the differential driver | Done |
 | 1 | Wire codec | Done |
-| 2 | Segment frames, checkpoints, the record scanner | Not started |
+| 2 | Segment frames, checkpoints, the record scanner | Done, except the replayer, which is ported with the log state (note 16) |
 | 3 to 14 | Everything that opens a store | Not started |
 
 No engine request works yet. The Rust driver answers each one with the error `other` and names the row that brings it.
@@ -28,9 +28,11 @@ says so in its first line and names its row.
 | 0 | the sentinel errors in `node.go` and its neighbours | `dostoevsky-core` | `errors` | ported |
 | 0 | `encoding/json` as the engine uses it | `dostoevsky-format` | `gojson`, `base64` | ported for strings, integers and bytes |
 | 1 | `wire/wire.go` | `dostoevsky-wire` | `wire` | ported |
-| 2 | `checkpoint3.go` | `dostoevsky-format` | `checkpoint3` | stub |
-| 2 | `frame3.go` | `dostoevsky-format` | `frame3` | stub |
-| 2 | `recordscan.go` | `dostoevsky-format` | `recordscan` | stub |
+| 2 | `frame3.go` | `dostoevsky-format` | `frame3` | ported |
+| 2 | `checkpoint3.go` (format half) | `dostoevsky-format` | `checkpoint3` | ported |
+| 2 | `recordscan.go` | `dostoevsky-format` | `recordscan` | ported |
+| 2 | `crcTable` in `journal.go` | `dostoevsky-format` | `crc32c` | ported |
+| 2 | `Time.UnmarshalJSON` | `dostoevsky-format` | `gotime` | ported (reading) |
 | 3 | `admission.go` | `dostoevsky-core` | `admission` | stub |
 | 3 | `id_index.go` | `dostoevsky-core` | `id_index` | stub |
 | 3 | `idfilter.go` | `dostoevsky-format` | `idfilter` | stub |
@@ -64,6 +66,7 @@ says so in its first line and names its row.
 | 13 | `sketch/hll.go` | `dostoevsky-core` | `sketch::hll` | stub |
 | 13 | `sketch/hot_topics.go` | `dostoevsky-core` | `sketch::hot_topics` | stub |
 | 13 | `sketch/latency.go` | `dostoevsky-core` | `sketch::latency` | stub |
+| 4 | `checkpoint3.go` (the replayer) | `dostoevsky-core` | with `logstate` | not started |
 | 8 | `cmd/dost-repair`, `cmd/dost-storage` | `dostoevsky-cli` | binaries of the same names | not started |
 | 11 | `cmd/dostoevsky-server` | `dostoevsky-server` | binary of the same name | not started |
 | 12 | `cmd/dostoevsky-gateway` | `dostoevsky-server` | binary of the same name | not started |
@@ -95,8 +98,11 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
    writer and the destructor of `gojson::Value` keep their own stacks.
 5. **A nil byte slice and an empty one differ on the wire.** Go writes a nil `[]byte` as `null` and an empty one as
    `""`. Rust carries such fields as `Option<Vec<u8>>`, and each ported function returns the same one of the two as Go.
-6. **Times and floating-point numbers** in Go's JSON format are not read or written yet. Each is added in the row that
-   first needs it.
+   Checkpoints turn an empty group state into nil (`cloneState`); `CpGroup3::state` is `None` for empty.
+6. **Times.** Go's `Time.UnmarshalJSON` accepts more than RFC 3339: an hour of one digit, a comma before the fraction
+   of a second, a zone offset of up to 24 hours and 60 minutes. The stricter checks in the Go source are switched off.
+   Rust (`gotime`) accepts exactly the same inputs. Checked against 5,318 inputs. Writing times, and floating-point
+   numbers, are added in the row that first needs them.
 
 ### The driver
 
@@ -133,21 +139,34 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
 15. **`io.ReadFull` tells an input that ended before a part of the HELLO from one that ended inside it.** Rust's
     `read_exact` does not, so `read_hello` reads in its own loop and reports `Eof` or `UnexpectedEof` as Go would.
 
+### Frames and checkpoints
+
+16. **`checkpoint3.go` is split.** Its encoding (frames, the builder, `readCheckpoint3`) is in `dostoevsky-format`. Its
+    replayer applies frames to the log state, so it is ported with `logstate`, in `dostoevsky-core`, in row 4.
+17. **Record times.** Go carries a `time.Time` and converts at the frame, refusing an instant outside what an i64 of
+    nanoseconds holds. Rust carries the nanoseconds, so such a time cannot be formed and there is nothing to refuse.
+    `i64::MIN` stands for Go's zero time, as in the frame.
+18. **The scanner's integer reader wraps on overflow.** Go's `canonicalUint` multiplies before it checks the digit
+    count, and Go integers wrap. Rust uses wrapping arithmetic there; ordinary arithmetic panicked on a 19-digit number.
+19. **Error texts.** Only error codes are compared between engines. The frame and checkpoint errors nevertheless carry
+    Go's texts word for word, and the vectors check them.
+
 ### The build
 
-16. **The source release copies `rust/` as it stands** (`scripts/release.sh`; a test requires every top-level directory
+20. **The source release copies `rust/` as it stands** (`scripts/release.sh`; a test requires every top-level directory
     to be listed). Cargo's build output therefore goes to `.dev/rust-target`, outside `rust/`.
-17. **Fuzz targets.** `wire_test.go` has Go fuzz targets. Rust has none yet. In their place the
-    tests replay the Go functions' own results on inputs damaged in many small ways (7,998 wire frames).
+21. **Fuzz targets.** `wire_test.go` and `frame3_test.go` have Go fuzz targets. Rust has none yet. In their place the
+    tests replay the Go functions' own results on inputs damaged in many small ways (7,998 wire frames; 4,018 frame
+    rows; 535 checkpoint streams).
 
 ## Observed in the Go engine
 
-18. **Without the seam, two runs of the Go engine differ in more than record times.** The differential driver, run
+22. **Without the seam, two runs of the Go engine differ in more than record times.** The differential driver, run
     with the Go engine against itself, shows differences in the legacy journal and the segment logs, and also in the
     `.idx` and `.bloom` sidecars and in a backup's `journal.v1`. With the seam fixed these must all vanish; that run
     needs `fix_inputs` in the Go driver.
 
-19. **Two conformance pairings pass for an engine that refuses everything.** `incomplete-backup-directory`, with Go as
+23. **Two conformance pairings pass for an engine that refuses everything.** `incomplete-backup-directory`, with Go as
     the writer and Rust as the reader, passes although the Rust driver has no engine: its last step only requires that
     opening fails. The case would be stricter if it required the code `incomplete_backup`.
 
@@ -155,10 +174,11 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
 
 - **`internal/seam/points.go`** has not been seen. The point names, the meaning of `kill` and `skip` beyond note 12, and
   the type of `reached` in the `disarm` reply (written here as a number) are to be checked against it.
-- **Go 1.27.0** was not on the machine that wrote the vector files other than the two JSON files. `seam-go.txt` and `wire-go.txt` come
+- **Go 1.27.0** was not on the machine that wrote the vector files other than the two JSON files. `seam-go.txt`,
+  `wire-go.txt` and the files written by `internal_vectors_test.go.txt` come
   from Go 1.24.7. Nothing in them depends on the JSON encoder's change between those releases, but they should be
-  written again with 1.27.0 (the programs in `rust/testdata`).
-- **The lint gate on releases newer than the pinned one.** `sha256.rs` avoids `chunks_exact`, which
+  written again with 1.27.0 (`rust/testdata/regenerate.sh`).
+- **The lint gate on releases newer than the pinned one.** `sha256.rs` and `crc32c.rs` avoid `chunks_exact`, which
   newer lints object to; that could not be confirmed with a newer release.
 - **Wire bytes of a server.** The differential driver compares stores and driver replies. Comparing wire bytes needs
   the server (row 11).

@@ -99,13 +99,27 @@ pub fn append_frame3(dst: &mut Vec<u8>, typ: u8, body: &[u8]) -> Result<(), Fram
     }
     let start = open(dst, typ, body.len());
     dst.extend_from_slice(body);
-    seal_frame3(dst, start);
+    seal(&mut dst[start..]);
     Ok(())
 }
 
-/// Fills in the two checks of the frame that starts at `dst[start..]`.
-pub fn seal_frame3(dst: &mut [u8], start: usize) {
-    let f = &mut dst[start..];
+/// Fills in the two checks of the frame that starts at `dst[start..]`, and reports whether there was a frame's
+/// header there to fill in. With fewer than [`FRAME3_HEADER`] bytes from `start`, or a `start` beyond the end, it
+/// changes nothing and returns false. Go's `sealFrame3` is unexported and panics on such a slice; this function is
+/// public, so it checks.
+#[must_use = "false means nothing was sealed"]
+pub fn seal_frame3(dst: &mut [u8], start: usize) -> bool {
+    match dst.get_mut(start..) {
+        Some(f) if f.len() >= FRAME3_HEADER => {
+            seal(f);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The two checks of the frame `f`, which holds at least its header.
+fn seal(f: &mut [u8]) {
     let hcrc = crc32c::checksum(&f[..6]);
     f[6..10].copy_from_slice(&hcrc.to_le_bytes());
     let bcrc = crc32c::update(hcrc, &f[FRAME3_HEADER..]);
@@ -232,7 +246,7 @@ pub fn append_record3(dst: &mut Vec<u8>, r: &Record3) -> Result<(), Frame3Error>
     dst.extend_from_slice(r.key);
     dst.extend_from_slice(r.id);
     dst.extend_from_slice(r.value);
-    seal_frame3(dst, start);
+    seal(&mut dst[start..]);
     Ok(())
 }
 
@@ -290,7 +304,7 @@ pub fn append_commit3(dst: &mut Vec<u8>, c: &Commit3) -> Result<(), Frame3Error>
     dst.push(c.expected.is_some() as u8);
     dst.extend_from_slice(&c.expected.unwrap_or(0).to_le_bytes()); // fixed width: zero when absent
     dst.extend_from_slice(c.state);
-    seal_frame3(dst, start);
+    seal(&mut dst[start..]);
     Ok(())
 }
 
@@ -341,7 +355,7 @@ pub fn append_topic_def3(dst: &mut Vec<u8>, d: &TopicDef3) -> Result<(), Frame3E
     dst.extend_from_slice(&d.partition.to_le_bytes());
     dst.extend_from_slice(&d.number.to_le_bytes());
     dst.extend_from_slice(d.topic);
-    seal_frame3(dst, start);
+    seal(&mut dst[start..]);
     Ok(())
 }
 
@@ -409,6 +423,37 @@ mod tests {
         assert_eq!(
             (f.len(), read_frame3(&f)),
             (FRAME3_HEADER, Ok((F3_FENCE, &b""[..], FRAME3_HEADER)))
+        );
+    }
+
+    #[test]
+    fn sealing_checks_that_a_header_is_there() {
+        let mut f = Vec::new();
+        append_frame3(&mut f, 9, b"body").unwrap();
+        let sealed = f.clone();
+        f[6..14].fill(0);
+        assert!(read_frame3(&f).is_err());
+        assert!(seal_frame3(&mut f, 0));
+        assert_eq!(f, sealed, "sealing writes the two checks and nothing else");
+        // A second frame after the first, sealed in place.
+        let mut two = [sealed.clone(), sealed.clone()].concat();
+        two[sealed.len() + 6..sealed.len() + 14].fill(0);
+        assert!(seal_frame3(&mut two, sealed.len()));
+        assert_eq!(two, [sealed.clone(), sealed.clone()].concat());
+        // Too little to be a header, and a start at or beyond the end: nothing is written.
+        for (length, start) in [(13, 0), (0, 0), (14, 1), (14, 14), (14, 15), (30, usize::MAX)] {
+            let mut short = vec![7u8; length];
+            assert!(!seal_frame3(&mut short, start), "{length} bytes from {start}");
+            assert_eq!(short, vec![7u8; length]);
+        }
+        let mut exact = vec![0u8; FRAME3_HEADER];
+        assert!(
+            seal_frame3(&mut exact, 0),
+            "a header alone is a frame with an empty body"
+        );
+        assert_eq!(
+            read_frame3(&exact).map(|(_, body, size)| (body.len(), size)),
+            Ok((0, FRAME3_HEADER))
         );
     }
 

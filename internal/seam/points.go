@@ -53,7 +53,9 @@ type armed struct {
 var current_ atomic.Pointer[armed]
 
 // Arm makes the named point fail, or kill the process, once: the first time it is reached after skip earlier times.
-// Every later pass goes through. One point is armed at a time. Arm and Disarm are called only while no operation that can
+// Every later pass goes through. One point is armed at a time, and it stays armed until Disarm has been called, whether
+// it has fired or not: arming again before that is refused, so that no check of a point can be lost. An unknown name is
+// refused first, then an armed point. Arm and Disarm are called only while no operation that can
 // reach a point is in flight: the driver does one request at a time, and a test arms before it starts the operation. A test must check with Disarm that the point was reached: an unreached point proves nothing.
 func Arm(name string, kill bool, skip int) error {
 	if !slices.Contains(Points, name) {
@@ -61,7 +63,13 @@ func Arm(name string, kill bool, skip int) error {
 	}
 	a := &armed{name: name, kill: kill, pass: skip + 1}
 	a.skip.Store(int64(skip))
-	current_.Store(a)
+	if !current_.CompareAndSwap(nil, a) {
+		held := name
+		if b := current_.Load(); b != nil {
+			held = b.name
+		}
+		return fmt.Errorf("seam: point %q is armed and disarm has not reported it", held)
+	}
 	return nil
 }
 

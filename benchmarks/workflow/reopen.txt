@@ -1,0 +1,19 @@
+=== RUN   TestWorkflowReopenFootprint
+    cost_linux_test.go:213: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:162: closed=0 warm_reopen_ms=0.76 retained_heap_delta_KiB=25.2 rss_before_KiB=6424 rss_after_KiB=7116
+        --- PASS: TestWorkflowReopenFootprint (0.00s)
+        PASS
+
+    cost_linux_test.go:213: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:162: closed=256 warm_reopen_ms=3.94 retained_heap_delta_KiB=254.0 rss_before_KiB=6456 rss_after_KiB=8868
+        --- PASS: TestWorkflowReopenFootprint (0.01s)
+        PASS
+
+    cost_linux_test.go:213: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:162: closed=4096 warm_reopen_ms=74.88 retained_heap_delta_KiB=3691.3 rss_before_KiB=6544 rss_after_KiB=14168
+        --- PASS: TestWorkflowReopenFootprint (0.08s)
+        PASS
+
+--- PASS: TestWorkflowReopenFootprint (1.50s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky/workflow	1.509s

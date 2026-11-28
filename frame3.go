@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"slices"
 	"time"
 )
 
@@ -152,6 +153,7 @@ func appendRecord3(dst []byte, r record3) ([]byte, error) {
 	if body > frame3Max {
 		return dst, ErrLimit
 	}
+	dst = slices.Grow(dst, frame3Header+body)
 	start := len(dst)
 	dst = append(dst, 0, 0, 0, 0, f3Record, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	binary.LittleEndian.PutUint32(dst[start:], uint32(body))

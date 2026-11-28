@@ -1,0 +1,12 @@
+=== RUN   TestUnixSocketIsPrivate
+    main_test.go:24: listen unix /tmp/ds737997615/run/s: socket: operation not permitted
+--- FAIL: TestUnixSocketIsPrivate (0.00s)
+=== RUN   TestAStaleSocketOfOursIsReplaced
+    main_test.go:75: listen unix /tmp/ds4268925346/run/s: socket: operation not permitted
+--- FAIL: TestAStaleSocketOfOursIsReplaced (0.00s)
+=== RUN   TestALiveSocketIsNotDisplaced
+    main_test.go:91: listen unix /tmp/ds4137744349/run/s: socket: operation not permitted
+--- FAIL: TestALiveSocketIsNotDisplaced (0.00s)
+FAIL
+FAIL	github.com/rodriveracom/dostoevsky/cmd/dostoevsky-server	0.004s
+FAIL

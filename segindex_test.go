@@ -462,7 +462,7 @@ func TestIDWindowLookupAcrossSegments(t *testing.T) {
 		}
 	}
 	find := func(l *segLog, id string, window int) (segs []uint64) {
-		if err := l.findIDs(0, []byte(id), window, func(seg, off uint64) bool { segs = append(segs, seg); return false }); err != nil {
+		if err := l.findIDs(0, []byte(id), window, func(seg, off uint64, _ *segIndex) bool { segs = append(segs, seg); return false }); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -503,7 +503,7 @@ func TestIDWindowLookupAcrossSegments(t *testing.T) {
 	}
 	// a hash match is only a candidate: a different ID with the same hash is the caller's to reject
 	var candidates int
-	l.findIDs(0, []byte("w-4"), 0, func(seg, off uint64) bool { candidates++; return false })
+	l.findIDs(0, []byte("w-4"), 0, func(seg, off uint64, _ *segIndex) bool { candidates++; return false })
 	if candidates != 1 {
 		t.Fatalf("%d candidates", candidates)
 	}

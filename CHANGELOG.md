@@ -4,6 +4,12 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — durable workflow signal waits
+
+- Added a named signal step and a durable, step-addressed Signal call. Waiting runs hold no leases or worker slots. A signal supplies the input to the next activity.
+- Added replay, stale-signal, repeated-name and process-kill tests. Older readers reject the new transition format when a signal definition first appears.
+- Added a Linux scale benchmark for 100,000 waiting runs and a 1,024-signal burst with one and 32 polling workers. Extended the existing three-activity workload to 30 activities and measured fresh-process recovery. See the [scale report](docs/workflow-wait-scale.md).
+
 ## Unreleased — workflow crash recovery
 
 - Added a durable workflow commit boundary and per-store identity. Recovery verifies committed segments and repairs unacknowledged suffixes, including an interrupted rollover. It preserves committed corruption for inspection.

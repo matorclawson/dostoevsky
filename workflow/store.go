@@ -49,6 +49,8 @@ type definition struct {
 	Version int
 }
 type transition struct {
+	SignalName        string `json:",omitempty"`
+	SignalStep        int    `json:",omitempty"`
 	Format            int
 	Kind              string
 	At                int64
@@ -214,7 +216,7 @@ func (s *Store) serve() {
 }
 
 func (s *Store) emit(t transition) error {
-	t.Format = 1
+	t.Format = t.formatVersion()
 	b, e := json.Marshal(t)
 	if e != nil {
 		return e
@@ -263,13 +265,20 @@ func (s *Store) advance(r *run, t transition) {
 		}
 		return
 	}
+	if steps[r.step].Kind == "signal" {
+		if r.index >= 0 {
+			s.remove(r)
+		}
+		s.event(r, t, "SignalWaiting", steps[r.step].Name, r.step)
+		return
+	}
 	b, _ := json.Marshal(map[string]any{"name": steps[r.step].Name, "due": t.At})
 	s.event(r, t, "ActivityScheduled", string(b), r.step)
 	s.schedule(r, t.At)
 }
 
 func (s *Store) apply(t transition) error {
-	if t.Format != 1 {
+	if t.Format != t.formatVersion() {
 		return errors.New("unknown workflow format")
 	}
 	r := s.runs[t.Run]
@@ -290,6 +299,14 @@ func (s *Store) apply(t transition) error {
 			b, _ := json.Marshal(t.Attrs)
 			s.event(r, t, "AttributesUpdated", string(b), -1)
 		}
+		s.advance(r, t)
+	case "signal":
+		if !s.waiting(r, t.SignalName, t.SignalStep) || !json.Valid(t.Data) {
+			return d.ErrInvalid
+		}
+		s.event(r, t, "SignalReceived", string(t.Data), r.step)
+		r.value = t.Data
+		r.step++
 		s.advance(r, t)
 	case "lease":
 		if r == nil || r.index < 0 || r.token != "" || t.Token == "" {
@@ -336,7 +353,7 @@ func (s *Store) Register(name string, version int, steps []Step) error {
 		return d.ErrInvalid
 	}
 	for _, v := range steps {
-		if v.Kind != "activity" || !label(v.Name) || v.Attempts < 0 || v.BackoffMillis < 0 || v.BackoffMillis > 1<<45 {
+		if (v.Kind != "activity" && v.Kind != "signal") || (v.Kind == "signal" && (v.Attempts != 0 || v.BackoffMillis != 0)) || !label(v.Name) || v.Attempts < 0 || v.BackoffMillis < 0 || v.BackoffMillis > 1<<45 {
 			return d.ErrInvalid
 		}
 	}
@@ -490,4 +507,46 @@ func (s *Store) History(id string, after int64, limit int) ([]Event, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (t transition) formatVersion() int {
+	if t.Kind == "signal" {
+		return 2
+	}
+	for _, st := range t.Steps {
+		if st.Kind == "signal" {
+			return 2
+		}
+	}
+	return 1
+}
+
+func (s *Store) waiting(r *run, name string, step int) bool {
+	if r == nil || r.step != step || step < 0 {
+		return false
+	}
+	steps := s.defs[r.start.Definition]
+	return step < len(steps) && steps[step].Kind == "signal" && steps[step].Name == name
+}
+
+// Signal delivers a JSON value to the named wait at the expected zero-based
+// step. Early, repeated, and stale signals return ErrConflict. The next
+// activity receives the value. Signals are acknowledged after durable commit.
+func (s *Store) Signal(id string, step int, name string, value json.RawMessage) error {
+	if len(value) > transitionLimit {
+		return d.ErrLimit
+	}
+	if !label(id) || !label(name) || step < 0 || !json.Valid(value) {
+		return d.ErrInvalid
+	}
+	return s.call(func(s *Store) error {
+		r := s.runs[id]
+		if r == nil {
+			return ErrMissing
+		}
+		if !s.waiting(r, name, step) {
+			return d.ErrConflict
+		}
+		return s.emit(transition{Kind: "signal", Run: id, SignalStep: step, SignalName: name, At: s.now().UnixMilli(), Data: bytes.Clone(value)})
+	})
 }

@@ -1,0 +1,77 @@
+DOST_WORKFLOW_BENCH_DIR="/workspace/scratch/bdcd7e9c3230/audit/../waitbench" GOMAXPROCS=4 /workspace/scratch/bdcd7e9c3230/audit/../review/go/bin/go test -count=1 -timeout 30m -v ./workflow -run '^TestWorkflow(Cost|LongCost)$'
+=== RUN   TestWorkflowCost
+=== RUN   TestWorkflowCost/1
+    cost_linux_test.go:136: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:159: closed=512 warm_reopen_ms=18.50 retained_heap_delta_KiB=834.0 rss_before_KiB=6556 rss_after_KiB=11612
+        --- PASS: TestWorkflowReopenFootprint (0.02s)
+        PASS
+        
+    cost_linux_test.go:138: workers=1 completed=512 runs/s=107.2 p99_ms=19.04 records/run=7 append_groups/run=7.000 logical_disk_bytes/run=1647.5 cpu_us/run=1793.8
+=== RUN   TestWorkflowCost/8
+    cost_linux_test.go:136: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:159: closed=512 warm_reopen_ms=26.15 retained_heap_delta_KiB=836.8 rss_before_KiB=6604 rss_after_KiB=11640
+        --- PASS: TestWorkflowReopenFootprint (0.03s)
+        PASS
+        
+    cost_linux_test.go:138: workers=8 completed=512 runs/s=523.7 p99_ms=21.21 records/run=7 append_groups/run=1.750 logical_disk_bytes/run=1647.5 cpu_us/run=426.4
+=== RUN   TestWorkflowCost/32
+    cost_linux_test.go:136: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:159: closed=512 warm_reopen_ms=15.83 retained_heap_delta_KiB=838.0 rss_before_KiB=6660 rss_after_KiB=11300
+        --- PASS: TestWorkflowReopenFootprint (0.02s)
+        PASS
+        
+    cost_linux_test.go:138: workers=32 completed=512 runs/s=1899.2 p99_ms=21.21 records/run=7 append_groups/run=0.439 logical_disk_bytes/run=1648.2 cpu_us/run=145.9
+--- PASS: TestWorkflowCost (6.18s)
+    --- PASS: TestWorkflowCost/1 (4.81s)
+    --- PASS: TestWorkflowCost/8 (1.07s)
+    --- PASS: TestWorkflowCost/32 (0.30s)
+=== RUN   TestWorkflowLongCost
+=== RUN   TestWorkflowLongCost/1
+    cost_linux_test.go:136: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:159: closed=512 warm_reopen_ms=120.07 retained_heap_delta_KiB=4881.8 rss_before_KiB=6564 rss_after_KiB=17160
+        --- PASS: TestWorkflowReopenFootprint (0.12s)
+        PASS
+        
+    cost_linux_test.go:138: workers=1 completed=512 runs/s=13.7 p99_ms=125.53 records/run=61 append_groups/run=61.000 logical_disk_bytes/run=14622.9 cpu_us/run=13636.3
+=== RUN   TestWorkflowLongCost/8
+    cost_linux_test.go:136: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:159: closed=512 warm_reopen_ms=126.68 retained_heap_delta_KiB=4881.9 rss_before_KiB=6668 rss_after_KiB=16784
+        --- PASS: TestWorkflowReopenFootprint (0.13s)
+        PASS
+        
+    cost_linux_test.go:138: workers=8 completed=512 runs/s=51.6 p99_ms=205.20 records/run=61 append_groups/run=15.223 logical_disk_bytes/run=14622.9 cpu_us/run=4382.8
+=== RUN   TestWorkflowLongCost/32
+    cost_linux_test.go:136: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:159: closed=512 warm_reopen_ms=134.14 retained_heap_delta_KiB=4886.3 rss_before_KiB=6604 rss_after_KiB=17344
+        --- PASS: TestWorkflowReopenFootprint (0.14s)
+        PASS
+        
+    cost_linux_test.go:138: workers=32 completed=512 runs/s=182.7 p99_ms=233.58 records/run=61 append_groups/run=3.814 logical_disk_bytes/run=14623.6 cpu_us/run=1524.7
+--- PASS: TestWorkflowLongCost (50.59s)
+    --- PASS: TestWorkflowLongCost/1 (37.57s)
+    --- PASS: TestWorkflowLongCost/8 (10.06s)
+    --- PASS: TestWorkflowLongCost/32 (2.95s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky/workflow	56.771s
+=== RUN   TestWorkflowWaitingScale
+    wait_linux_test.go:161: === RUN   TestWorkflowWaitingScale
+            wait_linux_test.go:59: waiting=100000 reopen_ms=588.29 retained_heap_bytes_per_run=517.1 rss_before_KiB=6620 rss_after_KiB=89764
+            wait_linux_test.go:131: signal_call_to_durable_ack_p99_ms=6.15
+            wait_linux_test.go:133: burst=1024 producers=32 polling_workers=1 arrival_to_durable_lease_p50_ms=749.81 p99_ms=1391.01 last_ms=1401.32
+        --- PASS: TestWorkflowWaitingScale (2.03s)
+        PASS
+        
+--- PASS: TestWorkflowWaitingScale (10.88s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky/workflow	10.887s
+=== RUN   TestWorkflowWaitingScale
+    wait_linux_test.go:161: === RUN   TestWorkflowWaitingScale
+            wait_linux_test.go:59: waiting=100000 reopen_ms=491.33 retained_heap_bytes_per_run=517.1 rss_before_KiB=6596 rss_after_KiB=87508
+            wait_linux_test.go:131: signal_call_to_durable_ack_p99_ms=10.83
+            wait_linux_test.go:133: burst=1024 producers=32 polling_workers=32 arrival_to_durable_lease_p50_ms=103.72 p99_ms=193.07 last_ms=194.33
+        --- PASS: TestWorkflowWaitingScale (0.77s)
+        PASS
+        
+--- PASS: TestWorkflowWaitingScale (8.92s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky/workflow	8.923s

@@ -274,3 +274,9 @@ dev-test-workflow-boundary: ## Exercise workflow commit witnesses, corruption an
 
 dev-bench-workflow-boundary: ## Compare workflow durability costs against aecbb08 on a disposable disk
 	@sh scripts/workflow-boundary-bench.sh
+
+.PHONY: dev-bench-workflow-scale
+dev-bench-workflow-scale: ## Measure 3 and 30 activities and 100,000 durable signal waits on Linux
+	@test -n "$(DOST_WORKFLOW_BENCH_DIR)" || (echo "Set DOST_WORKFLOW_BENCH_DIR to a disposable disk directory"; exit 1)
+	DOST_WORKFLOW_BENCH_DIR="$(DOST_WORKFLOW_BENCH_DIR)" GOMAXPROCS=4 $(GO) test -count=1 -timeout 30m -v ./workflow -run '^TestWorkflow(Cost|LongCost)$$'
+	@for workers in 1 32; do DOST_WAIT_READERS=$$workers DOST_WORKFLOW_BENCH_DIR="$(DOST_WORKFLOW_BENCH_DIR)" GOMAXPROCS=4 $(GO) test -count=1 -timeout 30m -v ./workflow -run '^TestWorkflowWaitingScale$$' || exit 1; done

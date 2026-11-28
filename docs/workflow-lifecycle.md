@@ -38,3 +38,5 @@ Fresh-process open after seeding on warm OS cache, one observation per size. Eac
 | 0 | 0.76 | 25.2 | 7116 |
 | 256 | 3.94 | 254.0 | 8868 |
 | 4096 | 74.88 | 3691.3 | 14168 |
+
+For workflows waiting on an external event, see [durable signal waits](workflow-wait-scale.md) for the step contract, recovery behavior and Linux scale benchmark.

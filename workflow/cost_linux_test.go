@@ -20,6 +20,12 @@ import (
 
 // Each client uses a private queue so it can time its run through completion.
 func TestWorkflowCost(t *testing.T) {
+	workflowCost(t, 3)
+}
+
+func TestWorkflowLongCost(t *testing.T) { workflowCost(t, 30) }
+
+func workflowCost(t *testing.T, depth int) {
 	root := os.Getenv("DOST_WORKFLOW_BENCH_DIR")
 	if root == "" {
 		t.Skip("set a disposable disk directory")
@@ -35,7 +41,10 @@ func TestWorkflowCost(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			steps := []Step{{Kind: "activity", Name: "a"}, {Kind: "activity", Name: "b"}, {Kind: "activity", Name: "c"}}
+			steps := make([]Step, depth)
+			for i := range steps {
+				steps[i] = Step{Kind: "activity", Name: string(rune('a' + i%26))}
+			}
 			if e = s.Register("work", 1, steps); e != nil {
 				t.Fatal(e)
 			}
@@ -115,11 +124,18 @@ func TestWorkflowCost(t *testing.T) {
 			if t.Failed() {
 				return
 			}
-			if records != 7*count {
+			if records != (1+2*depth)*count {
 				t.Fatalf("records %d", records)
 			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestWorkflowReopenFootprint$", "-test.v")
+			cmd.Env = append(os.Environ(), "DOST_WORKFLOW_REOPEN_CHILD="+dir)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s: %v", out, err)
+			}
+			t.Log(string(out))
 			slices.Sort(lat)
-			t.Logf("workers=%d completed=%d runs/s=%.1f p99_ms=%.2f records/run=7 append_groups/run=%.3f logical_disk_bytes/run=%.1f cpu_us/run=%.1f", workers, count, count/elapsed.Seconds(), float64(lat[(count*99+99)/100-1])/1e6, float64(groups)/count, float64(disk()-before)/count, perCPU)
+			t.Logf("workers=%d completed=%d runs/s=%.1f p99_ms=%.2f records/run=%d append_groups/run=%.3f logical_disk_bytes/run=%.1f cpu_us/run=%.1f", workers, count, count/elapsed.Seconds(), float64(lat[(count*99+99)/100-1])/1e6, records/count, float64(groups)/count, float64(disk()-before)/count, perCPU)
 		})
 	}
 }
@@ -131,34 +147,15 @@ func TestWorkflowReopenFootprint(t *testing.T) {
 		t.Skip("set a disposable disk directory")
 	}
 	if path := os.Getenv("DOST_WORKFLOW_REOPEN_CHILD"); path != "" {
-		snapshot := func() (uint64, int) {
-			runtime.GC()
-			var m runtime.MemStats
-			runtime.ReadMemStats(&m)
-			b, e := os.ReadFile("/proc/self/status")
-			if e != nil {
-				t.Fatal(e)
-			}
-			for _, line := range strings.Split(string(b), "\n") {
-				if strings.HasPrefix(line, "VmRSS:") {
-					v, e := strconv.Atoi(strings.Fields(line)[1])
-					if e != nil {
-						t.Fatal(e)
-					}
-					return m.HeapAlloc, v
-				}
-			}
-			t.Fatal("missing RSS")
-			return 0, 0
-		}
-		before, rss := snapshot()
+
+		before, rss := processSnapshot(t)
 		at := time.Now()
 		s, e := Open(path)
 		if e != nil {
 			t.Fatal(e)
 		}
 		elapsed := time.Since(at)
-		after, end := snapshot()
+		after, end := processSnapshot(t)
 		t.Logf("closed=%d warm_reopen_ms=%.2f retained_heap_delta_KiB=%.1f rss_before_KiB=%d rss_after_KiB=%d", len(s.runs), float64(elapsed)/1e6, float64(int64(after)-int64(before))/1024, rss, end)
 		if e = s.Close(); e != nil {
 			t.Fatal(e)
@@ -224,4 +221,25 @@ func setupForMemory(t *testing.T, dir string) *Store {
 		t.Fatal(e)
 	}
 	return s
+}
+
+func processSnapshot(t *testing.T) (uint64, int) {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	b, e := os.ReadFile("/proc/self/status")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "VmRSS:") {
+			v, e := strconv.Atoi(strings.Fields(line)[1])
+			if e != nil {
+				t.Fatal(e)
+			}
+			return m.HeapAlloc, v
+		}
+	}
+	t.Fatal("missing RSS")
+	return 0, 0
 }

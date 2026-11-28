@@ -45,6 +45,8 @@ func TestAbruptExit(t *testing.T) {
 			s.appendGroup = func(context.Context, []d.Publication) ([]d.Record, error) { kill(); panic("kill returned") }
 		}
 		switch op {
+		case "signal":
+			s.Signal("run", 0, "approve", []byte("1"))
 		case "start":
 			s.StartOnce("run", "work", 1, "q", []byte("0"), nil)
 		case "poll":
@@ -61,12 +63,19 @@ func TestAbruptExit(t *testing.T) {
 		t.Fatal("kill point missed")
 	}
 	for _, at := range []string{"before-write", "after-sync"} {
-		for _, op := range []string{"start", "poll", "finish", "failure", "expire"} {
+		for _, op := range []string{"start", "poll", "finish", "failure", "expire", "signal"} {
 			t.Run(at+"/"+op, func(t *testing.T) {
 				dir := t.TempDir()
 				s := setup(t, dir)
 				token := ""
-				if op != "start" {
+				if op == "signal" {
+					if err := s.Register("waiting", 1, []Step{{Kind: "signal", Name: "approve"}, {Kind: "activity", Name: "resume"}}); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := s.StartOnce("run", "waiting", 1, "q", []byte("0"), nil); err != nil {
+						t.Fatal(err)
+					}
+				} else if op != "start" {
 					_, e := s.StartOnce("run", "work", 1, "q", []byte("0"), nil)
 					if e != nil {
 						t.Fatal(e)
@@ -97,6 +106,18 @@ func TestAbruptExit(t *testing.T) {
 				defer s.Close()
 				after := at == "after-sync"
 				switch op {
+				case "signal":
+					task, err := s.Poll("q", time.Hour)
+					if err != nil || (task != nil) != after {
+						t.Fatal(task, err)
+					}
+					if after && (task.Activity != "resume" || string(task.Input) != "1") {
+						t.Fatal(task)
+					}
+					err = s.Signal("run", 0, "approve", []byte("1"))
+					if (!after && err != nil) || (after && !errors.Is(err, d.ErrConflict)) {
+						t.Fatal(err)
+					}
 				case "start":
 					made, e := s.StartOnce("run", "work", 1, "q", []byte("0"), nil)
 					if e != nil || made == after {

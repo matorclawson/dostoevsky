@@ -58,9 +58,14 @@ class Engine:
         except (ProcessLookupError, PermissionError):
             pass
 
-    def said(self):
-        self.errors.seek(0)
-        return self.errors.read().decode("utf-8", "replace")
+    def written(self):
+        """How many bytes the driver has written to its standard error so far."""
+        return os.fstat(self.errors.fileno()).st_size
+
+    def said(self, since=0):
+        """The driver's standard error from the byte at since. Read in place: the driver shares the file's position."""
+        size = self.written()
+        return os.pread(self.errors.fileno(), size - since, since).decode("utf-8", "replace") if size > since else ""
 
     def exchange(self, request):
         """Writes one request and reads one line, ending the process group after TIMEOUT. Returns the line (empty when
@@ -97,6 +102,7 @@ class Engine:
         that this point fired, and must end by SIGKILL. A driver the deadline had to end hung, which is not a death."""
         if self.process.poll() is not None:
             raise Failed("the %s driver had already gone before %s" % (self.name, request["op"]))
+        before = self.written()  # only what is written during this request can be about this death
         line, expired = self.exchange(request)
         if expired:
             raise Failed("the %s driver hung in %s instead of dying" % (self.name, request["op"]))
@@ -105,9 +111,9 @@ class Engine:
         status = self.process.wait(TIMEOUT)
         self.end_group()
         want = "seam: killing at %s, pass %d" % (point, passes)
-        if want not in self.said().splitlines():
+        if want not in self.said(before).splitlines():
             raise Failed("the %s driver died in %s without saying %r: %s" % (self.name, request["op"], want,
-                                                                             self.said()[-300:]))
+                                                                             self.said(before)[-300:]))
         if status != -signal.SIGKILL:
             raise Failed("the %s driver ended with status %d, not by SIGKILL" % (self.name, status))
 
@@ -395,6 +401,8 @@ class Run:
             self.driver.die(request, self.armed[0], self.armed[2] + 1)
             self.driver, self.armed = None, None
         else:
+            if do == "arm" and self.armed is not None:
+                raise Failed("%s is still armed and unchecked: disarm it before arming %s" % (self.armed[0], step.get("point")))
             answer = self.call(self.request(step))
             if "error" in step:
                 if answer["ok"] or answer["error"] != step["error"]:

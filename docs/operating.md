@@ -25,7 +25,7 @@ Restart scans the compacted journal. Retention reduces the amount of history to 
 
 Run `make help` for the command list. The Makefile targets Linux with GNU Make and coreutils. Go 1.22+ and gofmt must be on PATH. The race check also requires a C compiler.
 
-Inside this repository `go.mod` names `toolchain go1.27.0`. A Go 1.22 to 1.26 install fetches it on first use under automatic toolchain selection; commands that run offline (`make test`, `make verify`, `make release`) need it already installed or cached. Applications that import the library need only Go 1.22 or later.
+Inside this repository `go.mod` names `toolchain go1.27.0`. Under automatic toolchain selection a newer Go is used as it is; an older one (1.22 to 1.26) switches to an installed or cached go1.27.0, or downloads it where it can, so commands that run offline (`make test`, `make verify`) need it already there when the local Go is older. Only `scripts/release.sh` (`make release`) requires exactly go1.27.0. Applications that import the library need only Go 1.22 or later.
 
 | Workflow | Command | Result |
 | --- | --- | --- |

@@ -1,0 +1,11 @@
+=== RUN   TestDeepIDCrash
+signal=SIGKILL initial_offset=6208 acknowledged=20480 verified=20480 retries_verified=20480
+--- PASS: TestDeepIDCrash (0.49s)
+PASS
+=== RUN   TestSegmentedPublishKill
+=== RUN   TestSegmentedPublishKill/1
+=== RUN   TestSegmentedPublishKill/32
+--- PASS: TestSegmentedPublishKill (0.14s)
+    --- PASS: TestSegmentedPublishKill/1 (0.13s)
+    --- PASS: TestSegmentedPublishKill/32 (0.02s)
+PASS

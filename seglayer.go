@@ -521,6 +521,7 @@ var (
 const idxCacheSize = 32
 
 type segLog struct {
+	publishBuf []byte         // bounded frame encoding scratch, protected by the node writer lock
 	filters    *idFilterCache // only used by the public node under its write lock
 	idProbes   uint64         // exact sealed ID lookups under the node write lock
 	indexLoads uint64         // cold index loads under indexLoad lock
@@ -536,6 +537,7 @@ type segLog struct {
 	failed     error     // set by a failed write or roll: the log refuses further writes until reopened
 
 	cache        map[uint64]*segIndex // sealed segments' indexes, verified; a small bounded cache
+	frequency    *indexFrequency
 	cacheIDBytes int
 	cacheOrder   []uint64
 	pins         segPins
@@ -727,6 +729,10 @@ func (l *segLog) writeHint(name string, data []byte) error {
 
 // cachePut stores a verified index, evicting the oldest when the cache is full. Callers hold l.mu.
 func (l *segLog) cachePut(id uint64, x *segIndex) {
+	if l.frequency != nil {
+		l.admitIndex(id, x)
+		return
+	}
 	if _, ok := l.cache[id]; !ok {
 		l.cacheOrder = append(l.cacheOrder, id)
 	}
@@ -821,6 +827,9 @@ func (l *segLog) rebuildIdx(id uint64) (*segIndex, error) {
 // else rebuilt by scanning the segment. The idx file is a hint; the segment decides.
 func (l *segLog) sealedIndex(id uint64) (*segIndex, error) {
 	l.mu.Lock()
+	if l.frequency != nil {
+		l.frequency.observe(id)
+	}
 	if x, ok := l.cache[id]; ok {
 		l.mu.Unlock()
 		return x, nil
@@ -988,11 +997,11 @@ func (l *segLog) readLocatedRecord(id uint64, pos int64, pid uint32, off uint64)
 // findIDs visits every recorded offset whose hash matches (pid, id) in the active segment and then
 // in the previous window sealed segments, newest first, until visit returns true. A match is only a
 // candidate: the caller confirms it against the log (compare the frame's ID, key and value).
-func (l *segLog) findIDs(pid uint32, id []byte, window int, visit func(seg, off uint64) bool) error {
+func (l *segLog) findIDs(pid uint32, id []byte, window int, visit func(seg, off uint64, index *segIndex) bool) error {
 	h := idHash(pid, id)
 	stop := false
 	if l.idx != nil {
-		l.idx.ids.lookup(h, func(off uint64) bool { stop = visit(l.active.id, off); return stop })
+		l.idx.ids.lookup(h, func(off uint64) bool { stop = visit(l.active.id, off, l.idx); return stop })
 		if stop {
 			return nil
 		}
@@ -1037,7 +1046,7 @@ func (l *segLog) findIDs(pid uint32, id []byte, window int, visit func(seg, off 
 				l.rememberFilter(ids[k], x)
 			}
 		}
-		x.ids.lookup(h, func(off uint64) bool { stop = visit(ids[k], off); return stop })
+		x.ids.lookup(h, func(off uint64) bool { stop = visit(ids[k], off, x); return stop })
 		if stop {
 			return nil
 		}

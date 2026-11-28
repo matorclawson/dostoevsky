@@ -147,6 +147,7 @@ Synchronous, fsync-backed publishes of 512-byte records to one topic, five alter
 | Native protocol server (`dostoevsky-server`) | on `main` |
 | Native clients: JavaScript/TypeScript, Python, Rust, Java (preview) | on `main` |
 | [Segmented storage](docs/segmented-recovery.md) | on `main`, opt-in; not the default |
+| [Embedded workflows](docs/workflow-lifecycle.md) | on `main`, experimental; not a supported API |
 
 ## Embed it in Go
 
@@ -192,6 +193,14 @@ Next: the [getting started guide](docs/getting-started.md) and [using the librar
 * The gateway token grants access to every topic. [Read this before exposing the gateway](docs/clients.md#security-read-this-before-exposing-the-gateway).
 
 The full list, with retention, backups and deployment: [operating Dostoevsky](docs/operating.md).
+
+### High-cardinality workloads
+
+Go consumers can use `sketch.HotTopics` to rank recent activity with a fixed resident budget. Segmented nodes can enable frequency-based cache admission for historical producer-ID retries. See the [usage examples and benchmark results](benchmarks/admission/README.md).
+
+### Embedded workflows (experimental)
+
+Use a dedicated segmented directory for durable sequential activities. The [workflow guide](docs/workflow-lifecycle.md) covers leases, retries, history, crash behavior and the release boundary.
 
 ## Documentation
 

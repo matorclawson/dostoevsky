@@ -1,0 +1,70 @@
+=== RUN   TestWorkflowWitnessKillAtRollover
+=== RUN   TestWorkflowWitnessKillAtRollover/data-only
+=== RUN   TestWorkflowWitnessKillAtRollover/published
+--- PASS: TestWorkflowWitnessKillAtRollover (0.06s)
+    --- PASS: TestWorkflowWitnessKillAtRollover/data-only (0.01s)
+    --- PASS: TestWorkflowWitnessKillAtRollover/published (0.05s)
+=== RUN   TestWorkflowBoundaryRoll
+=== RUN   TestWorkflowBoundaryRoll/roll=false/witness_rename=false
+=== RUN   TestWorkflowBoundaryRoll/roll=false/witness_rename=true
+=== RUN   TestWorkflowBoundaryRoll/roll=true/witness_rename=false
+=== RUN   TestWorkflowBoundaryRoll/roll=true/witness_rename=true
+--- PASS: TestWorkflowBoundaryRoll (0.01s)
+    --- PASS: TestWorkflowBoundaryRoll/roll=false/witness_rename=false (0.00s)
+    --- PASS: TestWorkflowBoundaryRoll/roll=false/witness_rename=true (0.00s)
+    --- PASS: TestWorkflowBoundaryRoll/roll=true/witness_rename=false (0.00s)
+    --- PASS: TestWorkflowBoundaryRoll/roll=true/witness_rename=true (0.00s)
+=== RUN   TestWorkflowBoundaryInvalidEvidence
+=== RUN   TestWorkflowBoundaryInvalidEvidence/witness
+=== RUN   TestWorkflowBoundaryInvalidEvidence/sealed
+--- PASS: TestWorkflowBoundaryInvalidEvidence (0.00s)
+    --- PASS: TestWorkflowBoundaryInvalidEvidence/witness (0.00s)
+    --- PASS: TestWorkflowBoundaryInvalidEvidence/sealed (0.00s)
+=== RUN   TestWorkflowBoundaryAdoptsLegacy
+=== RUN   TestWorkflowBoundaryAdoptsLegacy/false
+=== RUN   TestWorkflowBoundaryAdoptsLegacy/true
+--- PASS: TestWorkflowBoundaryAdoptsLegacy (0.00s)
+    --- PASS: TestWorkflowBoundaryAdoptsLegacy/false (0.00s)
+    --- PASS: TestWorkflowBoundaryAdoptsLegacy/true (0.00s)
+=== RUN   TestForeignWorkflowWitnessCannotDiscardData
+--- PASS: TestForeignWorkflowWitnessCannotDiscardData (0.00s)
+=== RUN   TestMissingUncommittedSuccessor
+--- PASS: TestMissingUncommittedSuccessor (0.00s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky	1.118s
+=== RUN   TestAbruptExit
+=== RUN   TestAbruptExit/before-write/start
+=== RUN   TestAbruptExit/before-write/poll
+=== RUN   TestAbruptExit/before-write/finish
+=== RUN   TestAbruptExit/before-write/failure
+=== RUN   TestAbruptExit/before-write/expire
+=== RUN   TestAbruptExit/after-sync/start
+=== RUN   TestAbruptExit/after-sync/poll
+=== RUN   TestAbruptExit/after-sync/finish
+=== RUN   TestAbruptExit/after-sync/failure
+=== RUN   TestAbruptExit/after-sync/expire
+--- PASS: TestAbruptExit (0.32s)
+    --- PASS: TestAbruptExit/before-write/start (0.01s)
+    --- PASS: TestAbruptExit/before-write/poll (0.01s)
+    --- PASS: TestAbruptExit/before-write/finish (0.01s)
+    --- PASS: TestAbruptExit/before-write/failure (0.08s)
+    --- PASS: TestAbruptExit/before-write/expire (0.02s)
+    --- PASS: TestAbruptExit/after-sync/start (0.01s)
+    --- PASS: TestAbruptExit/after-sync/poll (0.05s)
+    --- PASS: TestAbruptExit/after-sync/finish (0.05s)
+    --- PASS: TestAbruptExit/after-sync/failure (0.01s)
+    --- PASS: TestAbruptExit/after-sync/expire (0.05s)
+=== RUN   TestWorkflowGroupCrashImages
+=== RUN   TestWorkflowGroupCrashImages/committed=false/short=false
+=== RUN   TestWorkflowGroupCrashImages/committed=false/short=true
+=== RUN   TestWorkflowGroupCrashImages/committed=true/short=false
+=== RUN   TestWorkflowGroupCrashImages/committed=true/short=true
+--- PASS: TestWorkflowGroupCrashImages (0.01s)
+    --- PASS: TestWorkflowGroupCrashImages/committed=false/short=false (0.00s)
+    --- PASS: TestWorkflowGroupCrashImages/committed=false/short=true (0.00s)
+    --- PASS: TestWorkflowGroupCrashImages/committed=true/short=false (0.00s)
+    --- PASS: TestWorkflowGroupCrashImages/committed=true/short=true (0.00s)
+=== RUN   TestGroupedPayloadBudget
+--- PASS: TestGroupedPayloadBudget (0.47s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky/workflow	1.826s

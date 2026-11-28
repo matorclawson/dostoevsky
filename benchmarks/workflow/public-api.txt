@@ -1,0 +1,16 @@
+=== RUN   TestActivityConformance
+=== RUN   TestActivityConformance/lost-start
+=== RUN   TestActivityConformance/lost-lease-last
+=== RUN   TestActivityConformance/lost-lease-retry
+=== RUN   TestActivityConformance/lost-finish
+=== RUN   TestActivityConformance/lost-failure
+=== RUN   TestActivityConformance/competing-workers
+--- PASS: TestActivityConformance (0.62s)
+    --- PASS: TestActivityConformance/lost-start (0.00s)
+    --- PASS: TestActivityConformance/lost-lease-last (0.31s)
+    --- PASS: TestActivityConformance/lost-lease-retry (0.31s)
+    --- PASS: TestActivityConformance/lost-finish (0.00s)
+    --- PASS: TestActivityConformance/lost-failure (0.00s)
+    --- PASS: TestActivityConformance/competing-workers (0.00s)
+PASS
+ok  	github.com/rodriveracom/dostoevsky/workflow	0.628s

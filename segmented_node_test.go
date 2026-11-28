@@ -236,3 +236,33 @@ func TestSegmentedRollCountsOnlyTail(t *testing.T) {
 		t.Fatal("large checkpoint caused premature rollover")
 	}
 }
+
+func TestPublishBufferAfterLargeBurst(t *testing.T) {
+	n, err := OpenSegmented(t.TempDir(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	value := []byte("before")
+	r, err := n.Publish(ctx, p.Topic, Message{ID: "small", Value: value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := cap(n.segments.publishBuf)
+	if initial == 0 {
+		t.Fatal("small frame buffer missing")
+	}
+	if _, err = n.Publish(ctx, p.Topic, Message{ID: "large", Value: make([]byte, 128<<10)}); err != nil {
+		t.Fatal(err)
+	}
+	if cap(n.segments.publishBuf) != initial {
+		t.Fatal("large frame displaced the small buffer")
+	}
+	if _, err = n.Publish(ctx, p.Topic, Message{ID: "after", Value: []byte("after")}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := n.Read(ctx, r.Partition, r.Offset, false)
+	if err != nil || string(r.Value) != "before" || string(stored.Value) != "before" {
+		t.Fatal(r, stored, err)
+	}
+}

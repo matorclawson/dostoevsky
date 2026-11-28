@@ -190,7 +190,7 @@ class Run:
         for key, value in step.items():
             if key in ("do", "error", "fails", "expect", "nonzero", "save"):
                 continue
-            if isinstance(value, str) and value.startswith("$") and not value.startswith("$root"):
+            if isinstance(value, str) and value.startswith("$") and value != "$root" and not value.startswith("$root/"):
                 if value[1:] not in self.vars:
                     raise Failed("nothing was saved as %s" % value)
                 value = self.vars[value[1:]]

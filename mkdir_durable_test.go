@@ -79,3 +79,39 @@ func TestOpenKeepsFailingWhileAWritableParentCannotBeSynced(t *testing.T) {
 		}
 	}
 }
+
+// A failed sync is passed over only on a confirmed denial: an access probe that fails for another reason proves
+// nothing, and access(2) cannot speak for a process whose real and effective identities differ.
+func TestASyncFailureIsPassedOverOnlyOnAConfirmedDenial(t *testing.T) {
+	denied := &os.PathError{Op: "open", Path: "x", Err: syscall.EACCES}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0500); err != nil {
+		t.Fatal(err)
+	}
+
+	if cannotHaveCreated(filepath.Join(dir, "missing"), denied) {
+		t.Fatal("a probe that failed because the directory is missing counted as a denial")
+	}
+	if cannotHaveCreated(dir, denied) {
+		t.Fatal("a writable directory counted as denied")
+	}
+	if !cannotHaveCreated(dir, &os.PathError{Op: "sync", Path: dir, Err: syscall.EROFS}) {
+		t.Fatal("a read-only file system was not passed over")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root is never denied by permission bits")
+	}
+	if !cannotHaveCreated(locked, denied) {
+		t.Fatal("a directory this user cannot write was not passed over")
+	}
+	if cannotHaveCreated(locked, errors.New("some other failure")) {
+		t.Fatal("a failure that is not a permission error was passed over")
+	}
+	original := oneIdentity
+	oneIdentity = func() bool { return false }
+	defer func() { oneIdentity = original }()
+	if cannotHaveCreated(locked, denied) {
+		t.Fatal("the probe was believed for a process with differing identities")
+	}
+}

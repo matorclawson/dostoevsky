@@ -31,6 +31,7 @@ ACTIONS = {
     "remember_bytes": {"file", "as"}, "bytes_unchanged": {"file", "as"}, "make_file": {"file", "content"},
     "make_dir": {"file"}, "remove_first": {"file", "at_least"}, "absent": {"file"},
     "sleep_ms": {"ms"}, "compare": {"marks", "is"}, "bytes_changed": {"file", "as"},
+    "equal_files": {"files"}, "wf_snapshot": {"as", "runs"},
 }
 # Engine requests. The driver itself refuses a field it does not know.
 OPERATIONS = {"open", "close", "publish", "publish_batch", "read", "read_batch", "position", "commit_batch", "retain",
@@ -277,6 +278,9 @@ class Run:
         for key in ("value", "state"):
             if key in request:
                 request[key] = text(request[key])
+        if "input_size" in request:
+            # A JSON string of that many bytes.
+            request["input"] = '"%s"' % ("x" * (request.pop("input_size") - 2))
         for key in ("input", "failure"):
             if key in request:
                 request[key] = byte_string(request[key])
@@ -306,6 +310,13 @@ class Run:
         records = self.records(step.get("from", 0))
         groups = {g: self.ok({"op": "position", "topic": "events", "group": g}) for g in step.get("groups", [])}
         return {"records": records, "groups": groups}
+
+    def histories(self, runs):
+        return {"runs": {run: self.ok({"op": "wf_history", "run": run, "after": 0, "limit": 1000}) for run in runs}}
+
+    def contents(self, pattern):
+        with open(self.one_file(pattern), "rb") as f:
+            return f.read()
 
     def one_file(self, pattern):
         found = sorted(glob.glob(os.path.join(self.root, pattern)))
@@ -345,6 +356,17 @@ class Run:
                 self.ok({"op": "publish_batch", "items": items})
         elif do == "snapshot":
             self.saved[step["as"]] = self.snapshot(step)
+        elif do == "equal_files":
+            first, second = (self.contents(name) for name in step["files"])
+            if first != second:
+                raise Failed("%s differ (%d and %d bytes)" % (" and ".join(step["files"]), len(first), len(second)))
+        elif do == "wf_snapshot":
+            self.saved[step["as"]] = self.histories(step["runs"])
+        elif do == "same" and "runs" in self.saved[step["as"]]:
+            want = self.saved[step["as"]]
+            got = self.histories(list(want["runs"]))
+            if want != got:
+                raise Failed("histories differ from %s: %r, want %r" % (step["as"], got, want))
         elif do == "compare":
             first, second = (self.marks[name] for name in step["marks"])
             if not {"equal": first == second, "less": first < second}[step["is"]]:

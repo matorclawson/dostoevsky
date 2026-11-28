@@ -71,6 +71,19 @@
    "dir": "$root/start"
   },
   {
+   "do": "mark",
+   "file": "start/segments/seg-*.log",
+   "as": "start-reopened"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "start-reopened",
+    "start-base"
+   ],
+   "is": "equal"
+  },
+  {
    "do": "wf_history",
    "run": "r",
    "after": 0,
@@ -162,6 +175,19 @@
   {
    "do": "wf_open",
    "dir": "$root/poll"
+  },
+  {
+   "do": "mark",
+   "file": "poll/segments/seg-*.log",
+   "as": "poll-reopened"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "poll-reopened",
+    "poll-base"
+   ],
+   "is": "equal"
   },
   {
    "do": "wf_history",
@@ -267,6 +293,19 @@
   {
    "do": "wf_open",
    "dir": "$root/finish"
+  },
+  {
+   "do": "mark",
+   "file": "finish/segments/seg-*.log",
+   "as": "finish-reopened"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "finish-reopened",
+    "finish-base"
+   ],
+   "is": "equal"
   },
   {
    "do": "wf_history",
@@ -386,6 +425,19 @@
    "dir": "$root/failure"
   },
   {
+   "do": "mark",
+   "file": "failure/segments/seg-*.log",
+   "as": "failure-reopened"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "failure-reopened",
+    "failure-base"
+   ],
+   "is": "equal"
+  },
+  {
    "do": "wf_history",
    "run": "r",
    "after": 0,
@@ -502,6 +554,19 @@
    "dir": "$root/expiry"
   },
   {
+   "do": "mark",
+   "file": "expiry/segments/seg-*.log",
+   "as": "expiry-reopened"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "expiry-reopened",
+    "expiry-base"
+   ],
+   "is": "equal"
+  },
+  {
    "do": "wf_history",
    "run": "r",
    "after": 0,
@@ -615,6 +680,19 @@
   {
    "do": "wf_open",
    "dir": "$root/signal"
+  },
+  {
+   "do": "mark",
+   "file": "signal/segments/seg-*.log",
+   "as": "signal-reopened"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "signal-reopened",
+    "signal-base"
+   ],
+   "is": "equal"
   },
   {
    "do": "wf_history",

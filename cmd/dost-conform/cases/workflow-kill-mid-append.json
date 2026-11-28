@@ -1,0 +1,488 @@
+{
+ "about": "A process killed at workflow.mid_append: the operation is absent after reopening.",
+ "covers": [],
+ "formats": [
+  "workflow"
+ ],
+ "steps": [
+  {
+   "do": "wf_open",
+   "dir": "$root/start"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "arm",
+   "point": "workflow.mid_append",
+   "kill": true,
+   "skip": 0
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0",
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/start"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": []
+   }
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0",
+   "expect": {
+    "created": true
+   }
+  },
+  {
+   "do": "wf_close"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/poll"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "arm",
+   "point": "workflow.mid_append",
+   "kill": true,
+   "skip": 0
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/poll"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled"
+    ]
+   }
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "expect": {
+    "task": {
+     "attempt": 1
+    }
+   }
+  },
+  {
+   "do": "wf_close"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/finish"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send",
+     "attempts": 2
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "save": {
+    "t": "task.token"
+   }
+  },
+  {
+   "do": "arm",
+   "point": "workflow.mid_append",
+   "kill": true,
+   "skip": 0
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "value": "1",
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/finish"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted"
+    ]
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "value": "1"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted",
+     "ActivityCompleted",
+     "WorkflowCompleted"
+    ]
+   }
+  },
+  {
+   "do": "wf_close"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/failure"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send",
+     "attempts": 2
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "save": {
+    "t": "task.token"
+   }
+  },
+  {
+   "do": "arm",
+   "point": "workflow.mid_append",
+   "kill": true,
+   "skip": 0
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "failure": "busy",
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/failure"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted"
+    ]
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "failure": "busy"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted",
+     "ActivityFailed",
+     "RetryScheduled"
+    ]
+   }
+  },
+  {
+   "do": "wf_close"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/expiry"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 100
+  },
+  {
+   "do": "sleep_ms",
+   "ms": 200
+  },
+  {
+   "do": "arm",
+   "point": "workflow.mid_append",
+   "kill": true,
+   "skip": 0
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/expiry"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted"
+    ]
+   }
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "expect": {
+    "task": null
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted",
+     "ActivityTimedOut",
+     "WorkflowFailed"
+    ]
+   }
+  },
+  {
+   "do": "wf_close"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/signal"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "signal",
+     "name": "go"
+    },
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "arm",
+   "point": "workflow.mid_append",
+   "kill": true,
+   "skip": 0
+  },
+  {
+   "do": "wf_signal",
+   "run": "r",
+   "step": 0,
+   "name": "go",
+   "value": "5",
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/signal"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "SignalWaiting"
+    ]
+   }
+  },
+  {
+   "do": "wf_signal",
+   "run": "r",
+   "step": 0,
+   "name": "go",
+   "value": "5"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "SignalWaiting",
+     "SignalReceived",
+     "ActivityScheduled"
+    ]
+   }
+  },
+  {
+   "do": "wf_close"
+  }
+ ]
+}

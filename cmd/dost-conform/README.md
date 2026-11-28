@@ -62,8 +62,11 @@ A driver holds one open node or one open workflow store. `dir` defaults to `$roo
 Workflow cases have `"formats": ["workflow"]`. Their runner steps: `"save": {NAME: "task.token"}` on a request and
 `"$NAME"` in a later one (a name nothing saved fails the case), and `sleep_ms`.
 
-Not covered for workflows: named kill and failure points, concurrent polls, size limits, damaged and half-initialized
-stores, and any past workflow fix (their `covers` lists are empty).
+The `workflow-kill-*` cases kill the driver at each of the four workflow commit points during a start, poll, finish,
+failure, lease expiry and signal; `workflow-fail-append` makes the append fail instead.
+
+Not covered for workflows: concurrent polls, size limits, damaged and half-initialized stores, and any past workflow
+fix (their `covers` lists are empty).
 
 ## Test seam requests
 

@@ -21,6 +21,20 @@ import time
 
 CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cmd", "dost-conform", "cases")
 TIMEOUT = 120
+FORMATS = ("legacy", "segmented", "workflow")
+# The runner's own actions and the keys each takes, besides "do" and "only".
+ACTIONS = {
+    "switch": set(), "kill": set(), "publish_many": {"start", "count", "size", "ids", "batch"},
+    "snapshot": {"as", "from", "groups"}, "same": {"as", "from", "groups", "drop_last"}, "count": {"is", "from"},
+    "mark": {"file", "as"}, "truncate": {"file", "bytes"}, "flip": {"file", "at", "plus"},
+    "remember_bytes": {"file", "as"}, "bytes_unchanged": {"file", "as"}, "make_file": {"file", "content"},
+    "make_dir": {"file"}, "remove_first": {"file", "at_least"}, "absent": {"file"},
+    "sleep_ms": {"ms"}, "wf_snapshot": {"as", "runs"},
+}
+# Engine requests. The driver itself refuses a field it does not know.
+OPERATIONS = {"open", "close", "publish", "publish_batch", "read", "read_batch", "position", "commit_batch", "retain",
+              "backup", "migrate", "verify", "inspect", "repair", "upgrade",
+              "wf_open", "wf_close", "wf_register", "wf_start_once", "wf_poll", "wf_finish", "wf_signal", "wf_history"}
 
 
 class Failed(Exception):
@@ -39,6 +53,8 @@ class Engine:
             self.process.stdin.write(json.dumps(request).encode() + b"\n")
             self.process.stdin.flush()
             line = self.process.stdout.readline()
+        except BrokenPipeError:
+            line = b""
         finally:
             timer.cancel()
         if not line:
@@ -46,13 +62,29 @@ class Engine:
         return json.loads(line)
 
     def stop(self):
-        """Ends the driver cleanly: end of input closes an open node."""
-        if self.process.poll() is None:
+        """Ends the driver cleanly (end of input closes an open node). It must exit with status 0, also when it had
+        already exited."""
+        try:
             self.process.stdin.close()
-            if self.process.wait(TIMEOUT) != 0:
-                raise Failed("the %s driver exited with status %d" % (self.name, self.process.returncode))
+        except BrokenPipeError:
+            pass
+        try:
+            status = self.process.wait(TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise Failed("the %s driver did not exit" % self.name)
+        if status != 0:
+            raise Failed("the %s driver exited with status %d" % (self.name, status))
 
     def kill(self):
+        """Kills a driver that must still be running: one that has already exited was not killed at this point."""
+        status = self.process.poll()
+        if status is not None:
+            raise Failed("the %s driver had already exited with status %d before the kill" % (self.name, status))
+        self.process.kill()
+        self.process.wait()
+
+    def discard(self):
+        """Cleanup after a failure: never raises, so the first error is the one reported."""
         if self.process.poll() is None:
             self.process.kill()
             self.process.wait()
@@ -62,7 +94,7 @@ def text(value):
     return base64.b64encode(value.encode()).decode()
 
 
-def encoded(value):
+def byte_string(value):
     """A string is sent as its UTF-8 bytes; {"base64": ...} names bytes that are not text."""
     return value["base64"] if isinstance(value, dict) else text(value)
 
@@ -74,24 +106,52 @@ def expected(want):
     out = {}
     for key, value in want.items():
         if key == "input":
-            out[key] = encoded(value)
+            out[key] = byte_string(value)
         elif key == "data":
-            out[key] = [encoded(v) for v in value]
+            out[key] = [byte_string(v) for v in value]
         else:
             out[key] = expected(value)
     return out
 
 
 def matches(want, got, where):
+    """Every key of want is in got with an equal value of the same JSON type (true is not 1)."""
+    if type(want) is not type(got):
+        raise Failed("%s: want %r, got %r" % (where, want, got))
     if isinstance(want, dict):
-        if not isinstance(got, dict):
-            raise Failed("%s: want an object, got %r" % (where, got))
         for key, value in want.items():
             if key not in got:
                 raise Failed("%s: no %r in %r" % (where, key, got))
             matches(value, got[key], where + "." + key)
     elif want != got:
         raise Failed("%s: want %r, got %r" % (where, want, got))
+
+
+def encoded(expect):
+    """Expected byte strings are written as text in case files."""
+    return {k: text(v) if k in ("value", "state") else v for k, v in expect.items()}
+
+
+def check_case(name, case):
+    def bad(why):
+        sys.exit("case %s: %s" % (name, why))
+
+    if set(case) != {"about", "covers", "formats", "steps"}:
+        bad("want the keys about, covers, formats and steps")
+    if not case["formats"] or any(f not in FORMATS for f in case["formats"]):
+        bad("formats must name at least one of %s" % ", ".join(FORMATS))
+    if not case["steps"]:
+        bad("no steps")
+    for number, step in enumerate(case["steps"], 1):
+        do = step.get("do")
+        if do not in ACTIONS and do not in OPERATIONS:
+            bad("step %d: unknown action %r" % (number, do))
+        if "only" in step and step["only"] not in case["formats"]:
+            bad("step %d: only names a format the case does not run" % number)
+        if do in ACTIONS:
+            unknown = set(step) - ACTIONS[do] - {"do", "only"}
+            if unknown:
+                bad("step %d: %s does not take %s" % (number, do, ", ".join(sorted(unknown))))
 
 
 class Run:
@@ -122,7 +182,7 @@ class Run:
     def request(self, step):
         request = {"op": step["do"]}
         for key, value in step.items():
-            if key in ("do", "error", "fails", "expect", "save"):
+            if key in ("do", "error", "fails", "expect", "nonzero", "save"):
                 continue
             if isinstance(value, str) and value.startswith("$") and value[1:] in self.vars:
                 value = self.vars[value[1:]]
@@ -147,7 +207,7 @@ class Run:
                 request[key] = text(request[key])
         for key in ("input", "failure"):
             if key in request:
-                request[key] = encoded(request[key])
+                request[key] = byte_string(request[key])
         if "items" in request:
             request["items"] = [dict(m, value=text(m.get("value", "")), topic=m.get("topic", "events"))
                                 for m in request["items"]]
@@ -192,6 +252,8 @@ class Run:
                 self.driver = None
             self.turn += 1
         elif do == "kill":
+            if self.driver is None:
+                raise Failed("no driver is running")
             self.driver.kill()
             self.driver = None
         elif do == "publish_many":
@@ -273,9 +335,11 @@ class Run:
                 raise Failed("%s: %s" % (answer.get("error"), answer.get("message")))
             if "expect" in step:
                 want = step["expect"]
-                if step["do"].startswith("wf_"):
-                    want = expected(want)
+                want = expected(want) if step["do"].startswith("wf_") else encoded(want)
                 matches(want, answer.get("result"), "result")
+            for key in step.get("nonzero", []):
+                if not (answer.get("result") or {}).get(key):
+                    raise Failed("result.%s is zero or missing in %r" % (key, answer.get("result")))
             for name, path in step.get("save", {}).items():
                 found = answer.get("result")
                 for key in path.split("."):
@@ -299,7 +363,7 @@ class Run:
                 self.driver = None
         finally:
             if self.driver is not None:
-                self.driver.kill()
+                self.driver.discard()
 
 
 def main():
@@ -309,15 +373,18 @@ def main():
     parser.add_argument("--parent", help="directory for the temporary stores")
     args = parser.parse_args()
     engines = [(name, os.path.abspath(path)) for name, path in (e.split("=", 1) for e in args.engine)]
-    files = sorted(glob.glob(os.path.join(CASES, "*.json")))
-    if args.case:
-        files = [f for f in files if os.path.basename(f)[:-5] in args.case]
-    if not files:
-        sys.exit("no cases found")
+    available = {os.path.basename(f)[:-5]: f for f in glob.glob(os.path.join(CASES, "*.json"))}
+    names = args.case or sorted(available)
+    missing = [n for n in names if n not in available]
+    if missing or not names:
+        sys.exit("no such case: %s" % ", ".join(missing) if missing else "no cases found")
+    cases = []
+    for name in names:
+        with open(available[name], encoding="utf-8") as f:
+            cases.append((available[name], json.load(f)))
+        check_case(name, cases[-1][1])
     passed = failed = 0
-    for file in files:
-        with open(file, encoding="utf-8") as f:
-            case = json.load(f)
+    for file, case in cases:
         for fmt in case["formats"]:
             for writer in engines:
                 for reader in engines:
@@ -333,7 +400,7 @@ def main():
                     finally:
                         shutil.rmtree(root, ignore_errors=True)
     print("%d passed, %d failed" % (passed, failed))
-    sys.exit(1 if failed else 0)
+    sys.exit(1 if failed or not passed else 0)
 
 
 if __name__ == "__main__":

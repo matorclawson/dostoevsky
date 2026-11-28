@@ -45,8 +45,20 @@
    "file": "taken/*"
   },
   {
+   "do": "absent",
+   "file": "taken/.*"
+  },
+  {
+   "do": "absent",
+   "file": ".*.backup-*"
+  },
+  {
    "do": "backup",
    "dest": "$root/copy"
+  },
+  {
+   "do": "absent",
+   "file": ".*.backup-*"
   },
   {
    "do": "close"

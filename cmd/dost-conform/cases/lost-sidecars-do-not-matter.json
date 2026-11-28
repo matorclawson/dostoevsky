@@ -1,5 +1,5 @@
 {
- "about": "Index and filter sidecar files are hints: without them the store reads the same and still refuses a changed ID.",
+ "about": "Index and filter sidecar files are hints: with one of each removed the store reads the same and still refuses a changed ID. Whether they are written again is not checked.",
  "covers": [],
  "formats": [
   "segmented"

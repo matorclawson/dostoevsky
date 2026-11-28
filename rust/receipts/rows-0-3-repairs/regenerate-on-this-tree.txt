@@ -1,0 +1,18 @@
+wire-more-go.txt: map[BH:218 BL:58 BP:1346 BQ:1346 EH:27 EP:2568 EQ:2982]
+    zz_rust_vectors_test.go:44: crc32c-go.txt: 300 rows
+    zz_rust_vectors_test.go:44: frame3-go.txt: 4018 rows
+    zz_rust_vectors_test.go:44: checkpoint3-go.txt: 535 rows
+    zz_rust_vectors_test.go:44: gotime-go.txt: 5318 rows
+    zz_rust_vectors_test.go:44: base64-go.txt: 2162 rows
+    zz_rust_vectors_test.go:44: frametime-go.txt: 948 rows
+    zz_rust_vectors_test.go:44: recordscan-go.txt: 2015 rows
+    zz_rust_vectors_test.go:44: idtable-go.txt: 645 rows
+    zz_rust_vectors_test.go:44: segindex-go.txt: 801 rows
+    zz_rust_vectors_test.go:44: index-misc-go.txt: 92 rows
+ok  	github.com/rodriveracom/dostoevsky	1.036s
+    zz_rust_vectors_test.go:31: this driver has no test seam requests yet, and the rows cover them
+--- SKIP: TestWriteRustDriverVectors (0.00s)
+ok  	github.com/rodriveracom/dostoevsky/cmd/dost-conform	0.003s
+nothing was written: these outputs are missing or empty: driver-requests-go.txt
+(driver-requests-go.txt needs a Go driver that has the test seam requests)
+exit status 1

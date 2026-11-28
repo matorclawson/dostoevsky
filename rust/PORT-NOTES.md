@@ -28,6 +28,7 @@ says so in its first line and names its row.
 | 0 | `internal/seam/points.go` | `dostoevsky-core` | `seam` (`POINTS`, `arm`, `disarm`, `due`, `fire`, `at`) | ported; no ported module reaches a point yet |
 | 0 | the sentinel errors in `node.go` and its neighbours | `dostoevsky-core` | `errors` | ported |
 | 0 | `encoding/json` as the engine uses it | `dostoevsky-format` | `gojson`, `base64` | ported for strings, integers and bytes |
+| 0 | `strconv.Quote`, as `%q` in error texts | `dostoevsky-format` | `goquote` | ported for valid UTF-8 |
 | 1 | `wire/wire.go` | `dostoevsky-wire` | `wire` | ported |
 | 2 | `frame3.go` | `dostoevsky-format` | `frame3` | ported |
 | 2 | `checkpoint3.go` (format half) | `dostoevsky-format` | `checkpoint3` | ported |
@@ -121,12 +122,17 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
      lay beyond. So in `{"nodes":["a","b","c"],"nodes":["z"],"nodes":[null,null]}` the field ends as `["z","b"]`. A
      map keeps its earlier entries; each new value starts from zero. `conform::Slice` carries the elements beyond the
      length for this.
+   - Base64 text given to a `[]byte` field that already has bytes is written over the start of them, and the field is
+     cut to the decoded length. What lay beyond stays and comes back with a later `null` element:
+     `{"value":"aGk=","value":"","value":[null]}` binds `value` to the one byte `h`. This is Go 1.27.0. Go 1.24.7 made
+     a new array there and the answer was a zero byte; 23 of the 7,621 rows differ between the two releases, all of
+     this kind.
    - An unknown field, a value of the wrong type, a number outside the field's type, or an integer written with a
      fraction or exponent ends the driver with status 1 and no reply.
    - A request needs no newline: it is answered when its value is complete, and one may span lines.
 
-   `rust/testdata/driver-requests-go.txt` holds the Go driver's own binding of 7,621 inputs, and the Rust driver
-   reproduces every row.
+   `rust/testdata/driver-requests-go.txt` holds the Go driver's own binding of 7,621 inputs, written by Go 1.27.0
+   (`driver_vectors_test.go.txt`), and the Rust driver reproduces every row.
 8. **A Go error can wrap several sentinels,** and the Go driver reports the first match in a fixed order. Rust's
    `errors::Error` carries every kind it wraps and `Error::code` applies that order. The three workflow codes
    (`start_conflict`, `stale`, `missing`) join with the workflow layer.
@@ -150,14 +156,14 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
     functions (`due`, `fire`, `at`), and the driver's `arm` and `disarm` reply as Go's do. Each ported module must
     reach each point at the boundary its Go counterpart does; nothing ported so far contains one.
 
-    Two rules of the point contract are in Rust and not in the Go package this was ported from (`internal/seam` as of
-    the driver with the seam requests):
+    Two more rules of the point contract:
     - **A kill point writes one line to standard error before the process dies:** `seam: killing at <point>, pass <n>`,
       with n = skip + 1, then SIGKILL. `seam::kill_line` builds it, and a test starts a process that dies this way
       and checks the line and the signal.
-    - **An armed point refuses a second `arm` until `disarm` has reported it,** whether or not it fired. The refusal
-      is the error `other`. Its text here is `seam: point "<name>" is armed and disarm has not reported it`, and a
-      name that is not a point is refused first; Go's text and its order of the two checks are not known here.
+    - **A point stays armed until `disarm`,** whether it has fired or not, and `arm` is refused meanwhile. The order
+      and the texts are Go's. A name that is not a point is refused first: `seam: no point is named "<name>"`. Then
+      the armed point refuses: `seam: point "<armed>" is armed and disarm has not reported it`, which names the point
+      that is armed, not the one asked for. Both are the error `other`; only the code is compared between engines.
 13. **The system's random source.** Unset, Go reads `crypto/rand`; Rust reads `/dev/urandom`. Platforms without that
     file need another source before the workflow layer can run there.
 
@@ -187,7 +193,8 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
     to be listed). Cargo's build output therefore goes to `.dev/rust-target`, outside `rust/`.
 21. **Fuzz targets.** `wire_test.go` and `frame3_test.go` have Go fuzz targets. Rust has none yet. In their place the
     tests replay the Go functions' own results on inputs damaged in many small ways (7,998 wire frames; 4,018 frame
-    rows; 535 checkpoint streams; 812 index rows).
+    rows; 535 checkpoint streams; 801 segment index rows), and its results on large inputs and at the limits
+    (`wire-more-go.txt`, `driver-requests-go.txt`, `frametime-go.txt`).
 
 ## Observed in the Go engine
 
@@ -233,16 +240,38 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
     bytes for 5,577 calls of the three, and for 2,968 large inputs to the decoders, up to a body one byte beyond the
     maximum.
 
+33. **Names in error texts are quoted as Go's `%q` quotes them.** Go writes a control character as `\x01` and a line
+    end as `\n`; Rust's `{:?}` writes `\u{1}`. `dostoevsky-format::goquote::quote` is `strconv.Quote` for valid UTF-8.
+    Which characters beyond ASCII are printed as they are comes from a table Go writes (`goquote_table.rs`, by
+    `rust/testdata/quote_table.go`): the standard library's own notion differs, it escapes combining marks. The table
+    follows the Unicode tables of the Go release that wrote it.
+34. **CRC-32C says which implementation it uses.** `crc32c::backend` returns `sse4.2`, `armv8-crc` or `table`, by the
+    same checks as `update`. The test that replays Go's CRC rows prints it.
+35. **A decoded segment index carries its footer.** Go's `decodeSegIndex` returns the footer beside the index, and the
+    loader assigns it to the index after one more check. Rust's `decode_seg_index` sets it on the index it returns,
+    so no decoded index holds an empty footer.
+36. **The ID table loses the largest offset, in both engines.** It stores an offset plus one and reads zero as an
+    empty slot, so an offset of 2^64 - 1 wraps to zero: the entry is counted and never found. Go's integers wrap;
+    Rust uses wrapping addition there, and 19 rows of `idtable-go.txt` hold Go's answers for such tables. A record
+    offset cannot reach that value in a real store (offsets fit an int64).
+
 ## Not yet known
 
-- **Go 1.27.0** was not on the machine that wrote most of the vector files. The two JSON files and
-  `recordscan-go.txt` come from Go 1.27.0. The others come from Go 1.24.7. Two of those depend on `encoding/json` and
-  need writing again with 1.27.0: `driver-requests-go.txt`, which is how the decoder binds a request, and the
-  differential receipts, which compare against a Go driver built with 1.24.7. `rust/testdata/regenerate.sh` writes
-  the vector files; `driver-requests-go.txt` needs a Go driver that has the seam requests.
-- **The Go side of the two new point rules** (note 12): the text of the refusal and the order of its checks, and a
-  comparison of the kill line between the two drivers. The Go driver built here has neither rule, so the
-  `seam-requests` trace arms each point only after `disarm`, and no trace arms twice.
+- **Go 1.27.0** was not on the machine that wrote most of the vector files. Four come from Go 1.27.0:
+  `gojson-strings.txt`, `gojson-reader.txt`, `recordscan-go.txt` and `driver-requests-go.txt`. Thirteen come from Go
+  1.24.7: `seam-go.txt`, `wire-go.txt`, `wire-more-go.txt`, `goquote-go.txt`, `crc32c-go.txt`, `frame3-go.txt`,
+  `checkpoint3-go.txt`, `gotime-go.txt`, `base64-go.txt`, `frametime-go.txt`, `idtable-go.txt`, `segindex-go.txt` and
+  `index-misc-go.txt`, and so does `goquote_table.rs`. Their first line names the release. None of the thirteen holds
+  output of the JSON encoder or decoder; `goquote-go.txt` and the table follow the release's Unicode tables. They are
+  to be written again with 1.27.0 by `rust/testdata/regenerate.sh`, which needs a Go driver that has the seam
+  requests.
+- **Whether Go 1.27.0 keeps a byte field's array when base64 text is longer than it** (note 7). No row has text longer
+  than the bytes the field already holds followed by more `null` elements than both. Rust keeps the old bytes beyond
+  the text there, which is right unless Go makes a new array in that case.
+- **The point rules against a Go driver that has them.** The Go driver built here (`driver-seam-ops`) replaces an
+  armed point without a word and writes no kill line. So the `seam-rearm` trace differs against it in three replies,
+  exactly the three refusals, and the kill line is checked in Rust only. No ported module reaches a point through the
+  driver yet, so no trace has a request that dies.
 - **The lint gate on releases newer than the pinned one.** `sha256.rs` and `crc32c.rs` avoid `chunks_exact`, which
   newer lints object to; that could not be confirmed with a newer release.
 - **Wire bytes of a server.** The differential driver compares stores and driver replies. Comparing wire bytes needs

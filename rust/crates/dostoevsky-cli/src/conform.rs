@@ -562,7 +562,8 @@ impl Driver {
 }
 
 /// Serves requests until end of input. An error here ends the driver with status 1, as in Go: input that is not
-/// JSON, a field the driver does not know, or a value of the wrong type.
+/// JSON, a field the driver does not know, or a value of the wrong type. A request needs no newline after it: it is
+/// answered when its value is complete, which for an object is at its closing brace.
 pub fn serve(input: &mut impl BufRead, output: &mut impl Write) -> Result<(), String> {
     let mut driver = Driver::default();
     let mut pending: Vec<u8> = Vec::new();
@@ -576,7 +577,12 @@ pub fn serve(input: &mut impl BufRead, output: &mut impl Write) -> Result<(), St
             Err(e) => return Err(e.to_string()),
         };
         let Some((value, used)) = parsed else {
-            at_eof = input.read_until(b'\n', &mut pending).map_err(|e| e.to_string())? == 0;
+            // Whatever has arrived, not a whole line: a request is answered as soon as its value is complete.
+            let arrived = input.fill_buf().map_err(|e| e.to_string())?;
+            let count = arrived.len();
+            pending.extend_from_slice(arrived);
+            input.consume(count);
+            at_eof = count == 0;
             continue;
         };
         pending.drain(..used);

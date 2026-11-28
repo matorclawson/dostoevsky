@@ -7,6 +7,7 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 ## Unreleased — test seam for stored inputs
 
 - The clock and randomness that reach stored bytes now go through an internal package so that tests can fix them. Applications cannot reach it, and unset it is the standard library.
+- Legacy retention, the legacy export of a segmented store and migration now write partitions and consumer groups in a fixed order (they followed Go's random map order). Contents are unchanged.
 
 ## Unreleased — workflow conformance cases
 

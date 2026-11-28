@@ -26,7 +26,9 @@ func (n *Node) MigrateSegmented(ctx context.Context, dir string) error {
 		}
 		defer dst.Close()
 		l := dst.segments
-		for p, s := range n.streams {
+		order := partitionsInOrder(n.streams)
+		for _, p := range order {
+			s := n.streams[p]
 			pid, _, err := l.state.ensure(p)
 			if err != nil {
 				return err
@@ -38,7 +40,8 @@ func (n *Node) MigrateSegmented(ctx context.Context, dir string) error {
 		if err = roll(); err != nil {
 			return err
 		}
-		for p, s := range n.streams {
+		for _, p := range order {
+			s := n.streams[p]
 			pid := l.state.byPart[p]
 			var frames []byte
 			type pending struct {

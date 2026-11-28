@@ -10,7 +10,10 @@
 //     little-endian, the counter starting at 0 after Fix and going up by one per block, and keeps the first n bytes.
 //     What is left of the last block is not used again.
 //
-// Another implementation must read the clock and the randomness at the same moments, as often, as this one does.
+// Another implementation must read the clock and the randomness at the same moments, as often, as this one does. Where
+// this one writes partitions and consumer groups it holds in maps (legacy retention, the legacy export of a segmented
+// store, migration, checkpoints), it writes partitions ordered by topic and then number, and groups by name; checkpoints
+// order partitions by their stored identifier. Equal bytes are promised for requests made one at a time.
 package seam
 
 import (

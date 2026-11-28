@@ -20,7 +20,7 @@ Two format changes are separate. The **directory** format changes when a directo
 
 ## Evidence and reproduction
 
-- `make dev-test-workflows` runs the candidate through the race detector, including ten process-kill cases, deterministic group contention, fencing, and interrupted-group images.
+- `make dev-test-workflows` runs the candidate through the race detector, including twelve process-kill cases, deterministic group contention, fencing, and interrupted-group images.
 - `EPHEMERAL_REFERENCE_MODULE=/path/to/module make dev-test-ephemeral` runs the shared public suite. The reference must vendor the module under the path ephemeral. This run used the portable SQLite 0.3.0 copy based on c250ba20 and Go 1.27.4. The design's dbf27040 and PR 20 were not the reference checkout. The package itself uses Go's standard library and Dostoevsky.
 - `DOST_WORKFLOW_BENCH_DIR=/path/on/test-volume GOMAXPROCS=4 make dev-bench-workflows` measures 512 completed three-activity runs per cell, three repetitions, no network or external activity work. CPU is process user plus system time, disk is logical growth, and append groups count data commits for this no-rollover workload. Filesystem metadata syncs at lifecycle boundaries are outside the timing.
 - See [raw measurements](../benchmarks/workflow/cost-ext4.txt), [workflow race tests](../benchmarks/workflow/race.txt), [SQLite reference tests](../benchmarks/workflow/sqlite-public-api.txt), and [stream-only binary comparison](../benchmarks/workflow/stream-only.txt). The stream server built with CGO_ENABLED=0, -trimpath and -buildvcs=false was byte-identical to commit 77834d8. This is a build isolation check. Co-located busy workflows and a network workflow server have yet to be measured.

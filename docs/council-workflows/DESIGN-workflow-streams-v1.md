@@ -201,7 +201,7 @@ apply where v2 does not name a replacement. Later measurements of the native ser
 
 ### 4.1 Where we are (measured; Dostoevsky over HTTP/1.1, not the native server)
 
-Task 29, one Linux ARM64 host (2 vCPU), ext4, 512-byte records, durable acknowledgment, 5 rounds of 120 s. Median records/s
+Baseline run, one Linux ARM64 host (2 vCPU), ext4, 512-byte records, durable acknowledgment, 5 rounds of 120 s. Median records/s
 (median p99 ms). Source d7b967a, HOST.log sha256 `f94a43ce...0ac1ca`.
 
 | Client | Producers | Dostoevsky | Redis 8.12.0 |

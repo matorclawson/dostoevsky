@@ -1,0 +1,164 @@
+{
+ "about": "Everything acknowledged is there after the process is killed.",
+ "covers": [],
+ "formats": [
+  "workflow"
+ ],
+ "steps": [
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send"
+    },
+    {
+     "kind": "signal",
+     "name": "go"
+    },
+    {
+     "kind": "activity",
+     "name": "done"
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "held",
+   "name": "work",
+   "version": 1,
+   "queue": "qh",
+   "input": "0"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "waiting",
+   "name": "work",
+   "version": 1,
+   "queue": "qw",
+   "input": "0"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "qh",
+   "lease_ms": 60000,
+   "save": {
+    "h": "task.token"
+   }
+  },
+  {
+   "do": "wf_poll",
+   "queue": "qw",
+   "lease_ms": 60000,
+   "save": {
+    "w": "task.token"
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "waiting",
+   "token": "$w",
+   "value": "1"
+  },
+  {
+   "do": "kill"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_history",
+   "run": "held",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "waiting",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted",
+     "ActivityCompleted",
+     "SignalWaiting"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "held",
+   "after": 0,
+   "limit": 1,
+   "expect": {
+    "data": [
+     "0"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "held",
+   "after": 2,
+   "limit": 1,
+   "expect": {
+    "data": [
+     "1"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "waiting",
+   "after": 6,
+   "limit": 2,
+   "expect": {
+    "data": [
+     "1",
+     "go"
+    ]
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "held",
+   "token": "$h",
+   "value": "1"
+  },
+  {
+   "do": "wf_signal",
+   "run": "waiting",
+   "step": 1,
+   "name": "go",
+   "value": "5"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "qw",
+   "lease_ms": 60000,
+   "expect": {
+    "task": {
+     "activity": "done",
+     "input": "5"
+    }
+   }
+  }
+ ]
+}

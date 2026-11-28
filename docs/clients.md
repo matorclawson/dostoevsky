@@ -83,6 +83,14 @@ The token grants access to **every** topic and operation. So:
 - Python, JavaScript and Java refuse to send the token over plain `http://` to anything but loopback. The Rust client has no TLS yet, so it talks to loopback only; for a remote gateway put a local TLS-terminating proxy in front of it, or wait for the opt-in `tls` feature, which will be its own reviewed change.
 - Responses are bounded to 1 MiB in every client, and redirects are never followed.
 
+**Native protocol clients (preview), Rust and Java.** These are separate from the gateway clients above: they speak the binary
+[wire protocol](wire-v1.md) in plaintext, to a loopback address or a unix socket only. Each trusts the server it sends the token
+to. Request ids are random (the Rust client takes them from the operating system on Unix; elsewhere, Windows included, they are unpredictable but not
+cryptographically random), so a server is very unlikely to answer
+a request it has not received; one that has received only part of a request can answer it early and may be believed. Such a
+server holds the token and could return any answer anyway. Nothing is retried. See
+[the Rust notes](../clients/rust/README.md) and [the Java notes](../clients/java/README.md).
+
 ## Embedding in a Go application
 
 Applications with a Go HTTP server can mount the handler on their existing Node or Mesh:

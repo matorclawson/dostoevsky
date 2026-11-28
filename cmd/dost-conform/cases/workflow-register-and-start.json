@@ -1,0 +1,278 @@
+{
+ "about": "A registration or start repeated with the same bytes changes nothing; a different one is refused.",
+ "covers": [],
+ "formats": [
+  "workflow"
+ ],
+ "steps": [
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "other"
+    }
+   ],
+   "error": "conflict"
+  },
+  {
+   "do": "wf_register",
+   "name": "empty",
+   "version": 1,
+   "steps": [],
+   "error": "invalid"
+  },
+  {
+   "do": "wf_register",
+   "name": "timer",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "timer",
+     "name": "t"
+    }
+   ],
+   "error": "invalid"
+  },
+  {
+   "do": "wf_register",
+   "name": "negative",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "a",
+     "attempts": -1
+    }
+   ],
+   "error": "invalid"
+  },
+  {
+   "do": "wf_register",
+   "name": "tried",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "signal",
+     "name": "s",
+     "attempts": 1
+    }
+   ],
+   "error": "invalid"
+  },
+  {
+   "do": "wf_register",
+   "name": "late",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "a",
+     "backoff_ms": 35184372088833
+    }
+   ],
+   "error": "invalid"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "{ }",
+   "expect": {
+    "created": true
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled"
+    ]
+   }
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "{ }",
+   "expect": {
+    "created": false
+   }
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "{ }",
+   "attrs": {},
+   "expect": {
+    "created": false
+   }
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "{}",
+   "error": "start_conflict"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "other",
+   "input": "{ }",
+   "error": "start_conflict"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "{ }",
+   "attrs": {
+    "a": "b"
+   },
+   "error": "start_conflict"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "x",
+   "name": "unknown",
+   "version": 1,
+   "queue": "q",
+   "input": "0",
+   "error": "invalid"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0",
+   "error": "invalid"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "x",
+   "name": "work",
+   "version": 1,
+   "queue": "",
+   "input": "0",
+   "error": "invalid"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "x",
+   "name": "work",
+   "version": 0,
+   "queue": "q",
+   "input": "0",
+   "error": "invalid"
+  },
+  {
+   "do": "wf_start_once",
+   "run": "x",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "{",
+   "error": "invalid"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 0,
+   "error": "invalid"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 4611686018427387904,
+   "error": "invalid"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "x",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": []
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 0,
+   "error": "invalid"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 1001,
+   "error": "invalid"
+  }
+ ]
+}

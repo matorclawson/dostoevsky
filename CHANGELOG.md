@@ -8,6 +8,10 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 - The clock and randomness that reach stored bytes now go through an internal package so that tests can fix them. Applications cannot reach it, and unset it is the standard library.
 
+## Unreleased — workflow conformance cases
+
+- Added workflow operations to `cmd/dost-conform` and cases for registration, starts, leases, outcomes, signals and a killed process. No change to the engine.
+
 ## Unreleased — workflow examples
 
 - Added six examples under [examples/workflows](examples/workflows/README.md): one-shot reservation, task queue, webhook intake, saga, payment callback and text ingestion, each with a restart test. The format targets now include them.

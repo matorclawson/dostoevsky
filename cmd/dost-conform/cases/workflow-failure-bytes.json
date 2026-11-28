@@ -1,0 +1,89 @@
+{
+ "about": "A failure that is not UTF-8 is kept byte for byte.",
+ "covers": [],
+ "formats": [
+  "workflow"
+ ],
+ "steps": [
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "save": {
+    "t": "task.token"
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "failure": {
+    "base64": "/wA8"
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 3,
+   "limit": 2,
+   "expect": {
+    "kinds": [
+     "ActivityFailed",
+     "WorkflowFailed"
+    ],
+    "data": [
+     {
+      "base64": "/wA8"
+     },
+     {
+      "base64": "/wA8"
+     }
+    ]
+   }
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 3,
+   "limit": 2,
+   "expect": {
+    "data": [
+     {
+      "base64": "/wA8"
+     },
+     {
+      "base64": "/wA8"
+     }
+    ]
+   }
+  }
+ ]
+}

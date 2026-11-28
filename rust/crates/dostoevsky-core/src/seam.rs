@@ -21,6 +21,7 @@
 //! named points ([`POINTS`], [`arm`], [`at`], [`disarm`]) mirror Go's `internal/seam/points.go`.
 
 use dostoevsky_format::sha256;
+use std::io::Write;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -164,6 +165,8 @@ struct Armed {
     kill: bool,
     /// Counts down by one per pass; the pass that takes it to -1 fires.
     skip: i64,
+    /// The pass that fires: the armed `skip` plus one.
+    pass: i64,
     reached: bool,
 }
 
@@ -174,19 +177,36 @@ fn armed() -> std::sync::MutexGuard<'static, Option<Armed>> {
 }
 
 /// Makes the named point fail, or kill the process, once: the first time it is reached after `skip` earlier times.
-/// Every later pass goes through, and with a negative `skip` the point never fires. One point is armed at a time. A
-/// name that is not in [`POINTS`] is refused. Mirrors `seam.Arm`.
+/// Every later pass goes through, and with a negative `skip` the point never fires. A name that is not in [`POINTS`]
+/// is refused. One point is armed at a time, and an armed point stays until [`disarm`] has reported it: arming again
+/// before that is refused, so that no test replaces a point it never checked.
+///
+/// Mirrors `seam.Arm`, with the rule that an unchecked point refuses a second `arm`.
 pub fn arm(name: &str, kill: bool, skip: i64) -> Result<(), String> {
     if !POINTS.contains(&name) {
         return Err(format!("seam: no point is named {name:?}"));
     }
-    *armed() = Some(Armed {
+    let mut armed = armed();
+    if let Some(a) = armed.as_ref() {
+        return Err(format!(
+            "seam: point {:?} is armed and disarm has not reported it",
+            a.name
+        ));
+    }
+    *armed = Some(Armed {
         name: name.to_string(),
         kill,
         skip,
+        pass: skip.wrapping_add(1),
         reached: false,
     });
     Ok(())
+}
+
+/// The one line a kill point writes to standard error before the process dies. A test runner accepts a death only
+/// with this line, inside the request it marked as the one that dies.
+pub fn kill_line(name: &str, pass: i64) -> String {
+    format!("seam: killing at {name}, pass {pass}\n")
 }
 
 /// Removes the armed point and reports whether it fired. Mirrors `seam.Disarm`.
@@ -212,11 +232,14 @@ pub fn fire(name: &str) -> Result<(), Injected> {
     let kill = match armed().as_mut().filter(|a| a.name == name) {
         Some(a) => {
             a.reached = true;
-            a.kill
+            a.kill.then_some(a.pass)
         }
         None => return Ok(()),
     };
-    if kill {
+    if let Some(pass) = kill {
+        // One write of the whole line, so that nothing can come between its parts. A failed write changes nothing:
+        // the process dies either way, and the runner then rejects the death.
+        let _ = std::io::stderr().write_all(kill_line(name, pass).as_bytes());
         kill_this_process();
     }
     Err(Injected(name.to_string()))
@@ -317,7 +340,25 @@ mod tests {
         assert!(!disarm());
         arm("dirsync", false, 1).unwrap();
         assert_eq!(at("dirsync"), Ok(()));
+        assert_eq!(
+            arm("segment.write", false, 0),
+            Err("seam: point \"dirsync\" is armed and disarm has not reported it".to_string()),
+            "an unchecked point refuses a second arm"
+        );
+        assert_eq!(
+            arm("dirsync", false, 0),
+            Err("seam: point \"dirsync\" is armed and disarm has not reported it".to_string()),
+            "also for the same name"
+        );
+        assert_eq!(at("segment.write"), Ok(()), "the refused arm changed nothing");
         assert!(!disarm(), "reached once, but it had not fired");
+        arm("segment.write", false, 0).unwrap();
+        assert_eq!(at("segment.write"), Err(Injected("segment.write".into())));
+        assert!(
+            arm("dirsync", false, 0).is_err(),
+            "a point that fired is still unchecked"
+        );
+        assert!(disarm());
         arm("dirsync", true, -1).unwrap();
         assert_eq!(
             [at("dirsync"), at("dirsync"), at("dirsync")],
@@ -331,6 +372,7 @@ mod tests {
         assert_eq!(fire("workflow.mid_append"), Err(Injected("workflow.mid_append".into())));
         assert!(!due("workflow.mid_append"));
         assert!(disarm());
+        assert_eq!(kill_line("segment.sync", 4), "seam: killing at segment.sync, pass 4\n");
         assert_eq!(POINTS.len(), 18);
     }
 }

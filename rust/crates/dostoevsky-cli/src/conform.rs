@@ -3,8 +3,9 @@
 //!
 //! Besides the engine requests it serves the test seam (`dostoevsky_core::seam`): `fix_inputs` (`start`, `step`,
 //! and `seed` as an unsigned 64-bit number), `advance` (`nanoseconds`), `arm` (`point`, `kill`, `skip`) and `disarm`
-//! (which replies `reached`: whether the armed point fired). `fix_inputs` must come before anything is opened, and
-//! `arm` refuses a name that is not one of the engine's points.
+//! (which replies `reached`: whether the armed point fired). `fix_inputs` must come before anything is opened. `arm`
+//! refuses a name that is not one of the engine's points, and refuses to arm again before `disarm` has reported the
+//! point armed before.
 //!
 //! A request whose module is not ported yet answers with the error `other` and names the row that brings it. The
 //! parts that do not depend on the engine are complete and tested: binding a request as Go's decoder binds it, the

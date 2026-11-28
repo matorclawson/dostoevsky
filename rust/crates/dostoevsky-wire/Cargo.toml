@@ -12,3 +12,4 @@ workspace = true
 
 [dependencies]
 dostoevsky-format = { path = "../dostoevsky-format" }
+subtle = "=2.6.1"

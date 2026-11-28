@@ -1,0 +1,185 @@
+{
+ "about": "A signal is accepted only at its wait and only once; its value is the next activity's input.",
+ "covers": [],
+ "formats": [
+  "workflow"
+ ],
+ "steps": [
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "prepare"
+    },
+    {
+     "kind": "signal",
+     "name": "ok"
+    },
+    {
+     "kind": "signal",
+     "name": "ok"
+    },
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "wf_signal",
+   "run": "r",
+   "step": 1,
+   "name": "ok",
+   "value": "1",
+   "error": "conflict"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "save": {
+    "t": "task.token"
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "value": "1"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "expect": {
+    "task": null
+   }
+  },
+  {
+   "do": "wf_signal",
+   "run": "r",
+   "step": 1,
+   "name": "wrong",
+   "value": "2",
+   "error": "conflict"
+  },
+  {
+   "do": "wf_signal",
+   "run": "r",
+   "step": -1,
+   "name": "ok",
+   "value": "2",
+   "error": "invalid"
+  },
+  {
+   "do": "wf_signal",
+   "run": "absent",
+   "step": 1,
+   "name": "ok",
+   "value": "2",
+   "error": "missing"
+  },
+  {
+   "do": "wf_signal",
+   "run": "r",
+   "step": 1,
+   "name": "ok",
+   "value": "2"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_signal",
+   "run": "r",
+   "step": 1,
+   "name": "ok",
+   "value": "2",
+   "error": "conflict"
+  },
+  {
+   "do": "wf_signal",
+   "run": "r",
+   "step": 2,
+   "name": "ok",
+   "value": "3"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "expect": {
+    "task": {
+     "activity": "send",
+     "step": 3,
+     "input": "3"
+    }
+   }
+  },
+  {
+   "do": "wf_register",
+   "name": "last",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "signal",
+     "name": "go"
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "s",
+   "name": "last",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "wf_signal",
+   "run": "s",
+   "step": 0,
+   "name": "go",
+   "value": "7"
+  },
+  {
+   "do": "wf_history",
+   "run": "s",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "SignalWaiting",
+     "SignalReceived",
+     "WorkflowCompleted"
+    ]
+   }
+  },
+  {
+   "do": "wf_signal",
+   "run": "s",
+   "step": 0,
+   "name": "go",
+   "value": "7",
+   "error": "conflict"
+  }
+ ]
+}

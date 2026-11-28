@@ -11,8 +11,10 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 
 	d "github.com/rodriveracom/dostoevsky"
+	"github.com/rodriveracom/dostoevsky/workflow"
 )
 
 type partition struct {
@@ -57,6 +59,21 @@ type request struct {
 	Key   string `json:"key"`
 	Value []byte `json:"value"`
 	ID    string `json:"id"`
+
+	// Fields of the wf_ operations.
+	Name    string            `json:"name"`
+	Version int               `json:"version"`
+	Steps   []wfStep          `json:"steps"`
+	Run     string            `json:"run"`
+	Queue   string            `json:"queue"`
+	Input   []byte            `json:"input"`
+	Attrs   map[string]string `json:"attrs"`
+	LeaseMS int64             `json:"lease_ms"`
+	Token   string            `json:"token"`
+	Failure []byte            `json:"failure"`
+	Step    int               `json:"step"`
+	After   int64             `json:"after"`
+	Limit   int               `json:"limit"`
 }
 
 // record is one stored record. Time is nanoseconds since the Unix epoch, as a string so that no reader rounds it.
@@ -101,6 +118,9 @@ var codes = []struct {
 	{"later_frames", d.ErrLaterFrames},
 	{"not_repairable", d.ErrNotRepairable},
 	{"exists", fs.ErrExist},
+	{"start_conflict", workflow.ErrStartConflict},
+	{"stale", workflow.ErrStale},
+	{"missing", workflow.ErrMissing},
 }
 
 func failure(err error) reply {
@@ -116,7 +136,11 @@ func failure(err error) reply {
 
 var errNotOpen = errors.New("dost-conform: no node is open")
 
-type driver struct{ node *d.Node }
+// driver holds at most one open node or one open workflow store.
+type driver struct {
+	node  *d.Node
+	store *workflow.Store
+}
 
 func report(r d.JournalReport) map[string]any {
 	return map[string]any{"size": r.Size, "good_bytes": r.GoodBytes, "frames": r.Frames, "damage": r.Damage,
@@ -125,11 +149,14 @@ func report(r d.JournalReport) map[string]any {
 
 // run performs one request. A result can come with an error: a refused repair still reports what it found.
 func (s *driver) run(q request) (any, error) {
+	if strings.HasPrefix(q.Op, "wf_") {
+		return s.wf(q)
+	}
 	ctx := context.Background()
 	switch q.Op {
 	case "open":
-		if s.node != nil {
-			return nil, errors.New("dost-conform: a node is already open")
+		if s.node != nil || s.store != nil {
+			return nil, errors.New("dost-conform: a node or store is already open")
 		}
 		open := d.Open
 		if q.Segmented {
@@ -227,6 +254,9 @@ func serve(in io.Reader, out io.Writer) error {
 		if err := requests.Decode(&q); err == io.EOF {
 			if s.node != nil {
 				return s.node.Close()
+			}
+			if s.store != nil {
+				return s.store.Close()
 			}
 			return nil
 		} else if err != nil {

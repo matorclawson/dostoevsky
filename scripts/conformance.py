@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cmd", "dost-conform", "cases")
 TIMEOUT = 120
@@ -61,6 +62,26 @@ def text(value):
     return base64.b64encode(value.encode()).decode()
 
 
+def encoded(value):
+    """A string is sent as its UTF-8 bytes; {"base64": ...} names bytes that are not text."""
+    return value["base64"] if isinstance(value, dict) else text(value)
+
+
+def expected(want):
+    """Encodes the byte strings of an expectation about a workflow result: input, and the data list."""
+    if not isinstance(want, dict):
+        return want
+    out = {}
+    for key, value in want.items():
+        if key == "input":
+            out[key] = encoded(value)
+        elif key == "data":
+            out[key] = [encoded(v) for v in value]
+        else:
+            out[key] = expected(value)
+    return out
+
+
 def matches(want, got, where):
     if isinstance(want, dict):
         if not isinstance(got, dict):
@@ -81,6 +102,7 @@ class Run:
         self.driver = None
         self.saved = {}
         self.marks = {}
+        self.vars = {}
 
     def path(self, value):
         return value.replace("$root", self.root)
@@ -100,9 +122,13 @@ class Run:
     def request(self, step):
         request = {"op": step["do"]}
         for key, value in step.items():
-            if key in ("do", "error", "fails", "expect"):
+            if key in ("do", "error", "fails", "expect", "save"):
                 continue
+            if isinstance(value, str) and value.startswith("$") and value[1:] in self.vars:
+                value = self.vars[value[1:]]
             request[key] = self.path(value) if isinstance(value, str) else value
+        if step["do"] == "wf_open":
+            request.setdefault("dir", self.path("$root/store"))
         if step["do"] == "open":
             request.setdefault("dir", self.path("$root/store"))
             request.setdefault("segmented", self.format == "segmented")
@@ -119,6 +145,9 @@ class Run:
         for key in ("value", "state"):
             if key in request:
                 request[key] = text(request[key])
+        for key in ("input", "failure"):
+            if key in request:
+                request[key] = encoded(request[key])
         if "items" in request:
             request["items"] = [dict(m, value=text(m.get("value", "")), topic=m.get("topic", "events"))
                                 for m in request["items"]]
@@ -145,6 +174,9 @@ class Run:
         records = self.records(step.get("from", 0))
         groups = {g: self.ok({"op": "position", "topic": "events", "group": g}) for g in step.get("groups", [])}
         return {"records": records, "groups": groups}
+
+    def histories(self, runs):
+        return {"runs": {run: self.ok({"op": "wf_history", "run": run, "after": 0, "limit": 1000}) for run in runs}}
 
     def one_file(self, pattern):
         found = sorted(glob.glob(os.path.join(self.root, pattern)))
@@ -175,6 +207,15 @@ class Run:
                 self.ok({"op": "publish_batch", "items": items})
         elif do == "snapshot":
             self.saved[step["as"]] = self.snapshot(step)
+        elif do == "sleep_ms":
+            time.sleep(step["ms"] / 1000)
+        elif do == "wf_snapshot":
+            self.saved[step["as"]] = self.histories(step["runs"])
+        elif do == "same" and "runs" in self.saved[step["as"]]:
+            want = self.saved[step["as"]]
+            got = self.histories(want["runs"])
+            if want != got:
+                raise Failed("histories differ from %s: %r, want %r" % (step["as"], got, want))
         elif do == "same":
             want = self.saved[step["as"]]
             got = self.snapshot(step)
@@ -231,7 +272,17 @@ class Run:
             elif not answer["ok"]:
                 raise Failed("%s: %s" % (answer.get("error"), answer.get("message")))
             if "expect" in step:
-                matches(step["expect"], answer.get("result"), "result")
+                want = step["expect"]
+                if step["do"].startswith("wf_"):
+                    want = expected(want)
+                matches(want, answer.get("result"), "result")
+            for name, path in step.get("save", {}).items():
+                found = answer.get("result")
+                for key in path.split("."):
+                    if not isinstance(found, dict) or key not in found:
+                        raise Failed("cannot save %s: no %s in %r" % (name, path, answer))
+                    found = found[key]
+                self.vars[name] = found
 
     def run(self):
         try:

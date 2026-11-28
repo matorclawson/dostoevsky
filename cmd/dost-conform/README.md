@@ -41,6 +41,30 @@ result. Codes: `journal_full`, `limit`, `invalid`, `owner`, `closed`, `conflict`
 `exists`, `other`. Only the code is compared, never the text. Damage to a legacy journal has no code of its own today, so
 those cases require a failure and unchanged bytes.
 
+## Workflow operations
+
+A driver holds one open node or one open workflow store. `dir` defaults to `$root/store`.
+
+| op | fields | result |
+|---|---|---|
+| `wf_open` | `dir` | |
+| `wf_close` | | |
+| `wf_register` | `name`, `version`, `steps`: `kind`, `name`, `attempts`, `backoff_ms` | |
+| `wf_start_once` | `run`, `name`, `version`, `queue`, `input`, `attrs` | `created` |
+| `wf_poll` | `queue`, `lease_ms` | `task`: null, or `run`, `activity`, `token`, `step`, `attempt`, `input` |
+| `wf_finish` | `run`, `token`, `value`, `failure` | |
+| `wf_signal` | `run`, `step`, `name`, `value` | |
+| `wf_history` | `run`, `after`, `limit` | `kinds`, `data`, `events`: `sequence`, `time` (string, ms), `kind`, `step`, `data` |
+
+`input`, `failure` and history data are base64 on the wire. In a case file they are written as text, or as
+`{"base64": ...}` for bytes that are not text. Additional codes: `start_conflict`, `stale`, `missing`.
+
+Workflow cases have `"formats": ["workflow"]`. Their runner steps: `"save": {NAME: "task.token"}` on a request and
+`"$NAME"` in a later one, `sleep_ms`, and `wf_snapshot` with `runs`, compared by `same`.
+
+Not covered for workflows: named kill and failure points, concurrent polls, size limits, damaged and half-initialized
+stores, and any past workflow fix (their `covers` lists are empty).
+
 ## Case files
 
 `cases/*.json`: `formats` (`legacy`, `segmented`), `covers` (commits that fixed what the case checks) and `steps`. A step
@@ -69,4 +93,4 @@ Not yet covered, by what each needs:
   `cc081d4`, `ddc0cc8`, `d711c94`, `a0f24fa`, `b845b69` (as byte vectors), `a0d8420`.
 - **No test of any kind today:** `ed99753`.
 
-Also not covered: the workflow store, the wire protocol, and interrupted migration.
+Also not covered: the wire protocol and interrupted migration.

@@ -1,0 +1,230 @@
+{
+ "about": "An accepted outcome is recorded once; repeating it after reopening is stale.",
+ "covers": [],
+ "formats": [
+  "workflow"
+ ],
+ "steps": [
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send",
+     "attempts": 2
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input": "0"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "q",
+   "lease_ms": 60000,
+   "expect": {
+    "task": {
+     "run": "r",
+     "activity": "send",
+     "step": 0,
+     "attempt": 1,
+     "input": "0"
+    }
+   },
+   "save": {
+    "t": "task.token"
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "nope",
+   "value": "1",
+   "error": "stale"
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "",
+   "value": "1",
+   "error": "stale"
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "nope",
+   "value": "{",
+   "error": "stale"
+  },
+  {
+   "do": "wf_finish",
+   "run": "absent",
+   "token": "$t",
+   "value": "1",
+   "error": "missing"
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "value": "{",
+   "error": "invalid"
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "value": "42"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_finish",
+   "run": "r",
+   "token": "$t",
+   "value": "42",
+   "error": "stale"
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted",
+     "ActivityCompleted",
+     "WorkflowCompleted"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "r",
+   "after": 3,
+   "limit": 2,
+   "expect": {
+    "data": [
+     "42",
+     "42"
+    ]
+   }
+  },
+  {
+   "do": "wf_start_once",
+   "run": "f",
+   "name": "work",
+   "version": 1,
+   "queue": "qf",
+   "input": "0"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "qf",
+   "lease_ms": 60000,
+   "expect": {
+    "task": {
+     "attempt": 1
+    }
+   },
+   "save": {
+    "u": "task.token"
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "f",
+   "token": "$u",
+   "failure": "busy"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open"
+  },
+  {
+   "do": "wf_finish",
+   "run": "f",
+   "token": "$u",
+   "failure": "busy",
+   "error": "stale"
+  },
+  {
+   "do": "wf_history",
+   "run": "f",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted",
+     "ActivityFailed",
+     "RetryScheduled"
+    ]
+   }
+  },
+  {
+   "do": "wf_poll",
+   "queue": "qf",
+   "lease_ms": 60000,
+   "expect": {
+    "task": {
+     "attempt": 2
+    }
+   },
+   "save": {
+    "v": "task.token"
+   }
+  },
+  {
+   "do": "wf_finish",
+   "run": "f",
+   "token": "$v",
+   "failure": "busy"
+  },
+  {
+   "do": "wf_poll",
+   "queue": "qf",
+   "lease_ms": 60000,
+   "expect": {
+    "task": null
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "f",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted",
+     "ActivityFailed",
+     "RetryScheduled",
+     "ActivityStarted",
+     "ActivityFailed",
+     "WorkflowFailed"
+    ]
+   }
+  }
+ ]
+}

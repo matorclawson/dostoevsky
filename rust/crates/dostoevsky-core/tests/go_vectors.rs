@@ -14,6 +14,7 @@ fn list(field: &str) -> Vec<&str> {
 
 #[test]
 fn the_admission_sketch_and_the_location_index_match_go() {
+    let mut saturated = 0;
     let (mut sketches, mut indexes, mut locations) = (0, 0, 0);
     for line in include_str!("../../../testdata/index-misc-go.txt")
         .lines()
@@ -29,6 +30,7 @@ fn the_admission_sketch_and_the_location_index_match_go() {
                 for score in list(f[2]) {
                     let (id, want) = score.split_once('=').unwrap();
                     assert_eq!(sketch.score(id.parse().unwrap()).to_string(), want, "id {id}");
+                    saturated += usize::from(want == "255");
                 }
                 sketches += 1;
             }
@@ -54,7 +56,7 @@ fn the_admission_sketch_and_the_location_index_match_go() {
         }
     }
     assert!(
-        sketches == 30 && indexes == 30 && locations > 1000,
-        "{sketches} sketches, {indexes} indexes, {locations} locations"
+        sketches == 62 && saturated >= 4 && indexes == 30 && locations > 1000,
+        "{sketches} sketches, {saturated} scores at the counter's limit, {indexes} indexes, {locations} locations"
     );
 }

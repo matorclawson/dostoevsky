@@ -516,6 +516,7 @@ fn the_id_table_and_filter_match_go() {
     use dostoevsky_format::idfilter::{filter_positions, make_id_filter, mix_filter_hash};
     use dostoevsky_format::segindex::{id_hash, IdTable};
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    let (mut top_offsets, mut odd_bits, mut odd_filters, mut capped) = (0, 0, 0, 0);
     for line in rows(include_str!("../../../testdata/idtable-go.txt")) {
         let f: Vec<&str> = line.split(' ').collect();
         match f[0] {
@@ -562,11 +563,63 @@ fn the_id_table_and_filter_match_go() {
                     );
                 }
             }
+            // A filter of any length, as one read from a file is, asked without the mixing step.
+            "F" => {
+                use dostoevsky_format::idfilter::IdFilter;
+                let filter = IdFilter(unhex(f[1]));
+                odd_filters += usize::from(filter.0.len() % 2 == 1);
+                for check in list(f[2]) {
+                    let (h, want) = check.split_once('=').unwrap();
+                    assert_eq!(
+                        filter.contains(h.parse().unwrap()).to_string(),
+                        want,
+                        "{check} in {line}"
+                    );
+                }
+            }
+            // A table around the filter's size cap: entry i is the hash mix(i + 1) at offset i.
+            "C" => {
+                let entries: u64 = f[1].parse().unwrap();
+                let mut table = IdTable::default();
+                for i in 0..entries {
+                    table.add(mix_filter_hash(i + 1), i);
+                }
+                let filter = make_id_filter(&table);
+                capped += usize::from(filter.0.len() < entries as usize * 4);
+                assert_eq!(
+                    format!(
+                        "C {entries} {} {} {} {:08x}",
+                        table.len(),
+                        table.slots(),
+                        filter.0.len(),
+                        crc32c::checksum(&filter.0)
+                    ),
+                    f[..6].join(" ")
+                );
+                for check in list(f[6]) {
+                    let (h, want) = check.split_once('=').unwrap();
+                    assert_eq!(
+                        filter.contains(mix_filter_hash(h.parse().unwrap())).to_string(),
+                        want,
+                        "{check} in {line}"
+                    );
+                }
+            }
             other => panic!("unknown row {other}"),
         }
+        top_offsets += usize::from(f[0] == "T" && f[3].contains(":18446744073709551615"));
+        odd_bits += usize::from(f[0] == "P" && f[2].parse::<u32>().unwrap() % 16 == 8);
         *counts.entry(f[0]).or_default() += 1;
     }
-    assert_eq!((counts["H"], counts["T"], counts["P"]), (200, 60, 200));
+    assert_eq!(
+        (counts["H"], counts["T"], counts["P"], counts["F"], counts["C"]),
+        (200, 84, 304, 53, 4)
+    );
+    assert!(
+        top_offsets >= 15 && odd_bits >= 80 && odd_filters >= 40 && capped == 2,
+        "{top_offsets} tables with the largest offset, {odd_bits} positions and {odd_filters} filters of odd length, \
+         {capped} tables above the filter's cap"
+    );
 }
 
 #[test]

@@ -485,11 +485,13 @@ func TestWriteRustVectors(t *testing.T) {
 	}
 	scans.write(t, "recordscan-go.txt")
 
-	writeIndexVectors(t, rng)
+	writeIndexVectors(t)
 }
 
 // writeIndexVectors covers the segment index, the ID table and filter, the admission sketch and the location index.
-func writeIndexVectors(t *testing.T, rng *rand.Rand) {
+// It has its own source of numbers, so that a change to the rows written before it leaves these files as they were.
+func writeIndexVectors(t *testing.T) {
+	rng := rand.New(rand.NewSource(20261130))
 	// ----- ID hashes and the ID table -----
 	var ids vectorFile
 	for n := 0; n < 200; n++ {
@@ -529,10 +531,73 @@ func writeIndexVectors(t *testing.T, rng *rand.Rand) {
 		}
 		ids.row("T %d %d [%s] [%s] [%s] %s [%s]", table.len(), len(table.keys), strings.Join(adds, ","), strings.Join(each, ","), strings.Join(looks, ","), vx(filter), strings.Join(contains, ","))
 	}
+	// Offsets at the top of the range. The table stores an offset plus one and reads zero as an empty slot, so the
+	// largest offset wraps to zero: the entry is counted and then never found. Rust must wrap the same way.
+	for n := 0; n < 24; n++ {
+		var table idTable
+		var adds, each, looks []string
+		hs := hashes([]int{1, 2, 5, 13, 30}[n%5])
+		for i, h := range hs {
+			off := []uint64{math.MaxUint64, math.MaxUint64 - 1, 0, 1, uint64(i), math.MaxUint64}[(i+n)%6]
+			table.add(h, off)
+			adds = append(adds, fmt.Sprintf("%d:%d", h, off))
+		}
+		table.each(func(h, off uint64) { each = append(each, fmt.Sprintf("%d:%d", h, off)) })
+		for _, h := range append(hs, hashes(3)...) {
+			var found []string
+			table.lookup(h, func(off uint64) bool {
+				found = append(found, fmt.Sprint(off))
+				return false
+			})
+			looks = append(looks, fmt.Sprintf("%d/0=%s", h, strings.Join(found, "+")))
+		}
+		filter := makeIDFilter(&table)
+		var contains []string
+		for _, h := range hs {
+			contains = append(contains, fmt.Sprintf("%d=%t", h, filter.contains(mixFilterHash(h))))
+		}
+		ids.row("T %d %d [%s] [%s] [%s] %s [%s]", table.len(), len(table.keys), strings.Join(adds, ","), strings.Join(each, ","), strings.Join(looks, ","), vx(filter), strings.Join(contains, ","))
+	}
 	for n := 0; n < 200; n++ {
 		h, bits := oddUint64(rng), uint32([]uint64{8, 32, 4096, 1 << 25, uint64(rng.Intn(1<<20) + 8)}[rng.Intn(5)])
 		pos, step := filterPositions(h, bits)
 		ids.row("P %d %d %d %d %d", h, bits, mixFilterHash(h), pos, step)
+	}
+	// Filters of every small length and of odd lengths: a filter read from a file has whatever length the file has.
+	for _, size := range []int{1, 2, 3, 5, 7, 9, 13, 31, 33, 127, 255, 257, 1021} {
+		bits := uint32(size * 8)
+		for _, h := range []uint64{0, 1, math.MaxUint32, math.MaxUint32 + 1, math.MaxUint64, oddUint64(rng), oddUint64(rng), oddUint64(rng)} {
+			pos, step := filterPositions(h, bits)
+			ids.row("P %d %d %d %d %d", h, bits, mixFilterHash(h), pos, step)
+		}
+		for _, fill := range []int{0, 1, 2, 3} { // no bits, some, most, all
+			f := make(idFilter, size)
+			for i := range f {
+				f[i] = []byte{0, byte(rng.Intn(256)), byte(rng.Intn(256)) | byte(rng.Intn(256)) | byte(rng.Intn(256)), 0xff}[fill]
+			}
+			var contains []string
+			for _, h := range []uint64{0, 1, math.MaxUint32, math.MaxUint64, oddUint64(rng), oddUint64(rng), oddUint64(rng), oddUint64(rng), oddUint64(rng), oddUint64(rng)} {
+				contains = append(contains, fmt.Sprintf("%d=%t", h, f.contains(h)))
+			}
+			ids.row("F %s [%s]", vx(f), strings.Join(contains, ","))
+		}
+	}
+	ids.row("F %s [%s]", vx(nil), "0=false,1=false,18446744073709551615=false")
+	// The filter's size is four bytes for each entry up to maxFilterBytes. Tables around that cap are too large to
+	// write out, so entry i is the hash mixFilterHash(i+1) at offset i, and the row gives the filter's length and
+	// CRC-32C and the answers for hashes that are in the table and hashes that are not.
+	for _, entries := range []int{maxFilterBytes/4 - 1, maxFilterBytes / 4, maxFilterBytes/4 + 1, maxFilterBytes/4 + 70000} {
+		var table idTable
+		for i := 0; i < entries; i++ {
+			table.add(mixFilterHash(uint64(i)+1), uint64(i))
+		}
+		filter := makeIDFilter(&table)
+		var contains []string
+		for _, i := range []uint64{0, 1, 2, uint64(entries) - 1, uint64(entries), uint64(entries) + 1, 1 << 40, 1<<40 + 1, 1<<40 + 2, 1<<40 + 3, 1<<40 + 4, 1<<40 + 5} {
+			h := mixFilterHash(i + 1)
+			contains = append(contains, fmt.Sprintf("%d=%t", h, filter.contains(mixFilterHash(h))))
+		}
+		ids.row("C %d %d %d %d %08x [%s]", entries, table.len(), len(table.keys), len(filter), crc32.Checksum(filter, crcTable), strings.Join(contains, ","))
 	}
 	ids.write(t, "idtable-go.txt")
 
@@ -593,7 +658,7 @@ func writeIndexVectors(t *testing.T, rng *rand.Rand) {
 		var q []string
 		for pid := uint32(0); pid < 7; pid++ {
 			q = append(q, fmt.Sprintf("%d=%d/%d", pid, x.first(pid), x.count(pid)))
-			for _, off := range []uint64{0, x.first(pid), x.first(pid) + x.count(pid)/2, x.first(pid) + x.count(pid) - 1, x.first(pid) + x.count(pid), uint64(rng.Intn(80))} {
+			for _, off := range []uint64{0, x.first(pid), x.first(pid) + x.count(pid)/2, x.first(pid) + x.count(pid) - 1, x.first(pid) + x.count(pid), uint64(rng.Intn(80)), math.MaxUint64, math.MaxUint64 - 1, 1 << 63} {
 				at, ok := x.find(pid, off)
 				q = append(q, fmt.Sprintf("%d@%d=%d/%t", pid, off, at, ok))
 			}
@@ -635,6 +700,27 @@ func writeIndexVectors(t *testing.T, rng *rand.Rand) {
 			scores = append(scores, fmt.Sprintf("%d=%d", id, f.score(id)))
 		}
 		misc.row("FREQ [%s] [%s]", strings.Join(seenIDs, ","), strings.Join(scores, ","))
+	}
+	// Saturation: a counter stops at 255, and every counter is halved on each 512th access. One ID alone reaches
+	// both; the lengths sit on each side of 255 and of each halving.
+	for _, k := range []int{254, 255, 256, 300, 510, 511, 512, 513, 767, 1023, 1024, 1025, 2047, 2048, 4096, 5000} {
+		for _, others := range []int{0, 1} {
+			var f indexFrequency
+			var seenIDs, scores []string
+			ids := []uint64{oddUint64(rng), oddUint64(rng)}
+			for i := 0; i < k; i++ {
+				id := ids[0]
+				if others == 1 && i%64 == 63 {
+					id = ids[1]
+				}
+				f.observe(id)
+				seenIDs = append(seenIDs, fmt.Sprint(id))
+			}
+			for _, id := range append(ids, 0) {
+				scores = append(scores, fmt.Sprintf("%d=%d", id, f.score(id)))
+			}
+			misc.row("FREQ [%s] [%s]", strings.Join(seenIDs, ","), strings.Join(scores, ","))
+		}
 	}
 	for n := 0; n < 30; n++ {
 		var li locationIndex

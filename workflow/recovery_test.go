@@ -37,6 +37,11 @@ func TestAbruptExit(t *testing.T) {
 			if e := syscall.Kill(os.Getpid(), syscall.SIGKILL); e != nil {
 				panic(e)
 			}
+			// SIGKILL need not stop this thread before its next instruction: wait for it,
+			// so nothing past the kill point can run.
+			for {
+				time.Sleep(time.Second)
+			}
 		}
 		// Hook the boundary while the writer is idle.
 		if os.Getenv("WORKFLOW_KILL_AT") == "after-sync" {

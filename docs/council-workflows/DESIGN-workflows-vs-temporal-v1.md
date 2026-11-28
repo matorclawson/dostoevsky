@@ -5,7 +5,7 @@ changes that go into v2). For external review. November 27, 2026.
 
 **How to read the numbers.** **[measured]** has a receipt named beside it. **[documented]** is what Temporal's own documentation says,
 read on 27 November 2026, not tested by us. Everything else is **[proposed]**. We have **not run Temporal**, and nothing in this
-document is a performance comparison. Pull request 84, which this builds on, is approved for merge.
+document is a performance comparison. Pull request 84, which this builds on, is merged.
 
 ---
 
@@ -72,6 +72,10 @@ Sources: [persistence](https://docs.temporal.io/temporal-service/persistence),
 [multi-cluster](https://docs.temporal.io/temporal-service/multi-cluster-replication),
 [omes](https://github.com/temporalio/omes). The worker-versioning and workflow-limits pages were not read.
 
+## 1a. Licenses
+
+The Restate server is licensed under the Business Source License 1.1, which its own text says is not an Open Source license; Dostoevsky is MIT. (Restate license text: <https://github.com/restatedev/restate/blob/85c633357c22800d7e689e7506c19fdfb4c01a66/LICENSE>, checked November 28, 2026.)
+
 ## 2. Parity table
 
 "Today" is Ephemeral v0.3.0 engine code (main `dbf27040`, from source). "v1" is the proposed module in the v1 design.
@@ -115,9 +119,9 @@ to see and cancel runs (CLI first); retention and purge; backup and restore; met
 
 | Claim to test | Why it is plausible | What is known now |
 |---|---|---|
-| Footprint and operating cost | No external database or search cluster; one process | Publishing only, not workflows: the HTTP gateway peaked at 13 to 36 MiB in 120 s trials **[measured]** (source `d7b967a`, `HOST.log` sha256 `f94a43ce…0ac1ca`); the native server used more memory than JetStream and Redis in later runs, so no "smallest" claim is made. Says nothing about long histories |
+| Footprint and operating cost | No external database or search cluster; one process | Publishing only, not workflows: the HTTP gateway peaked at 13 to 36 MiB in 120 s trials **[measured]** (source `d7b967a`, `HOST.log` sha256 `f94a43ce…0ac1ca`); the native server used more memory than JetStream and Redis in a later publishing comparison (table in the Kafka design, same directory), so no "smallest" claim is made. Says nothing about long histories |
 | Start and activity-dispatch latency | No network hop to a database; one durable write per transition | None for the combined product |
-| Cold start | Open a directory, no schema service | Segmented storage reopen was measured for the stream core only (8.6 to 12.4 ms to 10M records); it excludes workflow state |
+| Cold start | Open a directory, no schema service | For the stream core only, not for this design: segmented storage reopened in 8.6 to 12.4 ms in our run on Linux ARM64 (candidate `ed99753f`, store files evicted from the page cache, directory entries still cached, 160,000 to 10M records, 512-byte values). Excludes workflow state, which has not been measured |
 | Workflows next to streams | One server can serve both | Design only. They use **separate stores** with no shared commit; a stream-triggered workflow starts through `StartOnce` keyed by (topic, partition, offset) |
 
 For scale, the only workflow figure we have: Ephemeral on SQLite completed 160.8 one-activity runs per second, p99 10.48 ms,

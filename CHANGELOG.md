@@ -27,6 +27,11 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 - Reduced allocation during segmented publication through bounded frame-buffer reuse, frame size reservation and fewer intermediate batch allocations.
 - Added paired fresh-publish benchmarks, single-producer storage timing, a Linux sync comparison, and process-kill recovery tests for one and 32 segmented publishers. See the [benchmark report](benchmarks/fresh/README.md).
 
+## Unreleased — review fixes for the workflow candidate
+
+- An interrupted first initialization of a segmented or workflow directory can be started again.
+- A workflow directory in the older format is converted only after its history replays.
+
 ## Unreleased — cache admission and hot-topic analytics
 
 - Added optional frequency-based admission for verified sealed indexes, charged to the ID-table budget. FIFO remains the default. A duplicate receipt can reuse the index already decoded during lookup.

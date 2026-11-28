@@ -270,7 +270,7 @@ dev-bench-workflow-reopen: ## Measure fresh-process reopen memory versus retaine
 
 .PHONY: dev-test-workflow-boundary dev-bench-workflow-boundary
 dev-test-workflow-boundary: ## Exercise workflow commit witnesses, corruption and rollover kills
-	@"$(GO)" test -race -count=1 -v -run 'WorkflowBoundary|WorkflowWitness|WorkflowGroupCrashImages|AbruptExit' . ./workflow
+	@"$(GO)" test -race -count=1 -v -run 'WorkflowBoundary|WorkflowWitness|WorkflowGroupCrashImages|AbruptExit|MissingUncommittedSuccessor' . ./workflow
 
 dev-bench-workflow-boundary: ## Compare workflow durability costs against aecbb08 on a disposable disk
 	@sh scripts/workflow-boundary-bench.sh

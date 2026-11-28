@@ -112,19 +112,26 @@ type Store struct {
 }
 
 func Open(dir string) (*Store, error) {
-	n, e := d.OpenWorkflowLog(dir)
+	s := &Store{calls: make(chan command, 16), stopped: make(chan struct{}), defs: make(map[definition][]Step), runs: make(map[string]*run), queues: make(map[string]*dueQueue), now: time.Now}
+	n, e := d.OpenWorkflowLogReplaying(dir, s.replay)
 	if e != nil {
 		return nil, e
 	}
-	s := &Store{node: n, calls: make(chan command, 16), stopped: make(chan struct{}), defs: make(map[definition][]Step), runs: make(map[string]*run), queues: make(map[string]*dueQueue), now: time.Now, appendGroup: n.PublishBatch}
+	s.node, s.appendGroup = n, n.PublishBatch
+	go s.serve()
+	return s, nil
+}
+
+// replay applies every recorded transition. It runs before an older directory format is
+// converted, so a log that does not replay is left as it was.
+func (s *Store) replay(n *d.WorkflowLog) error {
 	for off := int64(0); ; {
 		page, err := n.ReadBatch(context.Background(), d.Partition{Topic: topic}, off, d.Limits{Records: 128, Bytes: 1 << 20}, false)
 		if errors.Is(err, d.ErrEmpty) {
-			break
+			return nil
 		}
 		if err != nil {
-			n.Close()
-			return nil, err
+			return err
 		}
 		for _, r := range page.Records {
 			var tr transition
@@ -132,14 +139,11 @@ func Open(dir string) (*Store, error) {
 				err = s.apply(tr)
 			}
 			if err != nil {
-				n.Close()
-				return nil, fmt.Errorf("workflow transition %d: %w", r.Offset, err)
+				return fmt.Errorf("workflow transition %d: %w", r.Offset, err)
 			}
 		}
 		off = page.Next
 	}
-	go s.serve()
-	return s, nil
 }
 func (s *Store) Close() error {
 	s.once.Do(func() { s.call(nil); <-s.stopped; s.closeErr = s.node.Close() })

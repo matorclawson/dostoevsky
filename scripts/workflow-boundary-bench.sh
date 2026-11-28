@@ -4,7 +4,7 @@ set -eu
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/base"
-git archive aecbb08 | tar -x -C "$tmp/base"
+git archive bcc0238 | tar -x -C "$tmp/base"
 export GOMAXPROCS=${GOMAXPROCS:-4}
 (cd "$tmp/base" && "${GO:-go}" test -c -o "$tmp/baseline" ./workflow)
 "${GO:-go}" test -c -o "$tmp/candidate" ./workflow

@@ -9,6 +9,9 @@ version = "0.0.0"
 [[package]]
 name = "dostoevsky-core"
 version = "0.0.0"
+dependencies = [
+ "dostoevsky-format",
+]
 
 [[package]]
 name = "dostoevsky-format"

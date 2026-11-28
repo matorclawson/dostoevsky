@@ -4,6 +4,7 @@
 //! row of the port in which it is filled in. See `rust/PORT-NOTES.md` for the full map.
 
 pub mod errors;
+pub mod seam;
 
 pub mod admission;
 pub mod backup;

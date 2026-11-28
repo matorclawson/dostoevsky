@@ -1,0 +1,420 @@
+{
+ "about": "A process killed at workflow.before_append while starting a second segment: the operation is absent after reopening.",
+ "covers": [],
+ "formats": [
+  "workflow"
+ ],
+ "steps": [
+  {
+   "do": "wf_open",
+   "dir": "$root/roll"
+  },
+  {
+   "do": "wf_register",
+   "name": "work",
+   "version": 1,
+   "steps": [
+    {
+     "kind": "activity",
+     "name": "send"
+    }
+   ]
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r0",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r1",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r2",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r3",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r4",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r5",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r6",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r7",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r8",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r9",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r10",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r11",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r12",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r13",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r14",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r15",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r16",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r17",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r18",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r19",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r20",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r21",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r22",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r23",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r24",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r25",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r26",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r27",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r28",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r29",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r30",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r31",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r32",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r33",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000
+  },
+  {
+   "do": "absent",
+   "file": "roll/segments/seg-0000000000000002.log"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "roll/journal.v1",
+   "as": "witness"
+  },
+  {
+   "do": "arm",
+   "point": "workflow.before_append",
+   "kill": true,
+   "skip": 0
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r34",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000,
+   "dies": true
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "absent",
+   "file": "roll/segments/seg-0000000000000002.log"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "roll/journal.v1",
+   "as": "witness"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/roll"
+  },
+  {
+   "do": "absent",
+   "file": "roll/segments/seg-0000000000000002.log"
+  },
+  {
+   "do": "wf_history",
+   "run": "r0",
+   "after": 0,
+   "limit": 10,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "r33",
+   "after": 0,
+   "limit": 10,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "r34",
+   "after": 0,
+   "limit": 10,
+   "expect": {
+    "kinds": []
+   }
+  },
+  {
+   "do": "wf_start_once",
+   "run": "r34",
+   "name": "work",
+   "version": 1,
+   "queue": "q",
+   "input_size": 189000,
+   "expect": {
+    "created": true
+   }
+  },
+  {
+   "do": "mark",
+   "file": "roll/segments/seg-0000000000000002.log",
+   "as": "after"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "wf_open",
+   "dir": "$root/roll"
+  },
+  {
+   "do": "wf_history",
+   "run": "r0",
+   "after": 0,
+   "limit": 10,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "r34",
+   "after": 0,
+   "limit": 10,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled"
+    ]
+   }
+  }
+ ]
+}

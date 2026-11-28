@@ -63,7 +63,17 @@ Workflow cases have `"formats": ["workflow"]`. Their runner steps: `"save": {NAM
 `"$NAME"` in a later one (a name nothing saved fails the case), and `sleep_ms`.
 
 The `workflow-kill-*` cases kill the driver at each of the four workflow commit points during a start, poll, finish,
-failure, lease expiry and signal; `workflow-fail-append` makes the append fail instead.
+failure, lease expiry and signal; `workflow-fail-append` makes the append fail instead. Before reopening, the kill cases
+compare the files: whether the witness changed, and with `compare` (two `mark` sizes, `equal` or `less`) how much of the
+group reached the segment. `bytes_changed` is the opposite of `bytes_unchanged`. They show where a point sits relative
+to the bytes written, not whether those bytes were synced. After the post-witness kill the segment, witness and replayed
+history must equal those of a second store given the same requests without the kill (`fix_inputs`, `equal_files`,
+`wf_snapshot` with `runs`, `same`).
+
+The `workflow-rollover-*` cases kill at each point during the commit that starts a second segment. A start step may give
+`input_size` instead of `input`.
+
+The other workflow cases stay within one segment, and no case covers a third segment.
 
 Not covered for workflows: concurrent polls, size limits, damaged and half-initialized stores, and any past workflow
 fix (their `covers` lists are empty).

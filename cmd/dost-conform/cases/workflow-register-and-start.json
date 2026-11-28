@@ -236,7 +236,7 @@
   {
    "do": "wf_poll",
    "queue": "q",
-   "lease_ms": 4611686018427387904,
+   "lease_ms": 4611686018427387905,
    "error": "invalid"
   },
   {

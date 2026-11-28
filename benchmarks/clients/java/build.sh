@@ -10,6 +10,6 @@ out=${1:-.dev/bench-java}
 sh "$here/fetch-deps.sh" "$out/lib"
 mkdir -p "$out/classes"
 "${JAVAC:-javac}" --release 17 -encoding UTF-8 -cp "$out/lib/*" -d "$out/classes" \
-  clients/java/src/main/java/io/github/rodriveracom/dostoevsky/Client.java \
+  clients/java/src/main/java/io/github/rodriveracom/dostoevsky/*.java \
   "$here"/src/io/github/rodriveracom/dostoevsky/bench/*.java
 echo "built $out/classes"

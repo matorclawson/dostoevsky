@@ -2,6 +2,14 @@
 
 Dostoevsky through its gateway, from each language's client, against that language's standard clients for Kafka, NATS JetStream and Redis Streams, on the workload of the Go comparison (512-byte records, 1, 8 and 32 producers, acknowledged only after the engine's durable acknowledgment, no retries, every acknowledged record read back). The plan and its rulings: `PLAN-language-benchmarks-v1.md` in the evidence record. Dostoevsky crosses HTTP/1.1 on loopback; the others use their native protocols, and every chart says so. The control rows (Go embedded and Go through the gateway, labeled "gateway end to end (HTTP, process boundary)") come from `benchmarks/comparison/run.sh`.
 
+### Native and batched comparisons
+
+Select `CLIENT_ENGINES="native nats kafka redis"` and point `BENCH_NATIVE_SERVER` at the separately built `./cmd/dostoevsky-server`. All four benchmark workers support `native`. Python opens one synchronous connection per worker. Java, Rust and JavaScript multiplex a shared connection. The TypeScript client uses the same runtime as JavaScript.
+
+For the JavaScript worker, set `BENCH_BATCH_SIZE=16` to submit up to 16 records per producer turn. Kafka sends one acknowledged record batch on partition zero. The other clients pipeline individual publications. The reported percentiles measure completion of a whole group. Group size 1 is the original per-record workload. Every successful acknowledgment remains subject to byte-for-byte readback.
+
+The driver records elapsed milliseconds until each newly provisioned engine passes its engine-specific readiness probe, peak server RSS at that point, and lifetime server peak. Kafka startup includes storage formatting and topic readiness. Test recovery of populated storage separately.
+
 | piece | where |
 |---|---|
 | the server driver, one implementation for the Go comparison and these runs | `benchmarks/embedded/cmd/serve` |

@@ -9,7 +9,7 @@
 
 **Once Dostoevsky says yes, the record is on disk: durable streaming from one small Go server with no dependencies.**
 
-Dostoevsky keeps topics, idempotent publish and consumer checkpoints in one fsync-backed journal. Run it as a server and call it from Python, JavaScript/TypeScript, Java and Rust over HTTP, or embed it in a Go program. A native binary protocol server is in review and is not on `main` yet ([status](#status)).
+Dostoevsky keeps topics, idempotent publish and consumer checkpoints in one fsync-backed journal. Run it as a server and call it from Python, JavaScript/TypeScript, Java and Rust over HTTP, or embed it in a Go program. A native binary protocol server (`dostoevsky-server`) and native clients are on `main` too ([status](#status)); the quick start below uses the HTTP gateway.
 
 <p align="center">
 <img src="docs/img/quickstart.svg" alt="Terminal: a job is published and read, the gateway is killed with SIGKILL and restarted, and publishing the same ID again returns the same offset.">
@@ -62,7 +62,7 @@ JavaScript, TypeScript, Java and Rust: [client guide](docs/clients.md). In Go, [
 * **Library or server.** The same journal runs inside a Go program or behind a gateway with clients for Python, JavaScript, TypeScript, Java and Rust.
 * **Small.** Standard library only. In the published [publisher gate](docs/publisher-gate.md) on Linux AMD64, median peak memory at 32 producers was 11.1 MiB, against 43.6 MiB for embedded JetStream.
 
-**Choose something else if** you need replication or automatic failover (each partition has one durable copy), the highest server throughput (Redis Streams was ahead in every cell [we measured](#measured-results-language-clients)), or a fast restart over a long history (Dostoevsky replays its whole journal when it opens).
+**Choose something else if** you need replication or automatic failover (each partition has one durable copy), the highest server throughput (over the HTTP gateway, Redis Streams was ahead in every cell [we measured](#measured-results-language-clients)), or a fast restart over a long history with the default storage (it replays its whole journal when it opens; the opt-in [segmented store](docs/segmented-recovery.md) does not).
 
 <p align="center">
 <img src="docs/img/architecture.svg" alt="Producers feed a group commit queue, which writes checksummed frames to the journal with one fdatasync per group before acknowledging. Consumer groups commit state and offset together. A notifier wakes subscribers.">
@@ -139,14 +139,14 @@ Synchronous, fsync-backed publishes of 512-byte records to one topic, five alter
 
 ## Status
 
-| Piece | State on 27 November 2026 |
+| Piece | State on 28 November 2026 |
 |---|---|
 | Embedded Go library | on `main` |
 | HTTP gateway; Python, JavaScript/TypeScript, Java and Rust HTTP clients | on `main` |
 | [Wire protocol v1](docs/wire-v1.md) (draft) and its Go codec | on `main` |
-| JavaScript/TypeScript native client (preview) | on `main`; needs the native server, which is not |
-| Native protocol server ([PR 72](https://github.com/rodriveracom/dostoevsky/pull/72)) | in review, council security review pending |
-| Native clients: Python ([PR 62](https://github.com/rodriveracom/dostoevsky/pull/62)), Rust ([PR 75](https://github.com/rodriveracom/dostoevsky/pull/75)), Java ([PR 77](https://github.com/rodriveracom/dostoevsky/pull/77)) | in review; wait on PR 72 |
+| Native protocol server (`dostoevsky-server`) | on `main` |
+| Native clients: JavaScript/TypeScript, Python, Rust, Java (preview) | on `main` |
+| [Segmented storage](docs/segmented-recovery.md) | on `main`, opt-in; not the default |
 
 ## Embed it in Go
 
@@ -186,7 +186,8 @@ Next: the [getting started guide](docs/getting-started.md) and [using the librar
 ## Limits
 
 * Each partition has **one durable copy**. An offline owner makes its partitions unavailable, and disk loss needs a backup. There is no replication, automatic failover or automatic retention.
-* History stays until an application calls `Retain`. Disk use, restart time and index memory grow with it.
+* History stays until an application calls `Retain`. With the default storage, disk use, restart time and index memory grow with it.
+* For large retained histories, the opt-in segmented store loads a checkpoint and replays only the active tail; the [storage guide](docs/segmented-recovery.md) covers migration, verification and rollback.
 * Values are limited to 1 MiB and keys to 4096 bytes.
 * The gateway token grants access to every topic. [Read this before exposing the gateway](docs/clients.md#security-read-this-before-exposing-the-gateway).
 

@@ -23,6 +23,8 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
   } catch (e) { console.error(e.message); return 2; }
   // A raw engine error can carry anything: never under the driver, which keeps the last stderr line of a failed worker.
   if (args["debug-errors"] && env.BENCH_DRIVER) { console.error("--debug-errors is for a person at a terminal; it is refused under the benchmark driver"); return 2; }
+  const batch = Number(env.BENCH_BATCH_SIZE ?? 1);
+  if (!Number.isSafeInteger(batch) || batch < 1 || batch > 256) { console.error("BENCH_BATCH_SIZE must be 1 to 256"); return 2; }
   const workers = Number(args.workers), target = Number(args.target), windowS = Number(args.window);
   // Whole numbers a double holds exactly, and a finite window: "--workers 1e9999" or "--target 2.5" is a usage error.
   if (!args.engine || !args.addr || !Number.isSafeInteger(workers) || workers < 1 || !Number.isSafeInteger(target) || target < 1
@@ -42,7 +44,7 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
   }
   let res, verified = 0;
   try {
-    res = await core.runWorkload(adapter, workers, target, windowS);
+    res = await core.runWorkload(adapter, workers, target, windowS, undefined, batch);
     if (res.stop !== core.STOP.failed || res.records.length > 0) { // also read back what a failed run acknowledged
       const why = await core.verify(adapter, res.records, args["debug-errors"] ? (where, e) => console.error("debug:", where, e) : undefined);
       if (why) { res.stop = core.STOP.verify; res.detail = why; } else verified = res.acked;
@@ -50,7 +52,7 @@ export async function main(argv, env = process.env, out = (s) => console.log(s),
   } finally {
     await adapter.close();
   }
-  out(core.receiptLine(`javascript-${args.engine}`, workers, res, verified, adapter.clientName, core.peakRssKiB(), adapter.clientBuild ?? "n/a"));
+  out(core.receiptLine(`javascript-${args.engine}`, workers, res, verified, adapter.clientName, core.peakRssKiB(), adapter.clientBuild ?? "n/a") + (batch > 1 ? ` batch_size=${batch} latency_unit=batch` : ""));
   return 0;
 }
 

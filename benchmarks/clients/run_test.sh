@@ -21,7 +21,7 @@ if [ "\${STUB_SERVE_DIES:-}" = "\$2" ]; then echo "FAILED: stub" >&2; exit 1; fi
 if [ -n "\${STUB_SERVE_HANG:-}" ]; then trap '' TERM; while :; do sleep 1; done; fi
 if [ -n "\${STUB_SERVE_STUCK:-}" ]; then
   # an "engine" in a process group of its own, as serve's engine is; READY names its pid
-  set -m; sleep 600 & epid=\$!; set +m
+  python3 -c 'import os; os.setsid(); os.execlp("sleep", "sleep", "600")' & epid=\$!
   echo \$epid > "$t/engine.pid"
   echo "READY addr=127.0.0.1:12345 pid=\$epid token=$SECRET"
   trap '' TERM; while :; do sleep 1; done
@@ -114,7 +114,7 @@ check "a worker's child does not inherit the server's stdin: the server stops at
 rm -f "$t/engine.pid"
 run BENCH_ROUNDS=1 BENCH_SKIP_SMOKE=1 STUB_SERVE_STUCK=1 STOP_WAIT=2 CLIENT_ENGINES=dostoevsky
 epid=$(cat "$t/engine.pid" 2>/dev/null)
-check "when a hung serve is killed, its engine's process group goes with it" "[ -n \"$epid\" ] && ! kill -0 $epid 2>/dev/null"
+check "when a hung serve is killed, its engine's process group goes with it" "[ -n \"$epid\" ] && ! ps -o stat= -p $epid 2>/dev/null | grep -q '^[[:space:]]*[^Z[:space:]]'"
 
 # No program the script runs may see the token in its arguments (ps can read them): every child's argv is logged by a wrapper.
 mkdir -p "$t/bin"; : > "$t/children.log"

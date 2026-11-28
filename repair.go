@@ -27,6 +27,8 @@ const (
 )
 
 var (
+	// ErrSegmentedJournal indicates the legacy inspection or repair tool was given a segmented store.
+	ErrSegmentedJournal = errors.New("use VerifySegments to inspect a segmented store")
 	// ErrLaterFrames is returned by RepairJournal when frames that verify follow the damage: truncating would discard
 	// writes that were very likely acknowledged.
 	ErrLaterFrames = errors.New("frames that verify follow the damage")
@@ -56,7 +58,20 @@ func openForRepair(dir string) (*journal, error) {
 	if _, err := os.Stat(filepath.Join(dir, "journal.v1")); err != nil {
 		return nil, fmt.Errorf("no journal to inspect: %w", err)
 	}
-	return openJournal(dir)
+	j, err := openJournal(dir)
+	if err != nil {
+		return nil, err
+	}
+	var marker [len(segmentMarker)]byte
+	if _, e := j.file.ReadAt(marker[:], 0); e != nil && !errors.Is(e, io.EOF) {
+		j.close()
+		return nil, e
+	}
+	if string(marker[:]) == segmentMarker {
+		j.close()
+		return nil, ErrSegmentedJournal
+	}
+	return j, nil
 }
 
 // frameAt checks the frame starting at off. It returns the damage found there, or the frame's total length.

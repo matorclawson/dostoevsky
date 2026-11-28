@@ -18,4 +18,20 @@ A call that fails on a reused connection before any reply is repeated once on a 
 
 Errors are `Error::Api(status, word)` (`conflict`, `expired`, `limit`, ...), `Error::Transport` or `Error::InvalidResponse`. Responses are capped at 1 MiB.
 
+## Native protocol client (preview)
+
+`dostoevsky_client::native::NativeClient` speaks the binary wire protocol (`docs/wire-v1.md`) on one connection with many requests in flight. **No released server speaks it yet.** Plaintext only, to a loopback address or a unix socket (the standard library has no TLS). One client can be shared between threads; it runs one extra thread to read replies.
+
+```rust
+use dostoevsky_client::native::NativeClient;
+let c = NativeClient::connect("127.0.0.1:8788", &token)?;          // or NativeClient::connect_unix(path, &token)
+let pending = c.publish_nowait("jobs", b"payload", "k", "once")?;  // pipelined; pending.wait() gives the receipt
+let ack = pending.wait()?;
+let rec = c.read("jobs", ack.partition, ack.offset, std::time::Duration::from_secs(1))?;
+```
+
+**A limit of reply matching.** Request ids are random, so a server is very unlikely to answer a request whose header it has not received (each guess succeeds at about pending / 2^32, and a wrong one ends the connection). On unix they come from `/dev/urandom`. **On Windows they are unpredictable but not cryptographic**: the standard library offers no random bytes directly, so they are a hash keyed from the system's generator, and this crate takes no dependency to do better. A server that has received part of a request can still answer it early, and if the reading thread is delayed the client may accept that answer, for example a publish receipt for a record the server never had in full. Only a server that is broken or hostile does this, and such a server holds the token and can return any answer anyway.
+
+Nothing is retried and there is no reconnect. `NativeError::ConnectionLost { sent: true }` means the request may have taken effect. A reply is accepted only within 40 s of its request, and an expired request ends the connection within about a second even if nobody waits for it. The 5 s connect-and-handshake limit does not cover name resolution or the unix-socket connect itself.
+
 Test (no server needed, local stub): `cargo test --offline --manifest-path clients/rust/Cargo.toml`

@@ -78,7 +78,7 @@ const nowNs = () => process.hrtime.bigint();
 // Publish with `workers` concurrent producers until `target` messages are acknowledged, the window
 // (seconds) ends, or a publish fails. The failing publish is not counted and nothing is retried.
 // Publishes in flight when the stop is decided still complete and are counted.
-export async function runWorkload(adapter, workers, target, windowSeconds, clock = nowNs) {
+export async function runWorkload(adapter, workers, target, windowSeconds, clock = nowNs, batchSize = 1) {
   const state = { next: 0, stop: null, ambiguous: false };
   const hist = new Hist();
   const records = [];
@@ -97,7 +97,27 @@ export async function runWorkload(adapter, workers, target, windowSeconds, clock
       if (state.stop !== null) return;
       const i = state.next;
       if (i >= target) { setStop(STOP.reached); return; }
-      state.next = i + 1;
+      const size = Math.min(batchSize, target - i);
+      state.next += size;
+      if (batchSize > 1) {
+        const values = Array.from({ length: size }, (_, j) => payload(i + j));
+        const begin = nowNs();
+        try {
+          if (adapter.publishBatch) {
+            const offsets = await adapter.publishBatch(values);
+            if (offsets.length !== size) throw new Error("incomplete batch acknowledgement");
+            offsets.forEach((offset, j) => records.push([i + j, BigInt(offset)]));
+          } else {
+            const replies = await Promise.allSettled(values.map(value => adapter.publish(value)));
+            replies.forEach((reply, j) => {
+              if (reply.status === "fulfilled") records.push([i + j, BigInt(reply.value)]);
+              else fail(`publish ${i+j}: ${reason(reply.reason)}`, reply.reason instanceof AmbiguousOutcome);
+            });
+          }
+          hist.addNs(nowNs() - begin);
+        } catch (e) { fail(`batch ${i}: ${reason(e)}`, e instanceof AmbiguousOutcome); }
+        continue;
+      }
       const begin = nowNs();
       let offset;
       try {

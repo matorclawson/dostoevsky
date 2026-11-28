@@ -4,6 +4,39 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — review fixes for the council candidate
+
+- `Open` syncs the parent of every directory it creates.
+- `dostoevsky-server` refuses a unix socket path below a directory another user can rewrite.
+- A segmented store refuses records it could not index (a segment checkpoint near 4 GiB) instead of acknowledging them.
+
+## Unreleased — publishing with retained producer IDs
+
+- Sealed segments now have optional per-segment Bloom filters for producer ID lookups. Full-record comparison still determines duplicate receipts and conflicts. Missing, damaged or mismatched hints fall back to the verified exact index. Retention removes expired hints.
+- Added a 64 MiB budget for resident filter bits and an 8 MiB target for cached exact ID tables, with room for one oversized table. Retry lookups read directly from the matching segment.
+- Added `PrepareIDFilters` and offline `dost-storage -mode prepare-ids`, deep-history publish and rollover measurements, and native-protocol peer benchmarks with identified messages and restart verification.
+
+## Unreleased — segmented storage recovery
+
+- Added opt-in segmented storage to the public Go node and native server, with format discovery on reopen and durable checkpoints for topology, offsets, floors and consumer groups.
+- Added range validation for missing segment files, active-tail recovery, bounded index caching, index reconstruction and a sequential batch reader over sealed segments. Retention reclaims fully expired contiguous prefix segments.
+- Added staged migration from existing journals, backward-compatible backup export, a full integrity scan and the offline `dost-storage` tool.
+- Added recovery, missing-file, migration and rollback tests, public API scale and catalog benchmarks, an eight-producer process-kill check and development Make targets. See the [storage guide](docs/segmented-recovery.md).
+
+## Unreleased — 27 November 2026 council recovery candidate
+
+- Integrated the strict journal scanner from PR 81. Recovery verifies framing and checksums, extracts the fields needed to index canonical records, and falls back to the existing JSON decoder for other journal entries.
+- Compressed physical locations for longer partitions. Each block anchors every 32 entries, bounding the number of entries decoded on a random read. Small partitions retain direct locations.
+- Reduced memory for producer IDs by indexing process-keyed fingerprints. A hit reads the full producer ID from the existing journal. Collisions are chained and compared exactly before a publish returns an old receipt or a conflict.
+- Preserved the journal format, acknowledgment boundary and public Go API. Added tests for packed-location boundaries and deliberate fingerprint collisions.
+- Added a Linux history benchmark for separate seed, reopen and full payload readback processes, with optional decimal or 32-character producer IDs. Added native socket comparison, fresh-ready time, boot memory, and verified batched JavaScript trials. Kafka uses a record batch on one partition. Socket clients pipeline individually acknowledged records.
+
+### Native transport staging
+
+- Integrated the native server from PR 72 and native client source from PRs 62, 75 and 77 alongside the JavaScript/TypeScript client. Added native benchmark adapters for Python, Java, Rust and JavaScript.
+- Limited concurrent read and position tasks across connections. Added CLI options for the read-task budget and optional journal byte ceiling. Added coverage for capacity recovery, writes while reads are saturated, and publication at the journal ceiling.
+- Added a process-kill test with concurrent native publishers, byte-for-byte readback, and idempotent retry of every confirmed record. Added a matching peer crash harness that restarts JetStream, Redis and Kafka on their original storage and verifies every observed acknowledgment. Added the upstream hash for the pinned CPython 3.12 AMD64 Kafka benchmark wheel.
+
 ## 0.1.0 — Embedded topics, durable storage, and stream processing
 
 - **Added an embedded Go module.** Reviewed the supplied Faust source and its word-count example, then implemented keyed streams and recoverable processor state in Go. A single-process application opens a data directory. Kafka, Flink, RocksDB, and a separately deployed broker are unnecessary.
@@ -108,3 +141,6 @@ Integrates the post-0.3.0 publishing work (ZIP SHA-256 `fb422713f1b5550fa8c30ae9
 - **Repairing a damaged journal.** `Open` still stops at a frame that does not verify. New: `InspectJournal`, `RepairJournal` and the `dost-repair` command, which truncate after the last good frame only when asked, keep a copy of what they remove, and refuse to discard good frames that follow the damage without a second flag. `Node.Truncated` reports the torn final frame that `Open` removes, and the gateway logs it. `Open` no longer cuts a final frame whose announced length hides frames that verify: it refuses, as for other damage.
 - **A cap on the journal.** `Node.SetJournalCap` and the gateway's `-max-journal-mib` refuse publishes with `ErrJournalFull` (also `ErrLimit`) rather than let the file pass a size, with a reserve for commits so `Retain` can make room. Off by default. `Node.JournalSize` reports the size.
 - **Rust client.** Sets `TCP_NODELAY`, so a request body is sent without waiting for the server to acknowledge the request head.
+- **Faster open.** `Open` reads the journal in 1 MiB pieces and takes the topic, partition, offset and ID straight from a record frame it recognises, instead of building the whole record with `encoding/json`. It checks the same things as before: every checksum, and that each value and time decode. Anything unrecognised is decoded in full. Open time still grows with the history.
+- **`wireserver` and `dostoevsky-server`.** A server for the [native wire protocol, version 1](docs/wire-v1.md): token handshake, TLS or loopback and unix sockets only, ordered publish and commit with queued publishes sharing a sync, read with bounded waiting, position, ping, per-connection window, server-wide request and reply budgets, connection limits and absolute deadlines. Standard library only. No speed or memory figure is claimed: none has been measured.
+- **`Node.Await`.** Waits until an offset can be read, without reading it.

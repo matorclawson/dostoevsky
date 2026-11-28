@@ -105,6 +105,44 @@ fn own(addr: &str, token: &str, _workers: usize) -> Result<Arc<dyn Adapter>, Str
     }))
 }
 
+struct Native {
+    client: dostoevsky_client::native::NativeClient,
+    name: String,
+    build: String,
+}
+
+fn native_error(error: dostoevsky_client::native::NativeError) -> EngineError {
+    use dostoevsky_client::native::NativeError::*;
+    match error {
+        ConnectionLost { sent: true } => EngineError::new("ConnectionLost", Kind::AmbiguousTimeout),
+        ConnectionLost { sent: false } => EngineError::new("ConnectionLost", Kind::Connection),
+        Api(..) | Refused(_) => EngineError::new("ApiError", Kind::Other),
+    }
+}
+
+impl Adapter for Native {
+    fn publish(&self, data: &[u8]) -> Result<u64, EngineError> {
+        self.client.publish(TOPIC, data, "", "").map(|r| r.offset as u64).map_err(native_error)
+    }
+    fn read(&self, offset: u64) -> Result<Vec<u8>, EngineError> {
+        self.client.read(TOPIC, 0, offset as i64, Duration::ZERO).map_err(native_error)?
+            .map(|r| r.value).ok_or_else(|| EngineError::new("PastTheEnd", Kind::Other))
+    }
+    fn close(&self) { self.client.close(); }
+    fn client_name(&self) -> String { self.name.clone() }
+    fn client_build(&self) -> String { self.build.clone() }
+}
+
+fn native(addr: &str, token: &str, _workers: usize) -> Result<Arc<dyn Adapter>, String> {
+    let dir = repo().join("clients/rust");
+    Ok(Arc::new(Native {
+        name: manifest_identity(&dir.join("Cargo.toml"))?,
+        build: build_id(&dir),
+        client: dostoevsky_client::native::NativeClient::connect(addr, token)
+            .map_err(|_| "native connection failed".to_string())?,
+    }))
+}
+
 // ---- rdkafka: acks=all, no retries, no idempotence, one message per batch ----
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
@@ -336,6 +374,7 @@ fn redis_adapter(addr: &str, token: &str, _workers: usize) -> Result<Arc<dyn Ada
 
 pub fn engines() -> BTreeMap<String, Factory> {
     let mut m: BTreeMap<String, Factory> = BTreeMap::new();
+    m.insert("native".into(), Box::new(native));
     m.insert("dostoevsky".into(), Box::new(own));
     m.insert("kafka".into(), Box::new(kafka));
     m.insert("nats".into(), Box::new(nats));

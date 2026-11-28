@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/serverproc"
+	"github.com/rodriveracom/dostoevsky/wire"
 )
 
 // RedisDurability is the persistence part of every Redis and Valkey configuration:
@@ -49,7 +50,7 @@ type Options struct {
 }
 
 // Engines lists what Start accepts.
-var Engines = []string{"gateway", "redis", "nats", "kafka"}
+var Engines = []string{"gateway", "native", "redis", "nats", "kafka"}
 
 // Start launches the engine's server and returns once it answers as the launched process.
 func Start(engine string, o Options) (*Server, error) {
@@ -82,7 +83,7 @@ func Start(engine string, o Options) (*Server, error) {
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	var args, env []string
 	switch engine {
-	case "gateway":
+	case "gateway", "native":
 		args = []string{"-listen", addr, "-data", filepath.Join(o.Dir, "data")}
 		env = append([]string{"DOSTOEVSKY_TOKEN=" + token}, o.Env...)
 	case "redis":
@@ -174,6 +175,32 @@ func NATSConfig(dir string, port int, token, name string) string {
 // secret only that process was given.
 func (s *Server) confirm(ctx context.Context) error {
 	switch s.Engine {
+	case "native":
+		dialer := net.Dialer{Timeout: 10 * time.Second}
+		conn, err := dialer.DialContext(ctx, "tcp", s.Addr)
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		if err = conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return err
+		}
+		hello, err := wire.AppendHello(nil, wire.Hello{MaxVersion: wire.Version, Token: []byte(s.Token)})
+		if err != nil {
+			return err
+		}
+		if _, err = conn.Write(hello); err != nil {
+			return err
+		}
+		var frame [wire.WelcomeSize]byte
+		if _, err = io.ReadFull(conn, frame[:]); err != nil {
+			return err
+		}
+		welcome, err := wire.ParseWelcome(frame[:])
+		if err != nil {
+			return err
+		}
+		return welcome.Accept(wire.Version)
 	case "gateway":
 		req, err := http.NewRequestWithContext(ctx, "GET", "http://"+s.Addr+"/dostoevsky/client/v1/read?topic=events&partition=0&offset=0&wait_ms=0", nil)
 		if err != nil {

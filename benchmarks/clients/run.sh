@@ -84,7 +84,7 @@ stop_pid() { # pid seconds: TERM, wait up to `seconds`, then KILL; returns at on
 # Killing a hung serve alone would orphan the engine, so the whole group goes too.
 kill_engine_group() {
   case "$CUR_EPID" in ""|*[!0-9]*|0|1) return 0 ;; esac   # never a group id that could mean "everything"
-  kill -KILL -- "-$CUR_EPID" 2>/dev/null
+  kill -KILL "-$CUR_EPID" 2>/dev/null
   return 0
 }
 
@@ -208,7 +208,7 @@ run_cell() {
   else
     srss=$(field server_rss_KiB "$stopped"); crss=$(field client_rss_KiB "$line")
     case "$srss" in *[!0-9]*|"") RESULT="trial=$n engine=$l-$e workers=$w FAILED server_memory_not_reported"; rc=1 ;; *)
-      RESULT="trial=$n $line server_rss_KiB=$srss server_rss_source=$(field rss_source "$stopped") total_rss_KiB=$((srss + crss))" ;;
+      RESULT="trial=$n $line server_rss_KiB=$srss server_rss_source=$(field rss_source "$stopped") total_rss_KiB=$((srss + crss)) fresh_ready_ms=$(field fresh_ready_ms "$stopped") boot_peak_KiB=$(field boot_peak_KiB "$stopped")" ;;
     esac
   fi
   cleanup_trial

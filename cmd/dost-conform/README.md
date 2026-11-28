@@ -60,7 +60,7 @@ A driver holds one open node or one open workflow store. `dir` defaults to `$roo
 `{"base64": ...}` for bytes that are not text. Additional codes: `start_conflict`, `stale`, `missing`.
 
 Workflow cases have `"formats": ["workflow"]`. Their runner steps: `"save": {NAME: "task.token"}` on a request and
-`"$NAME"` in a later one, `sleep_ms`, and `wf_snapshot` with `runs`, compared by `same`.
+`"$NAME"` in a later one (a name nothing saved fails the case), and `sleep_ms`.
 
 Not covered for workflows: named kill and failure points, concurrent polls, size limits, damaged and half-initialized
 stores, and any past workflow fix (their `covers` lists are empty).

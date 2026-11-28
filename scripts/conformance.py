@@ -29,7 +29,7 @@ ACTIONS = {
     "mark": {"file", "as"}, "truncate": {"file", "bytes"}, "flip": {"file", "at", "plus"},
     "remember_bytes": {"file", "as"}, "bytes_unchanged": {"file", "as"}, "make_file": {"file", "content"},
     "make_dir": {"file"}, "remove_first": {"file", "at_least"}, "absent": {"file"},
-    "sleep_ms": {"ms"}, "wf_snapshot": {"as", "runs"},
+    "sleep_ms": {"ms"},
 }
 # Engine requests. The driver itself refuses a field it does not know.
 OPERATIONS = {"open", "close", "publish", "publish_batch", "read", "read_batch", "position", "commit_batch", "retain",
@@ -184,7 +184,9 @@ class Run:
         for key, value in step.items():
             if key in ("do", "error", "fails", "expect", "nonzero", "save"):
                 continue
-            if isinstance(value, str) and value.startswith("$") and value[1:] in self.vars:
+            if isinstance(value, str) and value.startswith("$") and not value.startswith("$root"):
+                if value[1:] not in self.vars:
+                    raise Failed("nothing was saved as %s" % value)
                 value = self.vars[value[1:]]
             request[key] = self.path(value) if isinstance(value, str) else value
         if step["do"] == "wf_open":
@@ -235,9 +237,6 @@ class Run:
         groups = {g: self.ok({"op": "position", "topic": "events", "group": g}) for g in step.get("groups", [])}
         return {"records": records, "groups": groups}
 
-    def histories(self, runs):
-        return {"runs": {run: self.ok({"op": "wf_history", "run": run, "after": 0, "limit": 1000}) for run in runs}}
-
     def one_file(self, pattern):
         found = sorted(glob.glob(os.path.join(self.root, pattern)))
         if not found:
@@ -271,13 +270,6 @@ class Run:
             self.saved[step["as"]] = self.snapshot(step)
         elif do == "sleep_ms":
             time.sleep(step["ms"] / 1000)
-        elif do == "wf_snapshot":
-            self.saved[step["as"]] = self.histories(step["runs"])
-        elif do == "same" and "runs" in self.saved[step["as"]]:
-            want = self.saved[step["as"]]
-            got = self.histories(want["runs"])
-            if want != got:
-                raise Failed("histories differ from %s: %r, want %r" % (step["as"], got, want))
         elif do == "same":
             want = self.saved[step["as"]]
             got = self.snapshot(step)

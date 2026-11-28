@@ -66,14 +66,6 @@
    "value": "1"
   },
   {
-   "do": "wf_snapshot",
-   "as": "acked",
-   "runs": [
-    "held",
-    "waiting"
-   ]
-  },
-  {
    "do": "kill"
   },
   {
@@ -83,8 +75,66 @@
    "do": "wf_open"
   },
   {
-   "do": "same",
-   "as": "acked"
+   "do": "wf_history",
+   "run": "held",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "waiting",
+   "after": 0,
+   "limit": 100,
+   "expect": {
+    "kinds": [
+     "WorkflowStarted",
+     "ActivityScheduled",
+     "ActivityStarted",
+     "ActivityCompleted",
+     "SignalWaiting"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "held",
+   "after": 0,
+   "limit": 1,
+   "expect": {
+    "data": [
+     "0"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "held",
+   "after": 2,
+   "limit": 1,
+   "expect": {
+    "data": [
+     "1"
+    ]
+   }
+  },
+  {
+   "do": "wf_history",
+   "run": "waiting",
+   "after": 6,
+   "limit": 2,
+   "expect": {
+    "data": [
+     "1",
+     "go"
+    ]
+   }
   },
   {
    "do": "wf_finish",

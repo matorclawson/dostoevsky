@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strconv"
 	"time"
 
+	d "github.com/rodriveracom/dostoevsky"
 	"github.com/rodriveracom/dostoevsky/workflow"
 )
 
@@ -62,6 +64,9 @@ func (s *driver) wf(q request) (any, error) {
 		}
 		return map[string]any{"created": created}, nil
 	case "wf_poll":
+		if limit := int64(math.MaxInt64 / time.Millisecond); q.LeaseMS > limit || q.LeaseMS < -limit {
+			return nil, d.ErrInvalid
+		}
 		task, err := w.Poll(q.Queue, time.Duration(q.LeaseMS)*time.Millisecond)
 		if err != nil {
 			return nil, err

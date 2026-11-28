@@ -7,42 +7,88 @@
 <a href="https://github.com/rodriveracom/dostoevsky/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/rodriveracom/dostoevsky?include_prereleases"></a>
 </p>
 
-**Durable streaming that aims to be the smallest server in the room.** Dostoevsky keeps topics, idempotent publish and consumer checkpoints in one fsync-backed journal, written in Go with the standard library only. Embed it in a Go program, or run it as a server and call it from Python, JavaScript/TypeScript, Java and Rust. The goal is the smallest server, a native binary protocol and clients in four languages. Today the clients on `main` speak HTTP; the native server is in review.
+**Once Dostoevsky says yes, the record is on disk: durable streaming from one small Go server with no dependencies.**
 
-For large retained journals, the opt-in segmented store loads a checkpoint and replays the active tail. The storage guide covers migration, verification, rollback and benchmark commands. [Segmented recovery](docs/segmented-recovery.md)
+Dostoevsky keeps topics, idempotent publish and consumer checkpoints in one fsync-backed journal. Run it as a server and call it from Python, JavaScript/TypeScript, Java and Rust over HTTP, or embed it in a Go program. A native binary protocol server (`dostoevsky-server`) and native clients are on `main` too ([status](#status)); the quick start below uses the HTTP gateway.
 
-## Quick start: server and client
+<p align="center">
+<img src="docs/img/quickstart.svg" alt="Terminal: a job is published and read, the gateway is killed with SIGKILL and restarted, and publishing the same ID again returns the same offset.">
+</p>
 
-From a clone of this repository (Go 1.22+, Python 3.10+), start the gateway on loopback port 8787:
+<sub>A real, scripted run of the quick start below: <code>scripts/readme_capture.py</code> runs the same commands, and starts and kills the gateway itself.</sub>
+
+## Quick start
+
+On Linux or macOS with Go 1.22+, Python 3.10+, Git and Make. Start the gateway in the background, on loopback port 8787:
 
 ```sh
+git clone https://github.com/rodriveracom/dostoevsky.git && cd dostoevsky
 export DOSTOEVSKY_TOKEN=$(go run ./cmd/dostoevsky-gateway -gen-token)   # keep it secret
-make dev-gateway
+make dev-gateway &            # wait for the "listening" line
 ```
 
-In a second terminal with the same `DOSTOEVSKY_TOKEN` exported:
+Then publish and read:
 
 ```sh
-python3 -m pip install ./clients/python
-python3 -c "import os; from dostoevsky_client import Client; print(Client('http://127.0.0.1:8787', os.environ['DOSTOEVSKY_TOKEN']).publish('jobs', b'hi'))"
+export PYTHONPATH=clients/python
+make dev-client-python        # publishes a job, reads it back, saves a checkpoint
+PY='import os; from dostoevsky_client import Client; c = Client("http://127.0.0.1:8787", os.environ["DOSTOEVSKY_TOKEN"])'
+python3 -c "$PY; print(c.publish('jobs', b'paid', id='order-1'))"
 ```
 
-JavaScript, TypeScript, Java and Rust: [client guide](docs/clients.md). To embed the library in Go instead, see [Quickstart](#quickstart).
+Now force-kill the gateway and start it again. `'%?dev-gateway'` names that background job, whatever else your shell is running:
 
-## Status
+```sh
+kill -9 '%?dev-gateway'
+make dev-gateway &            # wait for the "listening" line again
+```
 
-| Piece | State on 27 November 2026 |
-|---|---|
-| Embedded Go library | on `main` |
-| HTTP gateway; Python, JavaScript/TypeScript, Java and Rust HTTP clients | on `main` |
-| [Wire protocol v1](docs/wire-v1.md) (draft) and its Go codec | on `main` |
-| JavaScript/TypeScript native client (preview) | on `main`; needs the native server, which is not |
-| Native protocol server ([PR 72](https://github.com/rodriveracom/dostoevsky/pull/72)) | in review, council security review pending |
-| Native clients: Python ([PR 62](https://github.com/rodriveracom/dostoevsky/pull/62)), Rust ([PR 75](https://github.com/rodriveracom/dostoevsky/pull/75)), Java ([PR 77](https://github.com/rodriveracom/dostoevsky/pull/77)) | in review; wait on PR 72 |
+Publish the same thing once more, then read it:
+
+```sh
+python3 -c "$PY; print(c.publish('jobs', b'paid', id='order-1'))"   # the same offset as before
+python3 -c "$PY; print(c.read('jobs', 0, 1).value)"                 # b'paid'
+```
+
+The record survived, and the repeated publish did not create a second one. Stop the gateway with `kill '%?dev-gateway'` when you are done.
+
+JavaScript, TypeScript, Java and Rust: [client guide](docs/clients.md). In Go, [embed the library](#embed-it-in-go) instead.
+
+## What makes it different
+
+* **Acknowledged means synced.** A publish returns after the journal is synced to disk. Concurrent writers share a sync.
+* **Retries are safe.** A retry with the same key, ID and value returns the original offset, until retention removes the record. IDs are scoped to a partition; reusing one there with different content is refused.
+* **State and offset commit together.** A consumer's checkpoint and its processor state are one journal entry.
+* **Library or server.** The same journal runs inside a Go program or behind a gateway with clients for Python, JavaScript, TypeScript, Java and Rust.
+* **Small.** Standard library only. In the published [publisher gate](docs/publisher-gate.md) on Linux AMD64, median peak memory at 32 producers was 11.1 MiB, against 43.6 MiB for embedded JetStream.
+
+**Choose something else if** you need replication or automatic failover (each partition has one durable copy), a proven throughput lead over Redis Streams (none is established with the [native server](#measured-results-native-protocol-server); over the HTTP gateway Redis was ahead in every cell [we measured](#measured-results-language-clients)), or a fast restart over a long history with the default storage (it replays its whole journal when it opens; the opt-in [segmented store](docs/segmented-recovery.md) does not).
+
+<p align="center">
+<img src="docs/img/architecture.svg" alt="Producers feed a group commit queue, which writes checksummed frames to the journal with one fdatasync per group before acknowledging. Consumer groups commit state and offset together. A notifier wakes subscribers.">
+</p>
+
+## Measured results: native protocol server
+
+Python clients, one 512-byte record per request (**no batching**), durable acknowledgment, 2,048 timed messages per cell, five rounds, loopback on one Linux ARM64 host with ext4. Dostoevsky ran `dostoevsky-server` at commit `ed99753f` **with segmented storage, which is opt-in and not the default**. Median records per second (median p99 in ms):
+
+| Producers | Dostoevsky (native) | Redis Streams | NATS JetStream | Kafka |
+|---:|---:|---:|---:|---:|
+| 1 | 619 (4.5) | 587 (5.1) | 468 (5.4) | 215 (10.3) |
+| 8 | 2,268 (10.1) | 2,128 (8.3) | 626 (26.9) | 302 (46.1) |
+| 32 | 5,059 (13.4) | 4,306 (52.9) | 712 (83.9) | 281 (176.8) |
+
+* Faster than JetStream and Kafka in these unbatched runs (in an earlier run without Redis, one Dostoevsky trial at 1 producer fell inside JetStream's range).
+* p99 lower than Redis at 32 producers.
+* **No throughput difference from Redis is established** at 1, 8 or 32 producers: the trials overlap. Redis ran without publish deduplication.
+* **Not the smallest memory.** Server memory in MiB, as median resident size when ready (`VmRSS`) and the range of per-cell median peaks: Redis 7.5 and 9.1 to 10.8; JetStream 13.9 and 21.9 to 28.3; Dostoevsky 18.2 and 26.5 to 31.6; Kafka 394 and 418 to 424. A peak is the process's lifetime high-water mark (`VmHWM`) read at the end of each cell, so a later cell can carry an earlier cell's peak.
+* These are short runs over a short history. They say nothing about sustained rates, batching or long histories.
+
+Every trial line, including the runs without Redis and the two failed runs, is in [docs/results](docs/results/README.md).
 
 ## Measured results: language clients
 
-**Redis Streams has the highest throughput in all 12 cells below.** Dostoevsky was measured **over HTTP/1.1** through its gateway; Kafka, NATS and Redis used their native protocols. These numbers say nothing about Dostoevsky's native protocol. A rerun with it is planned for 2 December 2026.
+**Redis Streams has the highest throughput in all 12 cells below.** Dostoevsky was measured **over HTTP/1.1** through its gateway; Kafka, NATS and Redis used their native protocols. These numbers say nothing about Dostoevsky's native protocol, which is measured [above](#measured-results-native-protocol-server).
 
 Median records per second (median p99 in ms), 5 trials of 120 s each, 512-byte records, acknowledged after each engine's durable acknowledgment, loopback on one Linux ARM64 host with ext4:
 
@@ -63,7 +109,7 @@ Median records per second (median p99 in ms), 5 trials of 120 s each, 512-byte r
 
 Latency percentiles are upper bin edges, at most 1% above the true value. All 240 trials completed, and every acknowledged record was read back.
 
-* **Server memory:** the Dostoevsky gateway's median peak was 13 to 36 MiB, the smallest in all 36 comparisons. The figure is the sum of each server process's highest sampled resident peak (`VmHWM`): the peaks need not occur at the same time, and pages shared between processes (Redis's append-only-file children) can be counted more than once. NATS used 67 to 76 MiB and Kafka 567 to 645 MiB; Redis's lowest was 53 MiB, and it grows with the records it holds in memory. Whether Dostoevsky's memory stays flat as history grows was **not measured** by this run.
+* **Server memory:** the Dostoevsky gateway's median peak was 13 to 36 MiB, the smallest in all 36 comparisons of this run. The later native-server runs did not repeat that: JetStream and Redis used less. The figure is the sum of each server process's highest sampled resident peak (`VmHWM`): the peaks need not occur at the same time, and pages shared between processes (Redis's append-only-file children) can be counted more than once. NATS used 67 to 76 MiB and Kafka 567 to 645 MiB; Redis's lowest was 53 MiB, and it grows with the records it holds in memory. Whether Dostoevsky's memory stays flat as history grows was **not measured** by this run.
 * **Where Dostoevsky loses besides Redis:** NATS is faster with one producer in Java, JavaScript and Rust; Kafka is faster with one producer in JavaScript; the unfixed Rust client was behind every competitor at 1 and 8 producers, and behind NATS and Redis at 32. The Dostoevsky client processes in JavaScript and Java used more memory than most or all competitor clients in those languages.
 
 Durability settings:
@@ -75,7 +121,7 @@ Durability settings:
 | NATS JetStream | `sync_interval: always`, file storage, 1 replica | each publish awaits its ack, no retries |
 | Kafka | `log.flush.interval.messages=1`, `min.insync.replicas=1`, replication factor 1 (fsync per message is inferred from the setting) | `acks=all`, no idempotence, no retries; `linger.ms=0` where set (Python also `batch.num.messages=1`), KafkaJS one message per send |
 
-These settings are read from the source; the run did not trace `fsync` calls. Source commit `d7b967ae805b14817b47a8c83314f3735e100198`. Receipt `HOST.log` SHA-256: `f94a43ce457981f8d76128099a1ebb73caae675d09cfbe2d73a6987fac0201ca` (the receipts are kept in the project's evidence record, not in this repository).
+These settings are read from the source; the run did not trace `fsync` calls. Source commit `d7b967ae805b14817b47a8c83314f3735e100198`. The [trial lines](docs/results/2026-11-26-language-clients.log) are published; They are the lines of that run's `languages.log` (SHA-256 `e348999f1f97e75975a3d557e59b189b621a996e7bab3021311ac32d67682102`); `HOST.log` SHA-256 `f94a43ce457981f8d76128099a1ebb73caae675d09cfbe2d73a6987fac0201ca` is the run's host record. Both digests are of original files held privately.
 
 ### Rust: the `TCP_NODELAY` fix
 
@@ -87,7 +133,7 @@ The Rust client stalled for about 43 ms per request. [PR 74](https://github.com/
 | 8 | 182 | 2,419 | 54.48 | 8.31 |
 | 32 | 728 | 6,617 | 52.35 | 10.65 |
 
-Receipt `HOST.log` SHA-256: `baae763942642f13ca52f6a45edf7c5260955367123e08435c1d29df82f0d27c`. These rows come from a different run and are not a head-to-head with the table above.
+The [trial lines](docs/results/2026-11-27-rust-nodelay-ab.log) are published; They are the run's per-trial log lines with the arm added; `HOST.log` SHA-256 `baae763942642f13ca52f6a45edf7c5260955367123e08435c1d29df82f0d27c` is the run's host record, held privately. These rows come from a different run and are not a head-to-head with the table above.
 
 ## Measured results: embedded Go library
 
@@ -99,13 +145,31 @@ Receipt `HOST.log` SHA-256: `baae763942642f13ca52f6a45edf7c5260955367123e08435c1
 | Peak memory, 32 producers, median | **11.1 MiB** (4x less) | 43.6 MiB | [publisher gate](docs/publisher-gate-results.txt) |
 | Runtime dependencies | **none** | NATS server and client | [go.mod](go.mod) |
 
-Synchronous, fsync-backed publishes of 512-byte records to one topic, five alternating trials per point, on shared Linux AMD64 with an overlay filesystem and `GOMAXPROCS=2`. Medians are in [the table](docs/publisher-gate.md); the chart shows every trial. JetStream reopens a store faster (see [reopen time](docs/img/reopen.svg)). Numbers on ARM64 and macOS hardware are being collected and will replace these when they land. Reported percentiles from the newer benchmark receipts are upper bounds, at most 1% above the true value (the upper edge of a 1% histogram bin) for latencies from 1 microsecond to about 6.5 hours; outside that range the bound does not hold; older receipts use the exact sample value, and the two are never drawn in one chart.
+Synchronous, fsync-backed publishes of 512-byte records to one topic, five alternating trials per point, on shared Linux AMD64 with an overlay filesystem and `GOMAXPROCS=2`. Medians are in [the table](docs/publisher-gate.md); the chart shows every trial. Dostoevsky reopens much more slowly: it replays its whole journal when it opens (that run did not profile where the time goes), and on the ARM64 gate 16,000 records took about 200 ms against 14.5 to 16.9 ms for JetStream (see [reopen time](docs/publisher-gate.md)). The table and chart here are from the AMD64 run; the ARM64 run of the same gate is in [publisher-gate.md](docs/publisher-gate.md), and no macOS numbers are published. Reported percentiles from the newer benchmark receipts are upper bounds, at most 1% above the true value (the upper edge of a 1% histogram bin) for latencies from 1 microsecond to about 6.5 hours; outside that range the bound does not hold; older receipts use the exact sample value, and the two are never drawn in one chart.
 
 <p align="center">
 <img src="docs/img/throughput.svg" alt="Median messages per second at 1, 8 and 32 producers: Dostoevsky 4,005, 13,252 and 36,422; embedded JetStream 3,185, 3,384 and 4,020.">
 </p>
 
-## Quickstart
+<p align="center">
+<img src="docs/img/memory.svg" alt="Peak memory in the publisher gate: at 32 producers the median is 11.1 MiB for Dostoevsky and 43.6 MiB for embedded JetStream.">
+</p>
+
+## Status
+
+| Piece | State on 28 November 2026 |
+|---|---|
+| Embedded Go library | on `main` |
+| HTTP gateway; Python, JavaScript/TypeScript, Java and Rust HTTP clients | on `main` |
+| [Wire protocol v1](docs/wire-v1.md) (draft) and its Go codec | on `main` |
+| Native protocol server (`dostoevsky-server`) | on `main` |
+| Native clients: JavaScript/TypeScript, Python, Rust, Java (preview) | on `main` |
+| [Segmented storage](docs/segmented-recovery.md) | on `main`, opt-in; not the default |
+| [Embedded workflows](docs/workflow-lifecycle.md) | on `main`, experimental; not a supported API |
+
+## Embed it in Go
+
+Go 1.22 or later; the module has no dependencies outside the standard library.
 
 ```sh
 go get github.com/rodriveracom/dostoevsky@latest
@@ -136,213 +200,17 @@ fmt.Println("paid events:", paid)
 
 The message ID makes a retried publish idempotent, and the fold's committed state and offset survive a restart. The test `Example_quickstart` compiles and runs exactly this code, and `TestQuickstartMatchesREADME` fails if the README copy drifts.
 
-<p align="center">
-<img src="docs/img/architecture.svg" alt="Producers feed a group commit queue, which writes checksummed frames to the journal with one fdatasync per group before acknowledging. Consumer groups commit state and offset together. A notifier wakes subscribers.">
-</p>
+Next: the [getting started guide](docs/getting-started.md) and [using the library](docs/library.md): concepts, examples, task queues, batching and backups.
 
-## Install
+## Limits
 
-Requires Go 1.22 or later. Import it as `github.com/rodriveracom/dostoevsky`. The module has no dependencies outside the Go standard library.
+* Each partition has **one durable copy**. An offline owner makes its partitions unavailable, and disk loss needs a backup. There is no replication, automatic failover or automatic retention.
+* History stays until an application calls `Retain`. With the default storage, disk use, restart time and index memory grow with it.
+* For large retained histories, the opt-in segmented store loads a checkpoint and replays only the active tail; the [storage guide](docs/segmented-recovery.md) covers migration, verification and rollback.
+* Values are limited to 1 MiB and keys to 4096 bytes.
+* The gateway token grants access to every topic. [Read this before exposing the gateway](docs/clients.md#security-read-this-before-exposing-the-gateway).
 
-## Run a persistent word count
-
-Use Go 1.22 or later on Linux and clone the repository. From the module directory:
-
-```sh
-make dev-wordcount WORDS="blue red blue"
-# {"blue":2,"red":1}
-make dev-wordcount WORDS=red
-# {"blue":2,"red":2}
-make dev-wordcount
-# {"blue":2,"red":2}
-```
-
-Each argument creates one event. The example commits the counts and the input offset together. Reopening the directory resumes at the next offset. To replay historical messages, read from offset zero or choose a fresh consumer group.
-
-## Streaming concepts
-
-A **producer** publishes a record to a named **topic**. Its key selects a **partition**, where each record receives an ordered **offset**. A **consumer group** maintains its own **checkpoint** for each partition. The checkpoint stores the cursor for the next read and optional processor state. Two groups can independently replay the same records.
-
-A **subscriber** waits for a change associated with a notification key. Applications choose the key type. For example, use a partition to wake readers after an append, or an account ID to wake readers after a database transaction commits. Multiple subscribers can wait on the same key.
-
-## Use it in an application
-
-```go
-node, err := dostoevsky.Open(dir, dostoevsky.Config{
-    Node: "app", Nodes: []string{"app"},
-    Topics: map[string]int{"orders": 4},
-})
-if err != nil { return err }
-defer node.Close()
-
-record, err := node.Publish(ctx, "orders", dostoevsky.Message{
-    Key: "account-42", ID: "order-918", Value: []byte("paid"),
-})
-if err != nil { return err }
-// record.Partition and record.Offset identify this event.
-return dostoevsky.Fold(ctx, node, record.Partition, "paid-count", 0,
-    func(_ context.Context, count int, event dostoevsky.Record) (int, error) {
-        if string(event.Value) == "paid" { count++ }
-        return count, nil
-    })
-```
-
-Fold stays up and waits for more events until its context is canceled. This snippet handles one partition. To consume a whole topic, start one Fold per partition and assign the workers explicitly. Use a fresh initial value per worker. Reducers can return an error to stop processing with the current input still pending.
-
-| Operation | Contract |
-| --- | --- |
-| Publish | FNV-1a hashes the UTF-8 key into a fixed partition. The empty key always selects the same partition. Each partition assigns contiguous zero-based offsets. |
-| Message.ID | Optional retry identity scoped to a topic partition. An identical retry returns the original offset and timestamp. Conflicting content under an existing ID returns ErrConflict. |
-| Read | Fetch any offset directly, tail with a context, or request an immediate result. An unavailable offset yields ErrEmpty in immediate mode. |
-| Position / Commit | Each group has an independent cursor and state per partition. Commit compares the expected offset, advances it by one and stores the state in one journal entry. |
-| Fold | Applies an ordinary Go reducer. State uses JSON and must fit within 1 MiB. A competing commit returns ErrConflict. |
-| Pipe | Transforms one input to one output, then commits the input. It derives a stable output ID from the input coordinates and group, enabling retry across different partition owners. Reserve the ID prefix `pipe/` for this operation. |
-
-A Pipe output can become visible before its input checkpoint advances. Reuse the same destination, group and deterministic transform when restarting. Use separate groups for separate projections. External side effects, including calls made inside reducers, can repeat after failures.
-
-## Run two application processes
-
-In two terminals, from the module directory, run one command in each:
-
-```sh
-make dev-mesh-a
-make dev-mesh-b
-```
-
-After both print “ready”, type `b` on node a and `a` on node b. Each reports the other node as the owner at offset 0 on a fresh directory. Stop node b and node a will report a delivery error for key `b`. Restart b with the same directory to resume. The example binds loopback ports 8711 and 8712.
-
-All nodes share an ordered membership list and topic partition counts. Partition number modulo node count selects the owner. Peer requests carry a fingerprint of this configuration and the intended node ID. Add topics by updating the manifest and reopening the nodes together. Existing node order, node IDs and partition counts are persistent. Applications control addresses, lifecycle, deadlines and TLS via net/http. Use HTTPS across machines and a unique random token per deployment. The shared token gives peers access to all topics.
-
-## Durability and operating limits
-
-* Each owner holds one checksummed append-only journal on a local filesystem with exclusive advisory locking. Acknowledgments follow file sync. Recovery verifies complete frames and truncates a partial final frame. A checksum failure stops recovery.
-* Each partition retains an in-memory index of record positions and optional producer IDs. Payloads stay on disk. Startup scans the journal. Each commit stores the full group state. History is retained until an application calls Retain, and storage operations are serialized per node. Plan for disk growth, replay time and index memory.
-* Values and processor state are limited to 1 MiB each, keys to 4096 bytes and producer IDs to 256 bytes. Topic and group names use letters, digits, hyphens and underscores, up to 96 characters.
-* Each partition has **one durable copy**. An offline owner makes its partitions unavailable. Disk loss requires restoring that owner's backup. For a consistent backup, close the node and copy its directory. Never start two live owners with the same identity and different directories.
-* A lost publish response leaves the outcome uncertain. Retry with the same key, ID and payload. After an uncertain commit, read Position before deciding whether to retry. Cancellation interrupts waiting readers. A disk write already in progress may complete.
-* Membership is static. This version has no quorum replication, automatic failover, automatic retention scheduling, dynamic group balancing, or event-time window engine. Placement is per partition. There is no global event order.
-
-## Design lineage and verification
-
-Faust's supplied word-count example motivated keyed streams and recoverable processor state. Kafka's partition logs, replay offsets and independent consumer groups inspired the delivery model. This repository implements those ideas in original Go and includes two executable examples.
-
-```sh
-CGO_ENABLED=0 GOPROXY=off go test ./...
-go test -race ./...
-go vet ./...
-```
-
-Tests exercise recovery after process exit, incomplete frames, checksum failures, idempotent publish, concurrent commits, independent groups, cancellation, pipeline retry and peer routing. The race detector is a development tool and requires a C toolchain on Linux. Applications build with CGO_ENABLED=0.
-
-## Implement a database-backed reader
-
-Use one Notifications instance per process. Subscribe to the notification key before querying the database. If a page exists, release immediately. Otherwise wait on the captured channel or context, release on either path, then subscribe and query again. Call Signal only after the SQLite transaction succeeds. The subscription cap counts readers across all keys. Handle ErrLimit explicitly. Signals are process-local hints, so a writer in a different process requires a separate wake mechanism or bounded rechecks.
-
-Implement BatchReader on your storage adapter and pass it to ConsumePages. Use an indexed keyset query ordered by the stream cursor, with a record limit and a byte budget for the returned page. Page.Next is the adapter's next resume position and may advance across gaps. An HTTP adapter can encode this cursor for its clients. When the first available item exceeds the byte limit, return ErrLimit. The Node implementation counts key, ID and value bytes before wire encoding. Node.ReadBatch waits only for the first record. Mesh retains its existing single-record wire protocol.
-
-For a SQLite projection, load its durable cursor, then supply an apply callback. Begin a SQLite transaction, write the projection, and update the cursor with a predicate matching its previous value. Require exactly one affected cursor row (initialize it when registering the worker). Roll back on conflict or any write error. Commit before returning success. Keep external side effects outside this transaction or use an outbox. Node.CommitBatch offers the equivalent cursor comparison for journal-backed state. Multi-record checkpoints require the 0.2 reader on reopen.
-
-### Benchmarking batch reads
-
-Compare single-record and batch readers using the same dataset, storage volume and arrival trace. Run one consumer with a backlog and another waiting at the end of its partition. Measure backlog drain time and p95/p99 commit-to-visible latency for the waiting consumer separately. Record queries per thousand deliveries, CPU time and peak memory. After a forced restart, reconcile acknowledged records and committed effects against the producer ledger.
-
-Use `make dev-bench-notify` to measure repeated signals on a key with eight already-notified subscribers.
-
-## Development and deployment
-
-Run `make help` for the command list. The Makefile targets Linux with GNU Make and coreutils. Go 1.22+ and gofmt must be on PATH. The race check also requires a C compiler.
-
-| Workflow | Command | Result |
-| --- | --- | --- |
-| Development | `make dev` | Checks formatting, vets, tests, runs the race detector and builds examples in `.dev/bin/` |
-| Local demos | `make dev-wordcount WORDS='blue red blue'` or `make dev-mesh-a` and `make dev-mesh-b` | Keeps demo journals in `.dev/data/` |
-| Release the library | `make release` | Writes a versioned source tarball and SHA-256 file to `dist/` after testing an extracted copy |
-| Verify a release | `make release-check` | Checks the checksum and reruns offline tests from the archive |
-| Build for deployment | `make deploy-build APP_DIR=../orders APP_PACKAGE=./cmd/orders APP_NAME=orders ARCH=arm64` | Builds a pure-Go Linux executable in `build/deploy/linux-arm64/` |
-| Install | `make deploy APP_DIR=../orders APP_PACKAGE=./cmd/orders APP_NAME=orders ARCH=arm64 DESTDIR=/srv/orders/bin` | Builds and atomically replaces the named executable in the selected directory |
-
-**Deployment unit.** Ship the Go application that imports Dostoevsky. Set `APP_DIR` to that application's module and `APP_PACKAGE` to its main package. The build uses the dependency version selected by the host's go.mod. To use an unpublished source release, point the host's go.mod replace directive for `github.com/rodriveracom/dostoevsky` at the extracted module. Choose the target architecture explicitly for cross-compilation. The host application supplies its production journal directory, topology, credentials and process supervision. Installing a binary leaves the running process and its journal alone until your deployment system restarts it.
-
-## Stream OpenAI events into a topic
-
-These two examples call OpenAI over HTTP using Go's standard library. Set OPENAI_API_KEY in your shell and OPENAI_MODEL to a model available to your project for the chosen endpoint. The hosted agent needs an application key with api.agents.read, api.agents.write and api.responses.write. Live runs use your project's API quota.
-
-~~~sh
-make dev-openai-text RUN_DIR=.dev/data/explanation
-make dev-openai-agent RUN_DIR=.dev/data/latencies
-make dev-openai-replay RUN_DIR=.dev/data/latencies
-~~~
-
-The first command asks a model to explain checkpoints and records its Responses API events. The second creates an Agents API session and asks the agent to calculate a median in its hosted sandbox. Inspect the output events for the tool execution and the reported median (8 ms). Each received JSON event is appended to the local events topic before printing. Its offset identifies the event during local replay. Replay reads from offset zero and requires neither credentials nor network access.
-
-Use a fresh journal directory for each live run. If the connection drops, replay shows the recorded prefix. Inspect the remote agent session using its session ID before deciding to start another run. Reissuing a create request can start another billable task. Hosted sessions are retained for inspection and can be deleted using the API.
-
-[Agents API quickstart](https://developers.openai.com/api/docs/guides/agents-api/quickstart) · [Responses streaming guide](https://developers.openai.com/api/docs/guides/streaming-responses)
-
-## Use a topic as a background task queue
-
-A producer submits a named task and its input, then exits. Run the workers later. These examples share one local journal and can be run in sequence:
-
-~~~sh
-make dev-task-enqueue JOB_ID=hash-1 TASK=sha256 INPUT='hello world'
-make dev-task-enqueue JOB_ID=retry-1 TASK=retry-demo INPUT='hello world'
-make dev-task-enqueue JOB_ID=fail-1 TASK=exhaust-demo
-make dev-task-drain
-make dev-task-inspect
-~~~
-
-Look for a SHA-256 digest on the results topic, HELLO WORLD after two attempts, and a dead letter after three attempts. The latter two handlers deliberately simulate failures. An unknown task goes directly to dead letters. Each dead letter includes the original input and failure reason.
-
-The jobs topic has four partitions and one consumer group. The drain command runs one goroutine per partition and exits when all available work is processed. The job ID routes every retry to the same partition. A retry appends immediately to its tail, allowing other queued work to run first. The worker publishes the result, retry or dead letter before acknowledging the original delivery by committing its offset. Inspection reads the outcome topics from the beginning on every invocation.
-
-Run drain again after interruption. An unacknowledged handler may execute again. These example handlers are deterministic, and stable IDs deduplicate repeated publications. For real handlers that send emails, charge accounts or call external APIs, use a durable idempotency key at the destination and persist the outcome before acknowledging. A different outcome on replay requires application-level reconciliation. This example assigns partitions explicitly and runs producer and drain commands sequentially because a local directory has a single owner. A running application can share one Node between its producers and workers. The example implements immediate retries and has no worker leases or scheduled delivery.
-
-## Contribute
-
-Open an issue describing the problem, with a failing test when you can. For a change, fork the repository, branch, and run `make verify` (format, vet, tests, race detector, example build) before opening a pull request. Keep changes small and focused, and add or update tests and the CHANGELOG. Contributions are accepted under the MIT license.
-
-## Bursts and dynamically named topics (0.3.0 candidate)
-
-Use an ordinary named topic with many keys when consumers share an offset sequence. If independent replay positions are required per topic, a fresh node can use `Topics: map[string]int{"*": 1}`. This config accepts valid topic names on demand. Each actual topic has its own partition offsets, checkpoints and exact ID namespace. All topics use the configured partition count. Wildcard mode is exclusive with explicit declarations and persists across reopen. In a mesh the topic hash rotates the first owner, then consecutive partition numbers rotate across the configured nodes. Use the same manifest and version on all peers. Avoid opening wildcard journals with older binaries.
-
-When a producer already holds a burst, pass a slice of `Publication{Topic: ..., Message: ...}` to `Node.PublishBatch`. A successful call acknowledges all records after one sync for the newly written frames. All items must belong to the local owner. The existing peer protocol supports individual publications. Input errors are detected before writing. A crash or storage error can persist part of a batch. This is usually a prefix, but a crash with out-of-order page writeback can instead leave a frame that fails its checksum, and reopening then reports corruption instead of truncating. Retry the whole slice with stable IDs once the node reopens. This is a durability optimization for independent events; applications needing atomic multi-record transactions must supply that boundary themselves.
-
-One call accepts up to 1,024 items and 4 MiB each of input field bytes and new encoded frames. Choose smaller batches to bound writer occupancy and urgent-message latency. An isolated single-message Publish writes immediately. Overlapping calls can share a sync. Concurrent readers share the node lock while reading immutable offsets; appends and sync still use one writer per node. Explicit caller batching avoids a hidden unbounded producer queue.
-
-~~~sh
-# Put TMPDIR on the volume you intend to measure.
-make dev-burst BURST_RECORDS=100000 BURST_TOPICS=100000
-make dev-burst BURST_RECORDS=1000000 BURST_TOPICS=1000000 BURST_DURATION=1m
-make dev-burst BURST_RECORDS=1000000 BURST_TOPICS=1
-~~~
-
-The workload assigns every 128-byte record a distinct producer ID. It reports ingest time, post-GC live heap and journal size, then closes, reopens and reconciles IDs by topic and offset. This exercise covers a finite burst. Retained record locations, topic state and exact producer IDs grow with history. Disk-backed indexes, segmented retention and automatic deduplication windows are future storage work. Selecting such a window changes the guarantee for retries older than the window.
-
-[Delivery-service design and capacity considerations](docs/delivery-workload.md) · [Candidate benchmark receipts](docs/burst-results.txt)
-
-## Approximate distinct counts and backups
-
-The standard-library-only `sketch` package provides HyperLogLog with configurable precision from 4 to 18, merge, and versioned binary encoding. It estimates cardinality and is suitable for telemetry. Keep records, producer IDs and delivery decisions exact. The burst harness uses a mergeable `sketch.LatencyHistogram` per producer to report upper bounds for p95 and p99 scheduled-to-ack latency. Each histogram uses 7,688 bytes regardless of run length. Positive percentile bounds have less than 6.25% upward error. Historical receipts used exact sample sorting. Sketches need external synchronization when shared by goroutines.
-
-`Node.Backup(ctx, newDirectory)` copies a consistent journal while holding the node lock. It requires a new directory and syncs the copied journal before returning. Open the resulting directory with the same Config to recover it. Remove any partially created backup after an error. This operation pauses node reads and writes while copying. `Backup` builds the copy in a hidden sibling named `.<name>.backup-<random>` and renames it to the destination only when it is complete and synced, so a crash leaves at most that hidden directory (delete it). The destination must be a new path that stays under the caller's control until `Backup` returns: no other process and no other goroutine of the same process, including a concurrent `Backup` to that path, may create or use it; the existence check and the rename are separate steps because the standard library has no portable no-replace directory rename. If only the final parent sync fails, `Backup` returns an error wrapping `ErrBackupNotDurable`: the backup is complete, but sync the parent directory before relying on it. As a guard for directories left by an older or interrupted 0.3.0 candidate, `Open` refuses a directory holding `.journal.tmp` and no `journal.v1` with `ErrIncompleteBackup`; the current `Backup` never creates that layout.
-
-## Retention and restart recovery
-
-Call `node.Retain(ctx, map[Partition]int64{partition: floor})` to remove records strictly below an absolute offset. The operation refuses a floor above any existing consumer group's committed position. A reader requesting an expired offset receives `ErrExpired`. Keep the floor at or below the oldest offset needed by all consumers, including consumers that have yet to register. New consumer groups start at offset zero and must handle an expired offset themselves.
-
-Retention rewrites the journal while holding the node lock, syncs a replacement, then atomically renames it and syncs the directory. Retained offsets, checkpoints and state survive restart. A cancellation before replacement leaves the old journal in place. A crash may leave an unused temporary file. A successful replacement requires enough free space to hold the new journal alongside the old one. If directory synchronization reports an error after rename, reopen and inspect the resulting state before retrying.
-
-Producer IDs attached to deleted records expire at the retention floor. Retrying a deleted ID can publish a new record. Set retention no shorter than the application's producer retry horizon. Records and IDs at or above the floor remain exact. Backups taken before retention preserve the historical journal.
-
-Restart scans the compacted journal. Retention reduces the amount of history to scan. Recovery time still grows with the retained journal, and this version has no independent startup snapshot or on-disk index. Call retention regularly according to the application's storage and replay requirements.
-
-## Performance comparisons
-
-Run `make dev-bench-embedded` on Linux to compare embedded single-node publishers on your disk. Set `TMPDIR` to a directory on the intended volume. The benchmark module requires Go 1.26 or later. See [workloads and measurements](docs/embedded-performance.md).
-
-Concurrent calls to `Node.Publish` can share a journal sync. A lone producer writes immediately. Acknowledgments follow the sync, and messages from different calls keep their own receipts. Run `make dev-bench-publish` on Linux for the [concurrent publishing comparison](docs/concurrent-publishing.md).
-
-Run `make dev-bench-publish-gate` on Linux to compare synchronous publishers at one, eight and 32 producers. The command checks median throughput and peak process memory against embedded JetStream. See [measurements and reproduction](docs/publisher-gate.md).
+The full list, with retention, backups and deployment: [operating Dostoevsky](docs/operating.md).
 
 ### High-cardinality workloads
 
@@ -351,3 +219,11 @@ Go consumers can use `sketch.HotTopics` to rank recent activity with a fixed res
 ### Embedded workflows (experimental)
 
 Use a dedicated segmented directory for durable sequential activities. The [workflow guide](docs/workflow-lifecycle.md) covers leases, retries, history, crash behavior and the release boundary.
+
+## Documentation
+
+[Getting started](docs/getting-started.md) · [Client guide](docs/clients.md) · [Using the library](docs/library.md) · [Operating](docs/operating.md) · [How it works](docs/how-it-works.md) · [Integrations](docs/integrations.md) · [Changelog](CHANGELOG.md)
+
+## Contribute
+
+Open an issue describing the problem, with a failing test when you can. For a change, fork the repository, branch, and run `make verify` (format, vet, tests, race detector, example build) before opening a pull request. Keep changes small and focused, and add or update tests and the CHANGELOG. Contributions are accepted under the MIT license.

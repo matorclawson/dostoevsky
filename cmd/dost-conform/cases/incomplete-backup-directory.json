@@ -1,0 +1,25 @@
+{
+ "about": "A directory left by an interrupted backup is refused, not opened as an empty node.",
+ "covers": [
+  "d8a84ab"
+ ],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "make_file",
+   "file": "store/.journal.tmp",
+   "content": "x"
+  },
+  {
+   "do": "open",
+   "error": "incomplete_backup"
+  },
+  {
+   "do": "absent",
+   "file": "store/journal.v1"
+  }
+ ]
+}

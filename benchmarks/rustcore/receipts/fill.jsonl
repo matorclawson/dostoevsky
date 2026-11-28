@@ -1,0 +1,4 @@
+{"engine":"go","mode":"fill","records":1000000,"payload":100,"batch":1000,"seconds":1.293,"records_per_s":773458,"rss_peak_kb":12288}
+{"engine":"rust","mode":"fill","records":1000000,"payload":100,"batch":1000,"seconds":0.812,"records_per_s":1231279,"rss_peak_kb":3604}
+{"engine":"go","mode":"fill","records":10000000,"payload":100,"batch":1000,"seconds":14.119,"records_per_s":708263,"rss_peak_kb":20416}
+{"engine":"rust","mode":"fill","records":10000000,"payload":100,"batch":1000,"seconds":8.420,"records_per_s":1187690,"rss_peak_kb":4492}

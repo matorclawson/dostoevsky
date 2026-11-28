@@ -25,10 +25,10 @@ test: dev-test ## Run the tests
 dev: dev-fmt-check dev-vet dev-test dev-race dev-build ## Run the complete development checks
 
 dev-fmt: ## Format the Go source
-	@"$(GOFMT)" -w *.go examples/*/*.go examples/workflows/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go
+	@"$(GOFMT)" -w *.go examples/*/*.go examples/workflows/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go cmd/dost-conform/*.go
 
 dev-fmt-check: ## Check formatting without changing files
-	@files=$$("$(GOFMT)" -l *.go examples/*/*.go examples/workflows/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
+	@files=$$("$(GOFMT)" -l *.go examples/*/*.go examples/workflows/*/*.go workflow/*.go sketch/*.go clienthttp/*.go cmd/dostoevsky-gateway/*.go wire/*.go wireserver/*.go cmd/dostoevsky-server/*.go cmd/dost-conform/*.go) && { test -z "$$files" || { echo "$$files"; exit 1; }; }
 
 dev-vet: ## Run Go static analysis
 	@"$(GO)" vet ./...
@@ -125,6 +125,12 @@ sketch-report: ## Measure sketch accuracy against exact values and write docs/sk
 result: ## Validate a comparison log and print medians: make result LOG=comparison.log ENGINES=a,b,c [TRIALS=5]
 	@test -n "$(LOG)" -a -n "$(ENGINES)" || { echo "usage: make result LOG=comparison.log ENGINES=dostoevsky,jetstream,..." >&2; exit 2; }
 	@"$(GO)" run ./cmd/plots -summary -receipt "$(LOG)" -expect-engines "$(ENGINES)" -trials "$(or $(TRIALS),5)"
+
+.PHONY: conformance
+conformance: ## Run the conformance cases against this engine (Linux, Python 3.10+)
+	@mkdir -p .dev/bin
+	@CGO_ENABLED=0 "$(GO)" build -o .dev/bin/dost-conform ./cmd/dost-conform
+	@PYTHONDONTWRITEBYTECODE=1 python3 scripts/conformance.py --engine go=.dev/bin/dost-conform
 
 # Clients in other languages (see docs/clients.md). Each target needs only its own toolchain.
 JAVAC ?= javac

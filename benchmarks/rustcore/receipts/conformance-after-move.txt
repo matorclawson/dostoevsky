@@ -1,0 +1,14 @@
+{"engine":"go","mode":"fill","records":300000,"payload":100,"batch":500,"seconds":0.441,"records_per_s":680764,"rss_peak_kb":11824}
+written by go: go reads 300000 digest 6f43c4b6; rust reads 300000 digest 6f43c4b6
+then appended by rust and go: go reads 516163 digest f56f9597; rust reads 516163 digest f56f9597
+torn tail, recovered by go: reads 516162 digest e0d8b11e truncated_bytes 129
+  then read by rust: reads 516162 digest e0d8b11e truncated_bytes 0
+torn tail, recovered by rust: reads 516162 digest e0d8b11e truncated_bytes 129
+  then read by go: reads 516162 digest e0d8b11e truncated_bytes 0
+{"engine":"rust","mode":"fill","records":300000,"payload":100,"batch":500,"seconds":0.331,"records_per_s":906083,"rss_peak_kb":2832}
+written by rust: go reads 300000 digest 707a08b8; rust reads 300000 digest 707a08b8
+then appended by go and rust: go reads 501606 digest d216ef7a; rust reads 501606 digest d216ef7a
+torn tail, recovered by go: reads 501605 digest b200a3cc truncated_bytes 129
+  then read by rust: reads 501605 digest b200a3cc truncated_bytes 0
+torn tail, recovered by rust: reads 501605 digest b200a3cc truncated_bytes 129
+  then read by go: reads 501605 digest b200a3cc truncated_bytes 0

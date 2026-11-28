@@ -8,6 +8,10 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 - Added six examples under [examples/workflows](examples/workflows/README.md): one-shot reservation, task queue, webhook intake, saga, payment callback and text ingestion, each with a restart test. The format targets now include them.
 
+## Unreleased — conformance suite, first set
+
+- Added `cmd/dost-conform`, a driver that runs the engine from outside, case files, and `make conformance`. No change to the engine. The cases cover a first part of past recovery fixes; `cmd/dost-conform/README.md` lists what is not covered yet.
+
 ## Unreleased — durable workflow signal waits
 
 - Added a named signal step and a durable, step-addressed Signal call. Waiting runs hold no leases or worker slots. A signal supplies the input to the next activity.

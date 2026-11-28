@@ -1,0 +1,14 @@
+{"engine":"go","mode":"fill","records":300000,"payload":100,"batch":500,"seconds":1.405,"records_per_s":213508,"rss_peak_kb":12012}
+written by go: go reads 300000 digest 08c11f2f; rust reads 300000 digest 08c11f2f
+then appended by rust and go: go reads 499079 digest 8c3ca845; rust reads 499079 digest 8c3ca845
+torn tail, recovered by go: reads 499078 digest 3791a9fb truncated_bytes 129
+  then read by rust: reads 499078 digest 3791a9fb truncated_bytes 0
+torn tail, recovered by rust: reads 499078 digest 3791a9fb truncated_bytes 129
+  then read by go: reads 499078 digest 3791a9fb truncated_bytes 0
+{"engine":"rust","mode":"fill","records":300000,"payload":100,"batch":500,"seconds":0.232,"records_per_s":1295611,"rss_peak_kb":2880}
+written by rust: go reads 300000 digest 805aad73; rust reads 300000 digest 805aad73
+then appended by go and rust: go reads 522829 digest a47ba987; rust reads 522829 digest a47ba987
+torn tail, recovered by go: reads 522828 digest 0b453236 truncated_bytes 129
+  then read by rust: reads 522828 digest 0b453236 truncated_bytes 0
+torn tail, recovered by rust: reads 522828 digest 0b453236 truncated_bytes 129
+  then read by go: reads 522828 digest 0b453236 truncated_bytes 0

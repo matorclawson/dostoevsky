@@ -1,0 +1,44 @@
+{
+ "about": "A missing committed segment stops open instead of being read as retention.",
+ "covers": [],
+ "formats": [
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 18000,
+   "size": 1024,
+   "batch": 500
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "remove_first",
+   "file": "store/segments/seg-*.log",
+   "at_least": 2
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "store/segments/RANGE",
+   "as": "range"
+  },
+  {
+   "do": "open",
+   "error": "corrupt_log"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "store/segments/RANGE",
+   "as": "range"
+  }
+ ]
+}

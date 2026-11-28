@@ -1,0 +1,108 @@
+{
+ "about": "Retention run twice, with writes after each, loses nothing at the next open; removed offsets are expired and a lagging group blocks the floor.",
+ "covers": [
+  "bd7477d"
+ ],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 10,
+   "ids": true
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 0,
+   "next": 6,
+   "state": "six"
+  },
+  {
+   "do": "retain",
+   "floors": [
+    {
+     "floor": 7
+    }
+   ],
+   "error": "conflict"
+  },
+  {
+   "do": "retain",
+   "floors": [
+    {
+     "floor": 3
+    }
+   ]
+  },
+  {
+   "do": "publish_many",
+   "start": 10,
+   "count": 3,
+   "ids": true
+  },
+  {
+   "do": "retain",
+   "floors": [
+    {
+     "floor": 5
+    }
+   ]
+  },
+  {
+   "do": "publish_many",
+   "start": 13,
+   "count": 2,
+   "ids": true
+  },
+  {
+   "do": "snapshot",
+   "as": "kept",
+   "groups": [
+    "g"
+   ],
+   "from": 5
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "same",
+   "as": "kept",
+   "groups": [
+    "g"
+   ],
+   "from": 5
+  },
+  {
+   "do": "count",
+   "is": 10,
+   "from": 5
+  },
+  {
+   "do": "read",
+   "offset": 4,
+   "error": "expired"
+  },
+  {
+   "do": "publish",
+   "value": "00000014",
+   "id": "id-14",
+   "expect": {
+    "offset": 14
+   }
+  }
+ ]
+}

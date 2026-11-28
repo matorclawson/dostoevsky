@@ -58,7 +58,7 @@ This is the first set. It covers only what can be provoked through public operat
 | Fix | Defect | Case |
 |---|---|---|
 | `bd7477d` | a second retention could lose later writes | `retention-twice-then-reopen` |
-| `825a794` | backup could replace an existing directory | `backup-restores` |
+| `825a794` | backup could replace an existing directory | `backup-restores` (for an empty directory Go's rename refuses too; see the case) |
 | `d8a84ab` | an interrupted backup opened as an empty node | `incomplete-backup-directory` |
 | `f20ffa0` | no way back from a damaged journal | `damaged-frame-before-later-frames` |
 | `614c3ed` | recovery stops at a damaged frame | `damaged-frame-before-later-frames` (the offset in the message is not compared) |

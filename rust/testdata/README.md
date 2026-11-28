@@ -15,6 +15,9 @@ edited by hand. `regenerate.sh` writes them all again.
 | `gotime-go.txt` | the same | 5,318 | what `Time.UnmarshalJSON` accepts, and the instant it reads |
 | `base64-go.txt` | the same | 2,132 | what `encoding/base64` accepts and decodes |
 | `recordscan-go.txt` | the same | 2,015 | the legacy journal's record scanner |
+| `idtable-go.txt` | the same | 460 | the ID hash, the ID table's order of visits, the ID filter's bytes and answers |
+| `segindex-go.txt` | the same | 812 | the segment index: 22 built record by record, 790 idx files read whole, cut or damaged |
+| `index-misc-go.txt` | the same | 60 | the admission sketch and the location index |
 | `sha256-lengths.txt` | Python's `hashlib` | 200 | SHA-256 at lengths around the block boundaries |
 
 The three `.go` programs carry `//go:build ignore`, so the Go module does not build them. `internal_vectors_test.go.txt`

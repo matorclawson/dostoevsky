@@ -1,0 +1,8 @@
+{"cache":"cold","engine":"go","mode":"read","records":10000003,"bytes":1000000300,"digest":"00000000","seconds":4.778,"records_per_s":2093084,"mib_per_s":199.6,"rss_peak_kb":13976,"truncated_bytes":0}
+{"cache":"warm","engine":"go","mode":"read","records":10000003,"bytes":1000000300,"digest":"00000000","seconds":4.118,"records_per_s":2428167,"mib_per_s":231.6,"rss_peak_kb":31048,"truncated_bytes":0}
+{"cache":"warm","engine":"go","mode":"read","records":10000003,"bytes":1000000300,"digest":"00000000","seconds":3.967,"records_per_s":2520817,"mib_per_s":240.4,"rss_peak_kb":35104,"truncated_bytes":0}
+{"cache":"warm","engine":"go","mode":"read","records":10000003,"bytes":1000000300,"digest":"00000000","seconds":4.032,"records_per_s":2479935,"mib_per_s":236.5,"rss_peak_kb":40008,"truncated_bytes":0}
+{"cache":"cold","engine":"rust","mode":"read","records":10000003,"bytes":1000000300,"digest":"00000000","seconds":1.769,"records_per_s":5652950,"mib_per_s":539.1,"rss_peak_kb":5092,"truncated_bytes":0}
+{"cache":"warm","engine":"rust","mode":"read","records":10000003,"bytes":1000000300,"digest":"00000000","seconds":1.047,"records_per_s":9547891,"mib_per_s":910.6,"rss_peak_kb":5108,"truncated_bytes":0}
+{"cache":"warm","engine":"rust","mode":"read","records":10000003,"bytes":1000000300,"digest":"00000000","seconds":1.043,"records_per_s":9591737,"mib_per_s":914.7,"rss_peak_kb":5112,"truncated_bytes":0}
+{"cache":"warm","engine":"rust","mode":"read","records":10000003,"bytes":1000000300,"digest":"00000000","seconds":1.198,"records_per_s":8350274,"mib_per_s":796.3,"rss_peak_kb":5108,"truncated_bytes":0}

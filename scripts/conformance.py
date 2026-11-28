@@ -13,6 +13,7 @@ import glob
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -81,7 +82,9 @@ class Engine:
         if status is not None:
             raise Failed("the %s driver had already exited with status %d before the kill" % (self.name, status))
         self.process.kill()
-        self.process.wait()
+        status = self.process.wait()
+        if status != -signal.SIGKILL:
+            raise Failed("the %s driver ended with status %d, not by the kill" % (self.name, status))
 
     def discard(self):
         """Cleanup after a failure: never raises, so the first error is the one reported."""
@@ -142,6 +145,9 @@ def check_case(name, case):
         bad("formats must name at least one of %s" % ", ".join(FORMATS))
     if not case["steps"]:
         bad("no steps")
+    for fmt in case["formats"]:
+        if not any(step.get("only", fmt) == fmt for step in case["steps"]):
+            bad("no step runs for the format %s" % fmt)
     for number, step in enumerate(case["steps"], 1):
         do = step.get("do")
         if do not in ACTIONS and do not in OPERATIONS:

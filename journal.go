@@ -120,6 +120,10 @@ func mkdirDurable(dir string) error {
 	return nil
 }
 
+// oneIdentity reports whether the real and effective identities agree, replaceable so a test
+// can stand for a set-user-ID process.
+var oneIdentity = func() bool { return os.Getuid() == os.Geteuid() && os.Getgid() == os.Getegid() }
+
 // cannotHaveCreated reports whether the failure to sync dir can be passed over: this user
 // cannot create entries in it, so no earlier start of this program left one unsynced.
 func cannotHaveCreated(dir string, err error) bool {
@@ -127,7 +131,7 @@ func cannotHaveCreated(dir string, err error) bool {
 		return true
 	}
 	// access(2) answers for the real identity, not the one that opens files.
-	if os.Getuid() != os.Geteuid() || os.Getgid() != os.Getegid() {
+	if !oneIdentity() {
 		return false
 	}
 	const writable = 2 // W_OK

@@ -2,6 +2,7 @@ package dostoevsky
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -91,6 +92,91 @@ func TestTornMarkerAndForeignRange(t *testing.T) {
 		}
 		if _, err = os.Stat(named); err != nil {
 			t.Fatalf("the range file was removed: %v", err)
+		}
+	}
+}
+
+// abandoned returns a directory left by a first initialization that stopped with keep
+// bytes of its marker written.
+func abandoned(t *testing.T, cfg Config, keep int) string {
+	t.Helper()
+	dir := t.TempDir()
+	n, err := OpenSegmented(dir, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = n.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Truncate(filepath.Join(dir, "journal.v1"), int64(keep)); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A failure at each directory sync of the cleanup must leave something the next open
+// can still recover.
+func TestInterruptedCleanupOfAnInitializationCanBeRetried(t *testing.T) {
+	cfg := Config{Node: "n", Nodes: []string{"n"}, Topics: map[string]int{"events": 1}}
+	failure := errors.New("injected sync failure")
+	original := syncDir
+	defer func() { syncDir = original }()
+	for _, keep := range []int{0, 7} {
+		for _, at := range []string{"segments", "parent"} {
+			dir := abandoned(t, cfg, keep)
+			target := dir
+			if at == "segments" {
+				target = filepath.Join(dir, "segments")
+			}
+			failed := false
+			syncDir = func(p string) error {
+				if p == target && !failed {
+					failed = true
+					return failure
+				}
+				return original(p)
+			}
+			if n, err := OpenSegmented(dir, cfg); !errors.Is(err, failure) {
+				if err == nil {
+					n.Close()
+				}
+				t.Fatalf("keep %d, %s: %v, want the injected failure", keep, at, err)
+			}
+			syncDir = original
+			n, err := OpenSegmented(dir, cfg)
+			if err != nil {
+				t.Fatalf("keep %d, %s: retry: %v", keep, at, err)
+			}
+			if err = n.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// The other shapes a stopped initialization or cleanup leaves.
+func TestAbandonedInitializationShapes(t *testing.T) {
+	cfg := Config{Node: "n", Nodes: []string{"n"}, Topics: map[string]int{"events": 1}}
+	shapes := map[string]func(segments string) error{
+		"no range file": func(p string) error { return os.Remove(filepath.Join(p, "RANGE")) },
+		"empty": func(p string) error {
+			return errors.Join(os.Remove(filepath.Join(p, "RANGE")), os.Remove(filepath.Join(p, segName(1))))
+		},
+		"staging only": func(p string) error {
+			return errors.Join(os.Remove(filepath.Join(p, "RANGE")), os.Rename(filepath.Join(p, segName(1)), filepath.Join(p, segTmpName(1))))
+		},
+	}
+	for name, shape := range shapes {
+		dir := abandoned(t, cfg, 0)
+		if err := shape(filepath.Join(dir, "segments")); err != nil {
+			t.Fatal(err)
+		}
+		n, err := OpenSegmented(dir, cfg)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err = n.Close(); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

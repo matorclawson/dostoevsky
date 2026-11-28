@@ -66,10 +66,7 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 				}
 				return false, errors.New("unmarked segmented directory; refusing initialization")
 			}
-			if err = os.RemoveAll(path); err != nil {
-				return false, err
-			}
-			if err = syncDir(dir); err != nil {
+			if err = clearAbandonedInit(n.j.file, dir, path); err != nil {
 				return false, err
 			}
 		} else if !errors.Is(e, os.ErrNotExist) {
@@ -170,6 +167,28 @@ func partialMarker(dir string, b []byte) bool {
 	}
 	_, err := os.Lstat(filepath.Join(dir, "segments"))
 	return err == nil
+}
+
+// clearAbandonedInit removes what abandonedFirstInit recognized, in an order that leaves
+// a recognized state after a crash at any step: the marker goes back to empty while
+// segments/ still exists, and the range file is durably gone before the segment it names.
+func clearAbandonedInit(marker *os.File, dir, path string) error {
+	if err := marker.Truncate(0); err != nil {
+		return err
+	}
+	if err := marker.Sync(); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(path, "RANGE")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := syncDir(path); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	return syncDir(dir)
 }
 
 // abandonedFirstInit reports whether path holds nothing but what an interrupted first

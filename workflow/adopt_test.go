@@ -46,3 +46,32 @@ func TestFailedReplayLeavesTheOlderFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A new workflow directory stopped before or during its format marker opens again.
+func TestInterruptedWorkflowInitializationCanBeStartedAgain(t *testing.T) {
+	for _, keep := range []int64{0, 5} {
+		dir := t.TempDir()
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		// Back to the state before the marker was complete: no identity yet, and the
+		// beginning of the segmented marker.
+		if err = os.Remove(filepath.Join(dir, "WORKFLOW-ID")); err != nil {
+			t.Fatal(err)
+		}
+		marker := "DOSTOEVSKY-SEGMENTED-01\n"
+		if err = os.WriteFile(filepath.Join(dir, "journal.v1"), []byte(marker[:keep]), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if s, err = Open(dir); err != nil {
+			t.Fatalf("%d bytes: %v", keep, err)
+		}
+		if err = s.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

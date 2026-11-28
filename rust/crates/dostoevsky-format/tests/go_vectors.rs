@@ -49,6 +49,9 @@ fn message<T, E: std::fmt::Display>(r: &Result<T, E>) -> String {
 
 #[test]
 fn crc32c_matches_go() {
+    // Shown with --nocapture, so that a receipt says which path the rows went through on its machine.
+    println!("crc32c backend: {}", crc32c::backend());
+    assert!(["sse4.2", "armv8-crc", "table"].contains(&crc32c::backend()));
     let mut seen = 0;
     for line in rows(include_str!("../../../testdata/crc32c-go.txt")) {
         let f: Vec<&str> = line.split(' ').collect();

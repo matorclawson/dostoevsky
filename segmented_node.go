@@ -24,13 +24,19 @@ const segmentTarget = 8 << 20
 // and is not. A variable so that a test can reach it.
 var segmentPosLimit int64 = math.MaxUint32
 
-func (n *Node) openSegments(dir string, raw []byte, requested bool) (bool, error) {
+func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (bool, error) {
 	var b [len(segmentMarker)]byte
 	k, err := n.j.file.ReadAt(b[:], 0)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
 	marked := string(b[:k]) == segmentMarker
+	if bytes.HasPrefix(b[:k], []byte(workflowMagic)) {
+		if !workflow {
+			return false, ErrSegmentedJournal
+		}
+		marked = true
+	}
 	path := filepath.Join(dir, "segments")
 	if !marked && k != 0 {
 		if k < len(segmentMarker) {

@@ -1,0 +1,18 @@
+=== RUN   TestWorkflowReopenFootprint
+    cost_linux_test.go:213: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:162: closed=0 warm_reopen_ms=0.58 retained_heap_delta_KiB=24.9 rss_before_KiB=6496 rss_after_KiB=7116
+        --- PASS: TestWorkflowReopenFootprint (0.00s)
+        PASS
+
+    cost_linux_test.go:213: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:162: closed=256 warm_reopen_ms=3.51 retained_heap_delta_KiB=255.4 rss_before_KiB=6396 rss_after_KiB=8816
+        --- PASS: TestWorkflowReopenFootprint (0.00s)
+        PASS
+
+    cost_linux_test.go:213: === RUN   TestWorkflowReopenFootprint
+            cost_linux_test.go:162: closed=4096 warm_reopen_ms=57.55 retained_heap_delta_KiB=3699.2 rss_before_KiB=6580 rss_after_KiB=14300
+        --- PASS: TestWorkflowReopenFootprint (0.06s)
+        PASS
+
+--- PASS: TestWorkflowReopenFootprint (1.43s)
+PASS

@@ -231,7 +231,7 @@ func openNodeFormat(dir string, c Config, segmented bool) (*Node, error) {
 		return nil, e
 	}
 	n := &Node{cfg: own, j: j, streams: make(map[Partition]*stream), topology: fmt.Sprintf("%x", sha256.Sum256(b))}
-	use, err := n.openSegments(dir, raw, segmented)
+	use, err := n.openSegments(dir, raw, segmented, false)
 	if err != nil {
 		j.close()
 		return nil, err

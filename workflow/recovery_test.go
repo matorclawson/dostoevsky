@@ -3,6 +3,7 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -211,77 +212,108 @@ func TestFenceAfterUncertainWrite(t *testing.T) {
 	}
 }
 
-// Replay byte images of a group interrupted after a valid first transition.
-// Length-preserving damage is intentionally fail-closed in the current store.
+// Compare the same damaged group image on both sides of the durable witness.
 func TestWorkflowGroupCrashImages(t *testing.T) {
-	for _, damage := range []bool{false, true} {
-		t.Run(fmt.Sprint("damaged=", damage), func(t *testing.T) {
-			dir := t.TempDir()
-			s := setup(t, dir)
-			realAppend := s.appendGroup
-			var captured []d.Publication
-			s.appendGroup = func(c context.Context, pubs []d.Publication) ([]d.Record, error) {
-				captured = append(captured, pubs...)
-				return realAppend(c, pubs)
-			}
-			for _, id := range []string{"one", "two"} {
-				if _, e := s.StartOnce(id, "work", 1, "q", []byte("0"), nil); e != nil {
+	for _, committed := range []bool{false, true} {
+		for _, short := range []bool{false, true} {
+			t.Run(fmt.Sprintf("committed=%t/short=%t", committed, short), func(t *testing.T) {
+				dir := t.TempDir()
+				s := setup(t, dir)
+				if _, e := s.StartOnce("prior", "work", 1, "q", []byte("0"), nil); e != nil {
 					t.Fatal(e)
 				}
-			}
-			if e := s.Close(); e != nil {
-				t.Fatal(e)
-			}
-			// Build a separate store, then use the actual storage batch encoder for both records.
-			replica := t.TempDir()
-			ss := setup(t, replica)
-			if e := ss.Close(); e != nil {
-				t.Fatal(e)
-			}
-			n, e := d.OpenSegmented(replica, d.Config{Node: "workflow", Nodes: []string{"workflow"}, Topics: map[string]int{topic: 1}})
-			if e != nil {
-				t.Fatal(e)
-			}
-			if _, e = n.PublishBatch(context.Background(), captured); e != nil {
-				t.Fatal(e)
-			}
-			if e = n.Close(); e != nil {
-				t.Fatal(e)
-			}
-			files, e := filepath.Glob(filepath.Join(replica, "segments", "seg-*.log"))
-			if e != nil || len(files) != 1 {
-				t.Fatal(files, e)
-			}
-			b, e := os.ReadFile(files[0])
-			if e != nil {
-				t.Fatal(e)
-			}
-			if damage {
-				b[len(b)-1] ^= 1
-			} else {
-				b = b[:len(b)-1]
-			}
-			if e = os.WriteFile(files[0], b, 0600); e != nil {
-				t.Fatal(e)
-			}
-			ss, e = Open(replica)
-			if damage {
-				if e == nil {
-					ss.Close()
-					t.Fatal("damaged complete frame accepted")
+				marker := filepath.Join(dir, "journal.v1")
+				old, e := os.ReadFile(marker)
+				if e != nil {
+					t.Fatal(e)
 				}
-				return
-			}
-			if e != nil {
-				t.Fatal(e)
-			}
-			defer ss.Close()
-			for _, id := range []string{"one", "two"} {
-				made, e := ss.StartOnce(id, "work", 1, "q", []byte("0"), nil)
-				if e != nil || made != (id == "two") {
-					t.Fatal(id, made, e)
+				for _, id := range []string{"one", "two"} {
+					if _, e := s.StartOnce(id, "work", 1, "q", []byte("0"), nil); e != nil {
+						t.Fatal(e)
+					}
 				}
-			}
-		})
+				if e = s.Close(); e != nil {
+					t.Fatal(e)
+				}
+				files, e := filepath.Glob(filepath.Join(dir, "segments", "seg-*.log"))
+				if e != nil || len(files) != 1 {
+					t.Fatal(files, e)
+				}
+				b, e := os.ReadFile(files[0])
+				if e != nil {
+					t.Fatal(e)
+				}
+				if short {
+					b = b[:len(b)-1]
+				} else {
+					b[len(b)-1] ^= 1
+				}
+				if e = os.WriteFile(files[0], b, 0600); e != nil {
+					t.Fatal(e)
+				}
+				if !committed {
+					if e = os.WriteFile(marker, old, 0600); e != nil {
+						t.Fatal(e)
+					}
+				}
+				s, e = Open(dir)
+				if committed {
+					if e == nil {
+						s.Close()
+						t.Fatal("accepted damaged committed bytes")
+					}
+					preserved, err := os.ReadFile(files[0])
+					if err != nil || !bytes.Equal(b, preserved) {
+						t.Fatal("changed committed evidence", err)
+					}
+					return
+				}
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer s.Close()
+				for _, id := range []string{"prior", "one", "two"} {
+					made, e := s.StartOnce(id, "work", 1, "q", []byte("0"), nil)
+					if e != nil || made != (id != "prior") {
+						t.Fatal(id, made, e)
+					}
+				}
+			})
+		}
 	}
+}
+
+func TestGroupedPayloadBudget(t *testing.T) {
+	s := setup(t, t.TempDir())
+	defer s.Close()
+	entered, release := make(chan struct{}), make(chan struct{})
+	real := s.appendGroup
+	var once sync.Once
+	s.appendGroup = func(c context.Context, p []d.Publication) ([]d.Record, error) {
+		once.Do(func() { close(entered); <-release })
+		return real(c, p)
+	}
+	payload := append([]byte{'"'}, bytes.Repeat([]byte("x"), 185<<10)...)
+	payload = append(payload, '"')
+	var wg sync.WaitGroup
+	add := func(i int) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if ok, e := s.StartOnce(fmt.Sprint(i), "work", 1, "q", payload, nil); e != nil || !ok {
+				t.Errorf("start %d: %v", i, e)
+			}
+		}()
+	}
+	add(0)
+	<-entered
+	for i := 1; i <= 32; i++ {
+		add(i)
+	}
+	until := time.Now().Add(time.Second)
+	for len(s.calls) < cap(s.calls) && time.Now().Before(until) {
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	wg.Wait()
 }

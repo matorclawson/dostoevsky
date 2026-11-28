@@ -4,6 +4,12 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — workflow crash recovery
+
+- Added a durable workflow commit boundary and per-store identity. Recovery verifies committed segments and repairs unacknowledged suffixes, including an interrupted rollover. It preserves committed corruption for inspection.
+- Added strict adoption of existing segmented workflow stores, fencing of uncertain writes and reads, and bounded grouping of waiting workflow commands.
+- Added process-kill, corruption, migration and payload-budget tests plus paired ext4 performance and reopen measurements. See the [recovery report](docs/workflow-commit-boundary.md).
+
 ## Unreleased — experimental embedded workflow lifecycle
 
 - Added a separate segmented workflow store with immutable sequential activity definitions, exact-input StartOnce, leased Poll, successful or failed Finish, bounded attempts, fixed backoff and paginated History.

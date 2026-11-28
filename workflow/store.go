@@ -93,7 +93,7 @@ type command struct {
 	done chan error
 }
 type Store struct {
-	node        *d.Node
+	node        *d.WorkflowLog
 	calls       chan command
 	stopped     chan struct{}
 	once        sync.Once
@@ -110,7 +110,7 @@ type Store struct {
 }
 
 func Open(dir string) (*Store, error) {
-	n, e := d.OpenSegmented(dir, d.Config{Node: "workflow", Nodes: []string{"workflow"}, Topics: map[string]int{topic: 1}})
+	n, e := d.OpenWorkflowLog(dir)
 	if e != nil {
 		return nil, e
 	}
@@ -167,26 +167,30 @@ func (s *Store) serve() {
 	defer close(s.stopped)
 	var fenced error
 	for {
-		group := [4]command{<-s.calls}
-		n := 1
-		for n < len(group) && group[n-1].act != nil {
-			select {
-			case group[n] = <-s.calls:
-				n++
-			default:
-				goto ready
-			}
-		}
-	ready:
-		var result [4]error
+		// Drain only commands already waiting. Reserve one maximum-sized
+		// command before admitting it. A Poll can emit at most 32 small
+		// expiry/lease records, every other command emits at most one.
+		group := [32]command{<-s.calls}
+		available := min(len(group), 1+len(s.calls))
+		var result [32]error
 		closing := false
-		for i, c := range group[:n] {
+		n, encoded := 0, 0
+		for n < available && encoded < 3<<20 && len(s.pending) <= 1024-32 {
+			if n > 0 {
+				group[n] = <-s.calls
+			}
+			c := group[n]
+			n++
 			if c.act == nil {
 				closing = true
 				break
 			}
 			if fenced == nil {
-				result[i] = c.act(s)
+				before := len(s.pending)
+				result[n-1] = c.act(s)
+				for _, item := range s.pending[before:] {
+					encoded += len(item.Message.Value) + 128
+				}
 			}
 		}
 		if fenced == nil && len(s.pending) > 0 {

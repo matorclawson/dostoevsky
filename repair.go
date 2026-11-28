@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -67,7 +68,7 @@ func openForRepair(dir string) (*journal, error) {
 		j.close()
 		return nil, e
 	}
-	if string(marker[:]) == segmentMarker {
+	if string(marker[:]) == segmentMarker || strings.HasPrefix(string(marker[:]), workflowMagic) {
 		j.close()
 		return nil, ErrSegmentedJournal
 	}

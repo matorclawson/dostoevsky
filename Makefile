@@ -267,3 +267,10 @@ dev-test-ephemeral: ## Run the same public-API scenarios against a vendored SQLi
 dev-bench-workflow-reopen: ## Measure fresh-process reopen memory versus retained closed runs
 	@test -d "$(DOST_WORKFLOW_BENCH_DIR)" || { echo "Set DOST_WORKFLOW_BENCH_DIR to a disposable directory"; exit 2; }
 	@"$(GO)" test -count=1 -v -run '^TestWorkflowReopenFootprint$$' ./workflow
+
+.PHONY: dev-test-workflow-boundary dev-bench-workflow-boundary
+dev-test-workflow-boundary: ## Exercise workflow commit witnesses, corruption and rollover kills
+	@"$(GO)" test -race -count=1 -v -run 'WorkflowBoundary|WorkflowWitness|WorkflowGroupCrashImages|AbruptExit' . ./workflow
+
+dev-bench-workflow-boundary: ## Compare workflow durability costs against aecbb08 on a disposable disk
+	@sh scripts/workflow-boundary-bench.sh

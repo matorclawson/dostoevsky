@@ -404,6 +404,49 @@ fn base64_matches_go() {
 }
 
 #[test]
+fn the_frame_time_field_matches_go() {
+    let (mut held, mut refused, mut back) = (0, 0, 0);
+    for line in rows(include_str!("../../../testdata/frametime-go.txt")) {
+        let f: Vec<&str> = line.split(' ').collect();
+        let got = match f[0] {
+            "T" => {
+                let at = gotime::Instant {
+                    seconds: f[1].parse().unwrap(),
+                    nanoseconds: f[2].parse().unwrap(),
+                };
+                match time_to_nanos(at) {
+                    Ok(n) => {
+                        held += 1;
+                        if n != ZERO_TIME {
+                            assert_eq!(nanos_to_time(n), at, "{line}");
+                        }
+                        format!("T {} {} ok {n}", f[1], f[2])
+                    }
+                    Err(TimeOutOfRange(refused_time)) => {
+                        refused += 1;
+                        assert_eq!(refused_time, at);
+                        format!("T {} {} err", f[1], f[2])
+                    }
+                }
+            }
+            "N" => {
+                back += 1;
+                let at = nanos_to_time(f[1].parse().unwrap());
+                format!("N {} {} {}", f[1], at.seconds, at.nanoseconds)
+            }
+            other => panic!("unknown row {other}"),
+        };
+        assert_eq!(got, line);
+    }
+    assert!(
+        held > 300 && refused > 150 && back > 300,
+        "{held} held, {refused} refused, {back} converted back"
+    );
+    assert_eq!(time_to_nanos(ZERO_INSTANT), Ok(ZERO_TIME));
+    assert_eq!(nanos_to_time(ZERO_TIME), ZERO_INSTANT);
+}
+
+#[test]
 fn the_record_scanner_matches_go() {
     let mut scanner = RecordScanner::default();
     let (mut accepted, mut refused) = (0, 0);

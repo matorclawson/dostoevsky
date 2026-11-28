@@ -28,6 +28,7 @@
 //! Every `append_` function leaves `dst` as it was when it returns an error.
 
 use crate::crc32c;
+use crate::gotime::Instant;
 use std::fmt;
 
 pub const FRAME3_HEADER: usize = 14;
@@ -144,10 +145,57 @@ pub fn read_frame3(b: &[u8]) -> Result<(u8, &[u8], usize), Frame3Error> {
 /// `time.Time`. The instants a frame can hold are therefore those from 1677-09-21 00:12:43.145224193 UTC through
 /// 2262-04-11 23:47:16.854775807 UTC, inclusive.
 ///
-/// The Go engine carries a `time.Time` and converts at the frame (`timeToNanos`, `nanosToTime`), refusing an instant
-/// outside that range. This engine carries the nanoseconds themselves, so a time outside the range cannot be formed
-/// and there is nothing to convert.
+/// The Go engine carries a `time.Time` and converts at the frame. This engine carries the nanoseconds themselves
+/// and converts where a time arrives in another form, which is the legacy journal's text: [`time_to_nanos`] and
+/// [`nanos_to_time`].
 pub const ZERO_TIME: i64 = i64::MIN;
+
+/// Go's zero `time.Time`: January 1 of year 1, 00:00:00 UTC.
+pub const ZERO_INSTANT: Instant = Instant {
+    seconds: -62_135_596_800,
+    nanoseconds: 0,
+};
+
+/// An instant that a frame's time field cannot hold. Go's `timeToNanos` refuses it with an error that wraps nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeOutOfRange(pub Instant);
+
+impl fmt::Display for TimeOutOfRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "time {}.{:09} (seconds since the Unix epoch) is outside the range of a nanosecond timestamp",
+            self.0.seconds, self.0.nanoseconds
+        )
+    }
+}
+
+impl std::error::Error for TimeOutOfRange {}
+
+/// Converts an instant to the frame's time field. The zero time is kept as [`ZERO_TIME`]; an instant outside the
+/// range a frame can hold is refused. Mirrors `timeToNanos`.
+pub fn time_to_nanos(t: Instant) -> Result<i64, TimeOutOfRange> {
+    if t == ZERO_INSTANT {
+        return Ok(ZERO_TIME);
+    }
+    // In i128 nothing can overflow: the seconds of any instant times 10^9 fit with room to spare.
+    let nanos = i128::from(t.seconds) * 1_000_000_000 + i128::from(t.nanoseconds);
+    match i64::try_from(nanos) {
+        Ok(n) if n != ZERO_TIME && t.nanoseconds < 1_000_000_000 => Ok(n),
+        _ => Err(TimeOutOfRange(t)),
+    }
+}
+
+/// Converts the frame's time field to an instant. Mirrors `nanosToTime`.
+pub fn nanos_to_time(n: i64) -> Instant {
+    if n == ZERO_TIME {
+        return ZERO_INSTANT;
+    }
+    Instant {
+        seconds: n.div_euclid(1_000_000_000),
+        nanoseconds: n.rem_euclid(1_000_000_000) as u32,
+    }
+}
 
 /// A Record frame's content. Key, ID and value borrow the buffer they were decoded from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

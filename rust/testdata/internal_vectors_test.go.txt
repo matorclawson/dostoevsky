@@ -396,6 +396,44 @@ func TestWriteRustVectors(t *testing.T) {
 	}
 	b64.write(t, "base64-go.txt")
 
+	// ----- the frame's time field -----
+	// Its own source of numbers, so that the files written after it stay as they were.
+	var stamps vectorFile
+	stampRng := rand.New(rand.NewSource(20261129))
+	stamp := func(at time.Time) {
+		if n, err := timeToNanos(at); err != nil {
+			stamps.row("T %d %d err", at.Unix(), at.Nanosecond())
+		} else {
+			stamps.row("T %d %d ok %d", at.Unix(), at.Nanosecond(), n)
+		}
+	}
+	back := func(n int64) {
+		at := nanosToTime(n)
+		stamps.row("N %d %d %d", n, at.Unix(), at.Nanosecond())
+	}
+	edges := []time.Time{{}, time.Time{}.In(time.FixedZone("", 3600)), time.Time{}.Add(1), time.Time{}.Add(-1), time.Unix(0, 0), time.Unix(0, -1), time.Unix(0, 1),
+		time.Unix(-1, 999999999), time.Unix(1, 0), time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC),
+		time.Date(1677, 9, 21, 0, 12, 43, 145224192, time.UTC), time.Date(2262, 4, 11, 23, 47, 16, 854775807, time.FixedZone("", -7*3600))}
+	for _, edge := range []time.Time{minFrameTime, maxFrameTime} {
+		for _, d := range []time.Duration{0, 1, -1, 2, -2, 999999999, -999999999, time.Second, -time.Second, time.Hour, -time.Hour} {
+			edges = append(edges, edge.Add(d))
+		}
+	}
+	for _, at := range edges {
+		stamp(at)
+	}
+	for n := 0; n < 300; n++ {
+		stamp(time.Unix(stampRng.Int63n(40_000_000_000)-20_000_000_000, stampRng.Int63n(1_000_000_000)))
+		stamp(time.Unix(0, int64(stampRng.Uint64())))
+	}
+	for _, n := range []int64{math.MinInt64, math.MinInt64 + 1, math.MinInt64 + 2, -1_000_000_001, -1_000_000_000, -999_999_999, -1, 0, 1, 999_999_999, 1_000_000_000, math.MaxInt64 - 1, math.MaxInt64} {
+		back(n)
+	}
+	for n := 0; n < 300; n++ {
+		back(int64(stampRng.Uint64()))
+	}
+	stamps.write(t, "frametime-go.txt")
+
 	// ----- the record scanner -----
 	var scans vectorFile
 	seenScan := map[string]bool{}

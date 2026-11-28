@@ -5,6 +5,7 @@
 
 pub mod base64;
 pub mod gojson;
+pub mod sha256;
 
 pub mod checkpoint3;
 pub mod frame3;

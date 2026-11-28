@@ -31,13 +31,21 @@ var (
 	// ErrSegmentedJournal indicates the legacy inspection or repair tool was given a segmented store.
 	ErrSegmentedJournal = errors.New("use VerifySegments to inspect a segmented store")
 	// errWorkflowStore matches ErrSegmentedJournal and says what actually applies.
-	errWorkflowStore = fmt.Errorf("%w; this one is a workflow store, which only the workflow package opens and which has no separate inspection tool", ErrSegmentedJournal)
+	errWorkflowStore error = workflowStoreError{}
 	// ErrLaterFrames is returned by RepairJournal when frames that verify follow the damage: truncating would discard
 	// writes that were very likely acknowledged.
 	ErrLaterFrames = errors.New("frames that verify follow the damage")
 	// ErrNotRepairable is returned by RepairJournal for damage that truncation is not the answer to.
 	ErrNotRepairable = errors.New("this damage is not repaired by truncating")
 )
+
+type workflowStoreError struct{}
+
+func (workflowStoreError) Error() string {
+	return "this is a workflow store: only the workflow package opens it, and there is no separate inspection tool"
+}
+
+func (workflowStoreError) Is(target error) bool { return target == ErrSegmentedJournal }
 
 // JournalReport describes a journal at the level of its frames. It does not replay them.
 type JournalReport struct {

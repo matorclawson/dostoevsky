@@ -16,7 +16,7 @@ The [workflow commit boundary](workflow-commit-boundary.md) binds replies to a d
 
 Two format changes are separate. The **directory** format changes when a directory is first opened with the commit witness: older readers refuse it. The **transition** format changes only when a definition with a signal step is recorded: older readers then stop during replay (see [durable signal waits](workflow-wait-scale.md)).
 
-**Inspecting a damaged workflow store:** there is no separate tool. `Open`, `dost-repair` and `VerifySegments` do not apply to it; `workflow.Open` reports the segment and offset it stops at. Restore a copy of the whole directory.
+**Inspecting a damaged workflow store:** there is no separate tool. `Open`, `dost-repair` and `VerifySegments` do not apply to it; for damaged segment data `workflow.Open` reports the segment and offset it stops at; an error in the commit witness or the store identity names no position. Restore a copy of the whole directory.
 
 ## Evidence and reproduction
 

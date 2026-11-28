@@ -18,7 +18,7 @@ A workload whose retained IDs exceed the filter budget, for example one scanning
 
 **Do not run `dost-repair` or the upgrade tool of an earlier release on a segmented directory.** An old repair can remove the format marker and leave the segment data behind.
 
-**An interrupted first initialization** (stopped before the format marker was written) leaves a directory that `Open` refuses. No write was acknowledged from it: remove that new directory and initialize again.
+**An interrupted first initialization** (stopped before the format marker was completely written) acknowledged nothing. `OpenSegmented` and `workflow.Open` clear it and start again when the directory holds only an empty first segment and its range file; plain `Open` refuses it, and so does anything else found there.
 
 ## Migrate, verify and roll back
 

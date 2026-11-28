@@ -237,7 +237,7 @@ dev-bench-hot-topics: ## Measure topic tracker accuracy, memory and observation 
 	@"$(GO)" test -run HotTopic -v -bench HotTopics -benchmem -count=3 ./sketch
 
 .PHONY: dev-bench-fresh
-dev-bench-fresh: ## Compare fresh segmented durable publishes against 8e410b7
+dev-bench-fresh: ## Compare fresh segmented durable publishes against 93acac3
 	@sh scripts/fresh-publish-bench.sh
 
 .PHONY: dev-profile-fresh dev-test-sync-modes dev-test-sockets
@@ -272,7 +272,7 @@ dev-bench-workflow-reopen: ## Measure fresh-process reopen memory versus retaine
 dev-test-workflow-boundary: ## Exercise workflow commit witnesses, corruption and rollover kills
 	@"$(GO)" test -race -count=1 -v -run 'WorkflowBoundary|WorkflowWitness|WorkflowGroupCrashImages|AbruptExit|MissingUncommittedSuccessor' . ./workflow
 
-dev-bench-workflow-boundary: ## Compare workflow durability costs against aecbb08 on a disposable disk
+dev-bench-workflow-boundary: ## Compare workflow durability costs against bcc0238 on a disposable disk
 	@sh scripts/workflow-boundary-bench.sh
 
 .PHONY: dev-bench-workflow-scale

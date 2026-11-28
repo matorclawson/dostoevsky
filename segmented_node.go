@@ -31,6 +31,7 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 		return false, err
 	}
 	marked := string(b[:k]) == segmentMarker
+	partial := partialMarker(dir, b[:k])
 	if bytes.HasPrefix(b[:k], []byte(workflowMagic)) {
 		if !workflow {
 			return false, errWorkflowStore
@@ -38,7 +39,7 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 		marked = true
 	}
 	path := filepath.Join(dir, "segments")
-	if !marked && k != 0 {
+	if !marked && k != 0 && !partial {
 		if k < len(segmentMarker) {
 			if _, err := os.Stat(path); err == nil {
 				return false, fmt.Errorf("%w: bad format marker", ErrCorruptLog)
@@ -60,6 +61,9 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 				}
 			}
 			if !abandoned {
+				if partial {
+					return false, fmt.Errorf("%w: bad format marker", ErrCorruptLog)
+				}
 				return false, errors.New("unmarked segmented directory; refusing initialization")
 			}
 			if err = os.RemoveAll(path); err != nil {
@@ -158,6 +162,16 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 	return true, nil
 }
 
+// partialMarker reports whether b is the beginning of the format marker, cut short, in a
+// directory that has a segments directory: what a torn first write of the marker leaves.
+func partialMarker(dir string, b []byte) bool {
+	if len(b) == 0 || len(b) >= len(segmentMarker) || string(b) != segmentMarker[:len(b)] {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(dir, "segments"))
+	return err == nil
+}
+
 // abandonedFirstInit reports whether path holds nothing but what an interrupted first
 // initialization leaves: staging files, the range file and at most the first segment, which
 // has no frame after its start checkpoint and no partition in it. Anything else, or a
@@ -167,16 +181,29 @@ func abandonedFirstInit(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	first := false
+	first, ranged := false, false
 	for _, entry := range entries {
 		switch entry.Name() {
 		case segName(1):
 			first = true
-		case segTmpName(1), "RANGE", "RANGE.tmp":
+		case "RANGE":
+			ranged = true
+		case segTmpName(1), "RANGE.tmp":
 		default:
 			return false, nil
 		}
 		if !entry.Type().IsRegular() {
+			return false, nil
+		}
+	}
+	// A range file that names anything but the first segment is evidence of a store that
+	// had more: nothing is removed then.
+	if ranged {
+		named, err := readSegmentRange(path)
+		if err != nil {
+			return false, err
+		}
+		if !first || !bytes.Equal(named, rangeBytes(1, 1)) {
 			return false, nil
 		}
 	}

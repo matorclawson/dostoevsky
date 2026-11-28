@@ -113,6 +113,9 @@ func OpenWorkflowLogReplaying(dir string, replay func(*WorkflowLog) error) (*Wor
 	if e != nil {
 		return nil, e
 	}
+	if partialMarker(dir, data) {
+		data = nil // a torn first write of the marker; openSegments decides what may be removed
+	}
 	witnessed := bytes.HasPrefix(data, []byte(workflowMagic))
 	path := filepath.Join(dir, "segments")
 	identity, identityErr := readWorkflowID(dir)

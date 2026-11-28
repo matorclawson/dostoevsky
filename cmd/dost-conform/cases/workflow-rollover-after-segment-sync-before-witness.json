@@ -387,6 +387,14 @@
    "as": "after"
   },
   {
+   "do": "compare",
+   "marks": [
+    "second",
+    "after"
+   ],
+   "is": "equal"
+  },
+  {
    "do": "switch"
   },
   {

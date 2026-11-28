@@ -31,7 +31,7 @@ ACTIONS = {
     "remember_bytes": {"file", "as"}, "bytes_unchanged": {"file", "as"}, "make_file": {"file", "content"},
     "make_dir": {"file"}, "remove_first": {"file", "at_least"}, "absent": {"file"},
     "sleep_ms": {"ms"}, "compare": {"marks", "is"}, "bytes_changed": {"file", "as"},
-    "equal_files": {"files"}, "wf_snapshot": {"as", "runs"},
+    "equal_files": {"files"}, "wf_snapshot": {"as", "runs"}, "at_least": {"mark", "bytes"},
 }
 # Engine requests. The driver itself refuses a field it does not know.
 OPERATIONS = {"open", "close", "publish", "publish_batch", "read", "read_batch", "position", "commit_batch", "retain",
@@ -216,6 +216,15 @@ def check_case(name, case):
         if "dies" in step and (do not in OPERATIONS or step["dies"] is not True
                                or set(step) & {"error", "fails", "expect", "nonzero", "save"}):
             bad("step %d: dies is true, on an engine request that expects nothing else" % number)
+        # A comparison of nothing, or of a thing with itself, would always pass.
+        if do == "wf_snapshot" and not step.get("runs"):
+            bad("step %d: wf_snapshot names no run" % number)
+        if do == "compare" and (len(step.get("marks", [])) != 2 or len(set(step["marks"])) != 2
+                                or step.get("is") not in ("equal", "less")):
+            bad("step %d: compare takes two different marks and is equal or less" % number)
+        if do == "equal_files" and (len(step.get("files", [])) != 2
+                                    or len({os.path.normpath(f) for f in step["files"]}) != 2):
+            bad("step %d: equal_files takes two different files" % number)
         if do == "disarm" and not isinstance(step.get("expect", {}).get("reached"), bool):
             bad("step %d: disarm states whether the point was reached" % number)
         if do in ACTIONS:
@@ -356,7 +365,12 @@ class Run:
                 self.ok({"op": "publish_batch", "items": items})
         elif do == "snapshot":
             self.saved[step["as"]] = self.snapshot(step)
+        elif do == "at_least":
+            if self.marks[step["mark"]] < step["bytes"]:
+                raise Failed("%s is %d, want at least %d" % (step["mark"], self.marks[step["mark"]], step["bytes"]))
         elif do == "equal_files":
+            if os.path.samefile(*(self.one_file(name) for name in step["files"])):
+                raise Failed("%s are one file" % " and ".join(step["files"]))
             first, second = (self.contents(name) for name in step["files"])
             if first != second:
                 raise Failed("%s differ (%d and %d bytes)" % (" and ".join(step["files"]), len(first), len(second)))

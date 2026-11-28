@@ -30,7 +30,7 @@ ACTIONS = {
     "mark": {"file", "as"}, "truncate": {"file", "bytes"}, "flip": {"file", "at", "plus"},
     "remember_bytes": {"file", "as"}, "bytes_unchanged": {"file", "as"}, "make_file": {"file", "content"},
     "make_dir": {"file"}, "remove_first": {"file", "at_least"}, "absent": {"file"},
-    "sleep_ms": {"ms"},
+    "sleep_ms": {"ms"}, "compare": {"marks", "is"}, "bytes_changed": {"file", "as"},
 }
 # Engine requests. The driver itself refuses a field it does not know.
 OPERATIONS = {"open", "close", "publish", "publish_batch", "read", "read_batch", "position", "commit_batch", "retain",
@@ -345,6 +345,14 @@ class Run:
                 self.ok({"op": "publish_batch", "items": items})
         elif do == "snapshot":
             self.saved[step["as"]] = self.snapshot(step)
+        elif do == "compare":
+            first, second = (self.marks[name] for name in step["marks"])
+            if not {"equal": first == second, "less": first < second}[step["is"]]:
+                raise Failed("sizes %s are %d and %d, want %s" % (", ".join(step["marks"]), first, second, step["is"]))
+        elif do == "bytes_changed":
+            with open(self.one_file(step["file"]), "rb") as f:
+                if f.read() == self.saved[step["as"]]:
+                    raise Failed("%s did not change" % step["file"])
         elif do == "sleep_ms":
             time.sleep(step["ms"] / 1000)
         elif do == "same":

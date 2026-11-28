@@ -21,6 +21,16 @@
    ]
   },
   {
+   "do": "mark",
+   "file": "start/segments/seg-*.log",
+   "as": "start-base"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "start/journal.v1",
+   "as": "start-witness"
+  },
+  {
    "do": "arm",
    "point": "workflow.after_segment_sync_before_witness",
    "kill": true,
@@ -37,6 +47,24 @@
   },
   {
    "do": "switch"
+  },
+  {
+   "do": "mark",
+   "file": "start/segments/seg-*.log",
+   "as": "start-killed"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "start/journal.v1",
+   "as": "start-witness"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "start-base",
+    "start-killed"
+   ],
+   "is": "less"
   },
   {
    "do": "wf_open",
@@ -61,6 +89,19 @@
    "expect": {
     "created": true
    }
+  },
+  {
+   "do": "mark",
+   "file": "start/segments/seg-*.log",
+   "as": "start-whole"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "start-killed",
+    "start-whole"
+   ],
+   "is": "equal"
   },
   {
    "do": "wf_close"
@@ -89,6 +130,16 @@
    "input": "0"
   },
   {
+   "do": "mark",
+   "file": "poll/segments/seg-*.log",
+   "as": "poll-base"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "poll/journal.v1",
+   "as": "poll-witness"
+  },
+  {
    "do": "arm",
    "point": "workflow.after_segment_sync_before_witness",
    "kill": true,
@@ -102,6 +153,24 @@
   },
   {
    "do": "switch"
+  },
+  {
+   "do": "mark",
+   "file": "poll/segments/seg-*.log",
+   "as": "poll-killed"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "poll/journal.v1",
+   "as": "poll-witness"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "poll-base",
+    "poll-killed"
+   ],
+   "is": "less"
   },
   {
    "do": "wf_open",
@@ -128,6 +197,19 @@
      "attempt": 1
     }
    }
+  },
+  {
+   "do": "mark",
+   "file": "poll/segments/seg-*.log",
+   "as": "poll-whole"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "poll-killed",
+    "poll-whole"
+   ],
+   "is": "equal"
   },
   {
    "do": "wf_close"
@@ -165,6 +247,16 @@
    }
   },
   {
+   "do": "mark",
+   "file": "finish/segments/seg-*.log",
+   "as": "finish-base"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "finish/journal.v1",
+   "as": "finish-witness"
+  },
+  {
    "do": "arm",
    "point": "workflow.after_segment_sync_before_witness",
    "kill": true,
@@ -179,6 +271,24 @@
   },
   {
    "do": "switch"
+  },
+  {
+   "do": "mark",
+   "file": "finish/segments/seg-*.log",
+   "as": "finish-killed"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "finish/journal.v1",
+   "as": "finish-witness"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "finish-base",
+    "finish-killed"
+   ],
+   "is": "less"
   },
   {
    "do": "wf_open",
@@ -219,6 +329,19 @@
    }
   },
   {
+   "do": "mark",
+   "file": "finish/segments/seg-*.log",
+   "as": "finish-whole"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "finish-killed",
+    "finish-whole"
+   ],
+   "is": "equal"
+  },
+  {
    "do": "wf_close"
   },
   {
@@ -254,6 +377,16 @@
    }
   },
   {
+   "do": "mark",
+   "file": "failure/segments/seg-*.log",
+   "as": "failure-base"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "failure/journal.v1",
+   "as": "failure-witness"
+  },
+  {
    "do": "arm",
    "point": "workflow.after_segment_sync_before_witness",
    "kill": true,
@@ -268,6 +401,24 @@
   },
   {
    "do": "switch"
+  },
+  {
+   "do": "mark",
+   "file": "failure/segments/seg-*.log",
+   "as": "failure-killed"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "failure/journal.v1",
+   "as": "failure-witness"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "failure-base",
+    "failure-killed"
+   ],
+   "is": "less"
   },
   {
    "do": "wf_open",
@@ -308,6 +459,19 @@
    }
   },
   {
+   "do": "mark",
+   "file": "failure/segments/seg-*.log",
+   "as": "failure-whole"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "failure-killed",
+    "failure-whole"
+   ],
+   "is": "equal"
+  },
+  {
    "do": "wf_close"
   },
   {
@@ -343,6 +507,16 @@
    "ms": 200
   },
   {
+   "do": "mark",
+   "file": "expiry/segments/seg-*.log",
+   "as": "expiry-base"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "expiry/journal.v1",
+   "as": "expiry-witness"
+  },
+  {
    "do": "arm",
    "point": "workflow.after_segment_sync_before_witness",
    "kill": true,
@@ -356,6 +530,24 @@
   },
   {
    "do": "switch"
+  },
+  {
+   "do": "mark",
+   "file": "expiry/segments/seg-*.log",
+   "as": "expiry-killed"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "expiry/journal.v1",
+   "as": "expiry-witness"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "expiry-base",
+    "expiry-killed"
+   ],
+   "is": "less"
   },
   {
    "do": "wf_open",
@@ -398,6 +590,19 @@
    }
   },
   {
+   "do": "mark",
+   "file": "expiry/segments/seg-*.log",
+   "as": "expiry-whole"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "expiry-killed",
+    "expiry-whole"
+   ],
+   "is": "equal"
+  },
+  {
    "do": "wf_close"
   },
   {
@@ -428,6 +633,16 @@
    "input": "0"
   },
   {
+   "do": "mark",
+   "file": "signal/segments/seg-*.log",
+   "as": "signal-base"
+  },
+  {
+   "do": "remember_bytes",
+   "file": "signal/journal.v1",
+   "as": "signal-witness"
+  },
+  {
    "do": "arm",
    "point": "workflow.after_segment_sync_before_witness",
    "kill": true,
@@ -443,6 +658,24 @@
   },
   {
    "do": "switch"
+  },
+  {
+   "do": "mark",
+   "file": "signal/segments/seg-*.log",
+   "as": "signal-killed"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "signal/journal.v1",
+   "as": "signal-witness"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "signal-base",
+    "signal-killed"
+   ],
+   "is": "less"
   },
   {
    "do": "wf_open",
@@ -480,6 +713,19 @@
      "ActivityScheduled"
     ]
    }
+  },
+  {
+   "do": "mark",
+   "file": "signal/segments/seg-*.log",
+   "as": "signal-whole"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "signal-killed",
+    "signal-whole"
+   ],
+   "is": "equal"
   },
   {
    "do": "wf_close"

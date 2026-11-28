@@ -23,11 +23,16 @@ for line in sys.stdin.buffer:
         time.sleep(600)
     if reply == b"EXIT":
         sys.exit(1)
+    if reply == b"DEAF":
+        time.sleep(600)  # stops reading: the rest of the input fills the pipe
     sys.stdout.buffer.write(reply)
     sys.stdout.buffer.flush()
 """
 FIXED = b'{"ok":true}\n'  # the reply to fix_inputs, which the runner sends first
 ONE = {"about": "one request", "formats": ["legacy"], "requests": [{"op": "close"}]}
+
+LOOSE = {"about": "a refusal", "formats": ["legacy"], "requests": [{"op": "retain", "refuses": True}]}
+BIG = {"about": "more than a pipe holds", "formats": ["legacy"], "requests": [{"op": "publish", "value": "v" * 3000000}]}
 
 # name, trace, first driver's replies, second driver's replies, the status the runner must end with
 CASES = [
@@ -46,6 +51,15 @@ CASES = [
     ("the result after a masked message differs", ONE, [b'{"ok":false,"error":"x","message":"m","result":{"size":1}}\n'], [b'{"ok":false,"error":"x","message":"m","result":{"size":2}}\n'], 1),
     ("a driver that never answers", ONE, [b'{"ok":true}\n'], [b"HANG"], 2),
     ("a driver that stops", ONE, [b'{"ok":true}\n'], [b"EXIT"], 2),
+    ("a refusal that may differ in code", LOOSE, [b'{"ok":false,"error":"invalid","message":"a"}\n'], [b'{"ok":false,"error":"limit"}\n'], 0),
+    ("such a request accepted by one driver", LOOSE, [b'{"ok":false,"error":"invalid"}\n'], [b'{"ok":true}\n'], 2),
+    ("such a request answered without ok", LOOSE, [b'{"ok":false,"error":"invalid"}\n'], [b'{"error":"invalid"}\n'], 2),
+    ("such a request answered with ok null", LOOSE, [b'{"ok":false,"error":"invalid"}\n'], [b'{"ok":null,"error":"invalid"}\n'], 2),
+    ("such a request refused without an error code", LOOSE, [b'{"ok":false,"error":"invalid"}\n'], [b'{"ok":false}\n'], 2),
+    ("such a request refused with an empty error code", LOOSE, [b'{"ok":false,"error":"invalid"}\n'], [b'{"ok":false,"error":""}\n'], 2),
+    ("a reply that is not an object where one is needed", LOOSE, [b'{"ok":false,"error":"invalid"}\n'], [b'[]\n'], 2),
+    ("a driver that stops reading its input", BIG, [b"DEAF"], [b"DEAF"], 2),
+    ("streams: a driver that stops reading its input", {"about": "x", "streams": [{"about": "s", "input": "{}\n" + " " * 4000000}]}, [b"DEAF"], [b"DEAF"], 2),
     ("a format with no request", {"about": "x", "formats": ["legacy", "segmented"], "requests": [{"op": "close", "only": "legacy"}]}, [], [], 2),
     ("no requests", {"about": "x", "formats": ["legacy"], "requests": []}, [], [], 2),
     ("no formats", {"about": "x", "formats": [], "requests": [{"op": "close"}]}, [], [], 2),
@@ -80,12 +94,13 @@ def main():
             print("%s  %s: status %d, want %d" % (verdict, name, done.returncode, want))
             if done.returncode != want:
                 print(done.stdout.decode(errors="replace") + done.stderr.decode(errors="replace"))
-    for arguments in (["--engine", "one=/bin/true"], ["--engine", "a=/bin/true", "--engine", "b=/bin/true", "--trace", "no-such-trace"],
+    for arguments in (["--engine", "one=/bin/true"], ["--engine", "a=/bin/true", "--engine", "b=/bin/true", "--trace", "seam-requests", "--receipt", "/nonexistent/dir/receipt.json"],
+                      ["--engine", "a=/bin/true", "--engine", "b=/bin/true", "--trace", "seam-requests", "--keep", "/proc/nonexistent/keep"], ["--engine", "a=/bin/true", "--engine", "b=/bin/true", "--trace", "no-such-trace"],
                       ["--engine", "a=/nonexistent/driver", "--engine", "b=/nonexistent/driver", "--trace", "seam-requests"]):
         done = subprocess.run([sys.executable, RUNNER] + arguments, capture_output=True, timeout=120)
         failed += done.returncode != 2
         print("%s  arguments %s: status %d, want 2" % ("ok  " if done.returncode == 2 else "FAIL", " ".join(arguments), done.returncode))
-    print("%d cases, %d failed" % (len(CASES) + 3, failed))
+    print("%d cases, %d failed" % (len(CASES) + 5, failed))
     sys.exit(1 if failed else 0)
 
 

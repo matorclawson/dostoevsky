@@ -11,8 +11,8 @@ relative paths, so every engine receives the same request bytes. With the test s
 and the random source are fixed first, and two engines that agree write identical trees and give identical replies.
 
 A request marked "refuses" in a trace is one where engines may report different error codes (retention given several
-invalid floors may report any one of them). For it the runner requires only that every engine refuses and that the
-refusal leaves the engine's own directory unchanged.
+invalid floors may report any one of them). For it the runner requires that every engine refuses, with "ok": false and
+an error code, and that the refusal leaves the engine's own directory unchanged.
 
 A trace of "streams" instead of "requests" checks how a driver reads its input. Each stream is the exact text one new
 driver process receives, so it can hold what a request written as JSON here cannot: a key given twice, a name in
@@ -27,8 +27,8 @@ Compared, against the first engine named:
   trees     the set of paths, each file's bytes, and each symbolic link's target
   status    for a stream, the exit status of each driver
 
-Every read from a driver has a deadline (--deadline, 120 seconds unless given): a driver that does not answer in time is
-killed and the comparison is reported as broken.
+Every read from a driver and every write to it has a deadline (--deadline, 120 seconds unless given): a driver that
+does not answer in time, or does not take its input, is killed and the comparison is reported as broken.
 
 Exit status: 0 identical, 1 different, 2 anything else: a driver that could not run a trace, a trace that is not well
 formed or has no requests for a format it names, a missing trace, wrong arguments. The trace format is in
@@ -101,11 +101,22 @@ class Driver:
         except OSError as e:
             raise Broken("the %s driver could not be started: %s" % (name, e))
 
-    def send(self, data):
-        try:
-            self.process.stdin.write(data)
-        except OSError:
-            pass  # the driver has gone: the next read reports it
+    def send(self, data, what="its input"):
+        """Writes all of data within the deadline. A driver that has stopped reading is reported, not waited for."""
+        until = time.monotonic() + self.deadline
+        fd = self.process.stdin.fileno()
+        os.set_blocking(fd, False)
+        view = memoryview(data)
+        while view:
+            _, ready, _ = select.select([], [fd], [], max(0, until - time.monotonic()))
+            if not ready:
+                raise Broken("the %s driver did not take %s within %s seconds (%d of %d bytes written)" % (self.name, what, self.deadline, len(data) - len(view), len(data)))
+            try:
+                view = view[os.write(fd, view):]
+            except BlockingIOError:
+                continue
+            except OSError:
+                return  # the driver has gone: the next read reports it, with its exit status
 
     def _more(self, what):
         """Reads whatever arrives next. False at end of output."""
@@ -162,18 +173,22 @@ def run(name, binary, requests, root, inputs, loose, deadline):
             requests = [dict({"op": "fix_inputs"}, **inputs)] + requests
         for number, request in enumerate(requests):
             before = digest(tree(root)) if number - offset in loose else None
-            driver.send(json.dumps(request).encode() + b"\n")
+            driver.send(json.dumps(request).encode() + b"\n", "request %d (%s)" % (number, request["op"]))
             line = driver.line("reply to request %d (%s)" % (number, request["op"]))
             if line is None:
                 _, status = driver.finish()
                 raise Broken("the %s driver stopped answering at request %d (%s), status %s" % (name, number, request["op"], status))
             if inputs is not None and number == 0:
-                if not accepted(line):
+                if reply_of(line).get("ok") is not True:
                     raise Broken("the %s driver refused fix_inputs: %s" % (name, line.decode(errors="replace").strip()))
                 continue
             if before is not None:
-                if accepted(line):
-                    raise Broken("the %s driver accepted request %d (%s), which every engine must refuse" % (name, number - offset, request["op"]))
+                # A refusal is "ok": false together with an error code. A reply that merely lacks "ok": true, or
+                # that refuses without a code, is not one.
+                reply = reply_of(line)
+                if reply.get("ok") is not False or not isinstance(reply.get("error"), str) or not reply["error"]:
+                    raise Broken("the %s driver did not refuse request %d (%s) with an error code, as every engine must: %s" % (
+                        name, number - offset, request["op"], line.decode(errors="replace").strip()[:160]))
                 if digest(tree(root)) != before:
                     raise Broken("the %s driver refused request %d (%s) but changed its store" % (name, number - offset, request["op"]))
             replies.append(line)
@@ -205,11 +220,15 @@ def run_stream(name, binary, stream, root, deadline):
         driver.stop()
 
 
-def accepted(line):
+def reply_of(line):
+    """The reply as an object, for the checks that are about one driver alone. Replies are compared as bytes."""
     try:
-        return json.loads(line).get("ok") is True
-    except (ValueError, AttributeError):
+        reply = json.loads(line)
+    except ValueError:
+        reply = None
+    if not isinstance(reply, dict):
         raise Broken("a reply is not a JSON object: %s" % line.decode(errors="replace").strip()[:160])
+    return reply
 
 
 def string_end(line, at):
@@ -416,6 +435,16 @@ def main():
             usage("trace %s: want an object" % trace_name)
         check(trace_name, trace)
         traces.append((trace_name, trace))
+    try:
+        if args.keep:
+            os.makedirs(args.keep, exist_ok=True)
+        if args.receipt:
+            open(args.receipt, "a").close()
+    except OSError as e:
+        usage("cannot write there: %s" % e)
+    for name, binary in engines:
+        if not os.access(binary, os.X_OK) or os.path.isdir(binary):
+            usage("the %s driver is not a program that can be run: %s" % (name, binary))
     receipt, different, broken, ran = [], 0, 0, 0
 
     def report(label, other, base, differences, summary):

@@ -101,6 +101,20 @@ pub fn update(crc: u32, b: &[u8]) -> u32 {
     !update_table(c, b)
 }
 
+/// Which implementation [`update`] uses on this processor: `sse4.2` or `armv8-crc` for the processor's own
+/// instructions, `table` otherwise. The choice is made by the same checks as in `update`.
+pub fn backend() -> &'static str {
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("sse4.2") {
+        return "sse4.2";
+    }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("crc") {
+        return "armv8-crc";
+    }
+    "table"
+}
+
 /// Go's `crc32.Checksum(b, crcTable)`.
 pub fn checksum(b: &[u8]) -> u32 {
     update(0, b)

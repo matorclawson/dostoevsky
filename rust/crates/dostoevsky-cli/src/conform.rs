@@ -15,6 +15,7 @@ use dostoevsky_core::errors::Error;
 use dostoevsky_core::seam;
 use dostoevsky_format::base64;
 use dostoevsky_format::gojson::{self, ParseError, Value};
+use dostoevsky_format::goquote;
 use std::io::{BufRead, Write};
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -89,7 +90,7 @@ pub struct WorkflowStep {
 
 type Decoded<T> = Result<T, String>;
 
-/// A Go slice as `encoding/json` leaves it. Go decodes an array into the slice the field already holds: element
+/// A Go slice as `encoding/json` of Go 1.27.0 leaves it. Go decodes an array into the slice the field already holds: element
 /// by element over the old ones, without clearing them first, and it cuts the slice to the new length without
 /// dropping what lay beyond. So a key given twice does not simply take its last value: a `null` element, or a
 /// member an object leaves out, keeps what an earlier value put there. `spare` holds the elements beyond the
@@ -112,10 +113,20 @@ impl<T> Slice<T> {
         self.spare.clear();
     }
 
-    /// A value that replaces the slice outright, as a base64 string replaces a byte slice.
+    /// A new slice in place of the old one: the old elements are gone.
     fn set(&mut self, items: Vec<T>) {
         self.live = Some(items);
         self.spare.clear();
+    }
+
+    /// Go 1.27.0 decoding base64 text into a byte slice: the bytes are written over the start of the array the
+    /// slice already has, and the slice is cut to their number. What lay beyond stays in the array, so a later
+    /// array with `null` elements brings it back. (Go 1.24.7 made a new array here.)
+    fn overwrite(&mut self, items: Vec<T>) {
+        let mut all = self.live.take().unwrap_or_default();
+        all.append(&mut self.spare);
+        self.spare = all.split_off(items.len().min(all.len()));
+        self.live = Some(items);
     }
 }
 
@@ -232,7 +243,7 @@ fn set_bytes(to: &mut Slice<u8>, field: &str, v: &Value) -> Decoded<()> {
         }
         Value::String(s) => match base64::decode(s) {
             Some(b) => {
-                to.set(b);
+                to.overwrite(b);
                 Ok(())
             }
             None => Err(format!("illegal base64 data in field {field}")),
@@ -324,7 +335,7 @@ fn members<'a>(v: &'a Value, what: &str) -> Decoded<Option<&'a [(String, Value)]
 }
 
 fn unknown<T>(key: &str) -> Decoded<T> {
-    Err(format!("json: unknown field {key:?}"))
+    Err(format!("json: unknown field {}", goquote::quote(key)))
 }
 
 fn message(m: &mut Message, v: &Value) -> Decoded<()> {
@@ -556,8 +567,10 @@ impl Driver {
             "wf_close" | "wf_register" | "wf_start_once" | "wf_poll" | "wf_finish" | "wf_signal" | "wf_history" => {
                 Err(Error::not_ported(&q.op, 10))
             }
-            // Go quotes the name here with strconv.Quote; for the names a test sends that is the same text.
-            _ => Err(Error::other(format!("dost-conform: unknown op {:?}", q.op))),
+            _ => Err(Error::other(format!(
+                "dost-conform: unknown op {}",
+                goquote::quote(&q.op)
+            ))),
         }
     }
 }
@@ -683,6 +696,26 @@ mod tests {
             "folded names"
         );
         assert_eq!(bound("null"), Request::default(), "null for a request");
+        // Go 1.27.0 writes base64 text over the start of the array the field already has, so the byte after it
+        // comes back with a later null. Go 1.24.7 made a new array, and the answer there was zero.
+        assert_eq!(
+            bound(r#"{"value":"aGk=","value":"","value":[null]}"#).value.get(),
+            Some(&b"h"[..])
+        );
+        assert_eq!(
+            bound(r#"{"state":[1,2,3],"state":"aGk=","state":[null,null,null]}"#)
+                .state
+                .get(),
+            Some(&[b'h', b'i', 3][..])
+        );
+        assert_eq!(
+            bound(r#"{"value":[1,2,3],"value":"","value":[]}"#).value.get(),
+            Some(&[][..])
+        );
+        assert_eq!(
+            bound(r#"{"value":[1,2,3],"value":null,"value":[null]}"#).value.get(),
+            Some(&[0][..])
+        );
         assert_eq!(
             bound(r#"{"nodes":[null,"b"]}"#).nodes.get(),
             Some(&[String::new(), "b".into()][..])

@@ -4,7 +4,7 @@
 use dostoevsky_format::checkpoint3::{append_checkpoint3, read_checkpoint3, Checkpoint3, CheckpointError};
 use dostoevsky_format::frame3::*;
 use dostoevsky_format::recordscan::RecordScanner;
-use dostoevsky_format::{base64, crc32c, gotime};
+use dostoevsky_format::{base64, crc32c, goquote, gotime};
 use std::collections::BTreeMap;
 
 fn unhex(h: &str) -> Vec<u8> {
@@ -49,6 +49,9 @@ fn message<T, E: std::fmt::Display>(r: &Result<T, E>) -> String {
 
 #[test]
 fn crc32c_matches_go() {
+    // Shown with --nocapture, so that a receipt says which path the rows went through on its machine.
+    println!("crc32c backend: {}", crc32c::backend());
+    assert!(["sse4.2", "armv8-crc", "table"].contains(&crc32c::backend()));
     let mut seen = 0;
     for line in rows(include_str!("../../../testdata/crc32c-go.txt")) {
         let f: Vec<&str> = line.split(' ').collect();
@@ -401,6 +404,27 @@ fn base64_matches_go() {
     assert_eq!(base64::decode("\r\n").as_deref(), Some(&b""[..]));
     assert_eq!(base64::decode("Zg==Zg=="), None, "nothing may follow the padding");
     assert_eq!(base64::decode("Zm9v Ymfy"), None, "a space is not a line end");
+}
+
+#[test]
+fn quoting_matches_go() {
+    let (mut plain, mut escaped) = (0, 0);
+    for line in rows(include_str!("../../../testdata/goquote-go.txt")) {
+        let (input, want) = line.split_once(' ').unwrap();
+        let input = String::from_utf8(unhex(input)).unwrap();
+        let want = String::from_utf8(unhex(want)).unwrap();
+        let got = goquote::quote(&input);
+        assert_eq!(got, want, "{:x?}", input.chars().map(|c| c as u32).collect::<Vec<_>>());
+        if got.len() == input.len() + 2 {
+            plain += 1;
+        } else {
+            escaped += 1;
+        }
+    }
+    assert!(
+        plain > 400 && escaped > 80,
+        "{plain} written as they are, {escaped} escaped"
+    );
 }
 
 #[test]

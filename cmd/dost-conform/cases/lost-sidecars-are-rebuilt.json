@@ -1,0 +1,56 @@
+{
+ "about": "Index and filter sidecar files are hints: without them the store reads the same and still refuses a changed ID.",
+ "covers": [],
+ "formats": [
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 18000,
+   "size": 1024,
+   "ids": true,
+   "batch": 500
+  },
+  {
+   "do": "snapshot",
+   "as": "full"
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "remove_first",
+   "file": "store/segments/seg-*.idx",
+   "at_least": 1
+  },
+  {
+   "do": "remove_first",
+   "file": "store/segments/seg-*.bloom"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "same",
+   "as": "full"
+  },
+  {
+   "do": "publish",
+   "value": "changed",
+   "id": "id-0",
+   "error": "conflict"
+  },
+  {
+   "do": "count",
+   "is": 18000
+  }
+ ]
+}

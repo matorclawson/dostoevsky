@@ -1,0 +1,70 @@
+{
+ "about": "A backup opens with the same records and checkpoint; an existing destination, even empty, is refused.",
+ "covers": [
+  "825a794"
+ ],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 30,
+   "ids": true
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 0,
+   "next": 7,
+   "state": "seven"
+  },
+  {
+   "do": "snapshot",
+   "as": "source",
+   "groups": [
+    "g"
+   ]
+  },
+  {
+   "do": "make_dir",
+   "file": "taken"
+  },
+  {
+   "do": "backup",
+   "dest": "$root/taken",
+   "error": "exists"
+  },
+  {
+   "do": "absent",
+   "file": "taken/*"
+  },
+  {
+   "do": "backup",
+   "dest": "$root/copy"
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open",
+   "dir": "$root/copy",
+   "segmented": false
+  },
+  {
+   "do": "same",
+   "as": "source",
+   "groups": [
+    "g"
+   ]
+  }
+ ]
+}

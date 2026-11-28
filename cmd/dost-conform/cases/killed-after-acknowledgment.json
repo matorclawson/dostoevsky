@@ -1,0 +1,66 @@
+{
+ "about": "Everything acknowledged is there after the process is killed.",
+ "covers": [],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 20,
+   "ids": true
+  },
+  {
+   "do": "publish",
+   "value": "last",
+   "id": "id-last"
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 0,
+   "next": 5,
+   "state": "s"
+  },
+  {
+   "do": "snapshot",
+   "as": "acked",
+   "groups": [
+    "g"
+   ]
+  },
+  {
+   "do": "kill"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "same",
+   "as": "acked",
+   "groups": [
+    "g"
+   ]
+  },
+  {
+   "do": "publish",
+   "value": "last",
+   "id": "id-last",
+   "expect": {
+    "offset": 20
+   }
+  },
+  {
+   "do": "count",
+   "is": 21
+  }
+ ]
+}

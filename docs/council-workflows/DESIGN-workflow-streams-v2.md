@@ -295,7 +295,7 @@ No dates are offered for 4 to 6 until the workflow bounds in 3 are measured.
 ## 4. Scorecards
 
 Redis is kept only as a regression series; it does not decide anything here. An embedded figure (such as 42,026
-acknowledgments per second at 1 KiB, measured by the external reviewers) ranks nothing against a server. Detailed benchmark rules are in the companion documents
+acknowledgments per second at 1 KiB, measured by the external reviewers) ranks nothing against a server, and the gain it was reported with did not appear on [our ARM64 host](../../benchmarks/fresh/README.md). Detailed benchmark rules are in the companion documents
 against Kafka and Temporal.
 
 Common rules: pass rule fixed before the run (a cell is won only if every one of our trials beats every peer trial; otherwise "no
@@ -313,7 +313,8 @@ system's acknowledgment, replication and failure settings** and what they can lo
 What we know today, all of it about publishing only and none of it about workflows.
 
 **Our own ARM64 measurements of the native server** (candidate `ed99753f`, Python clients, one record per request,
-512 bytes, durable acknowledgment, 5 rounds; medians in records/s):
+512 bytes, durable acknowledgment, 5 rounds; medians in records/s). Dostoevsky ran **with segmented storage, which is opt-in
+and not the default**:
 
 | Producers | Dostoevsky | Redis Streams | JetStream | Kafka |
 |---:|---:|---:|---:|---:|

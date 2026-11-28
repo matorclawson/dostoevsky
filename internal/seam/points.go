@@ -56,7 +56,7 @@ var current_ atomic.Pointer[armed]
 // Every later pass goes through. One point is armed at a time, and it stays armed until Disarm has been called, whether
 // it has fired or not: arming again before that is refused, so that no check of a point can be lost. An unknown name is
 // refused first, then an armed point. Arm and Disarm are called only while no operation that can
-// reach a point is in flight: the driver does one request at a time, and a test arms before it starts the operation. A test must check with Disarm that the point was reached: an unreached point proves nothing.
+// reach a point is in flight, and never at the same time as each other: the driver does one request at a time, and a test arms before it starts the operation. A test must check with Disarm that the point was reached: an unreached point proves nothing.
 func Arm(name string, kill bool, skip int) error {
 	if !slices.Contains(Points, name) {
 		return fmt.Errorf("seam: no point is named %q", name)

@@ -21,7 +21,8 @@ strength, batching**, and Kafka's normal durability comes from replication, not 
 batched. We expect Kafka to be far ahead there until we batch.
 
 **Our own ARM64 measurements of the native server** (candidate `ed99753f`, Python clients, one record per request,
-512 bytes, durable acknowledgment, 5 rounds; medians in records/s):
+512 bytes, durable acknowledgment, 5 rounds; medians in records/s). Dostoevsky ran **with segmented storage, which is opt-in
+and not the default**:
 
 | Producers | Dostoevsky | Redis Streams | JetStream | Kafka |
 |---:|---:|---:|---:|---:|
@@ -37,6 +38,10 @@ batched. We expect Kafka to be far ahead there until we batch.
 - **Not the smallest memory:** JetStream and Redis used less than Dostoevsky in the same runs (median ready 18.2 MiB and
   largest per-cell median peak 31.6 MiB, against JetStream's 13.9 and 28.3 and Redis's 7.5 and 10.8; 512-byte records with
   32-character IDs, 2,048 per cell).
+
+**Embedded fresh publishing, not comparable with Kafka:** a reported gain from 35,614 to 42,026 acknowledgments per second
+(32 producers, 1 KiB, Linux AMD64) did not appear on our 2 vCPU Linux ARM64 host: 15,901 → 15,888 on a quiet host, and
+11,047 → 11,852 (3 of 7 pairs) on an earlier loaded one ([both runs](../../benchmarks/fresh/README.md)).
 
 **To compete we must add, in this order:** (1) replication and automatic failover; (2) batched and compressed publish and fetch;
 (3) server-side consumer group membership and assignment; (4) retention by time and size; (5) metrics, administration and
@@ -103,6 +108,8 @@ not-play list (section 4), and the benchmark rule (section 7).
 ## 4. What we beat, and what we do not play
 
 ### Beat (each needs a measurement before it is claimed)
+
+The native-server figures below were taken with segmented storage, which is opt-in and not the default.
 
 | Axis | What is measured today | Still to measure |
 |---|---|---|

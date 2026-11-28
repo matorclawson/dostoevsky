@@ -36,4 +36,28 @@ For a source-only directory, set BASELINE_DIR to a checkout of the baseline: 93a
 
 With 32 producers and 1 KiB values, the candidate beat its paired baseline in six of seven trials, allocated 71% fewer heap bytes per record and lowered median p99 by 15%. With one producer the same payload beat baseline in four pairs. The zero-byte workloads had lower median throughput at both concurrency levels. The 95–97% of single-producer elapsed time spent in fdatasync leaves little room for a serialization change to raise isolated publish throughput on this disk. The synchronous-write primitive comparison had mixed pairwise results.
 
+## Linux ARM64: the throughput gain did not appear
+
+The same comparison, seven paired trials per cell, on one Linux ARM64 virtual machine (2 vCPU Neoverse-N1, ext4, Go 1.27.0, GOMAXPROCS=4). Medians, baseline → candidate, with the number of the seven pairs in which the candidate acknowledged more per second. The runs used the commits as supplied (8e410b7 and the candidate on it); the candidate's change is the same patch as 93acac3 → 78dc8f4 in this repository, whose tree holds other changes besides.
+
+Run on a quiet host (1-minute load below 0.5 for five minutes before the start; raw lines in [linux-arm64-quiet.txt](linux-arm64-quiet.txt)):
+
+| Producers | Bytes | Acks/s | Pairs won | p99 µs | Allocated B/record | Peak MiB |
+|---:|---:|---|---:|---|---|---|
+| 1 | 0 | 931 → 997 | 5 | 2,576 → 2,219 | 394 → 258 | 22.8 → 22.2 |
+| 1 | 1024 | 909 → 945 | 2 | 2,424 → 2,365 | 1,546 → 258 | 29.8 → 26.0 |
+| 32 | 0 | 17,757 → 19,333 | 7 | 4,259 → 4,534 | 1,124 → 853 | 26.9 → 26.7 |
+| 32 | 1024 | 15,901 → 15,888 | 3 | 4,466 → 4,735 | 6,698 → 1,911 | 33.8 → 31.9 |
+
+An earlier run on a loaded host (load about 4.5, disk 87% full; [linux-arm64-loaded.txt](linux-arm64-loaded.txt)):
+
+| Producers | Bytes | Acks/s | Pairs won | p99 µs |
+|---:|---:|---|---:|---|
+| 1 | 0 | 721 → 670 | 3 | 5,533 → 5,385 |
+| 1 | 1024 | 714 → 720 | 4 | 5,284 → 5,258 |
+| 32 | 0 | 15,367 → 13,084 | 4 | 6,865 → 7,341 |
+| 32 | 1024 | 11,047 → 11,852 | 3 | 7,423 → 8,515 |
+
+The gain reported above for 32 producers and 1 KiB values (35,614 → 42,026 acks/s) appeared in neither run. In the quiet run the candidate won all seven pairs at 32 producers with empty values (median 9% higher, ranges overlapping: 16,371 to 19,840 against 17,223 to 22,900), a cell where the AMD64 medians were lower. Lower allocation traffic held in every cell. Treat this change as an allocation saving, not as a speed gain.
+
 Use `make dev-test-sockets` on a Linux host that permits local Unix listeners. Use `DOST_FRESH_PROFILE_DIR=/path/to/disposable/fixture make dev-profile-fresh` with a fresh fixture copy for each run, and `DOST_SYNC_MODE_DIR=/path/on/test-volume make dev-test-sync-modes` for the primitive experiment.

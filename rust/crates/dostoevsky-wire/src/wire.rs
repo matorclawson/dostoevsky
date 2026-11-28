@@ -599,9 +599,14 @@ pub fn read_hello(r: &mut impl Read) -> Result<Hello, HelloError> {
     Ok(h)
 }
 
-/// Compares in time that does not depend on where the inputs differ. Go's `subtle.ConstantTimeCompare` for inputs of
-/// equal length.
-fn constant_time_equal(a: &[u8; 32], b: &[u8; 32]) -> bool {
+/// Whether two digests are equal, looking at every byte whatever the first difference is.
+///
+/// This is NOT a guaranteed constant-time comparison. Go uses `subtle.ConstantTimeCompare`, which its authors keep
+/// constant-time. Nothing in the Rust language promises that for this loop: the compiler may turn it into code that
+/// stops at the first difference, and `black_box` is a hint, not a guarantee. The `subtle` crate gives the guarantee
+/// (`ConstantTimeEq`), and this function is to be replaced by it; the workspace builds without a package registry
+/// for now and so cannot hold the crate. `rust/DEPS.md` lists it. The codec is not complete until then.
+fn digests_equal(a: &[u8; 32], b: &[u8; 32]) -> bool {
     let mut difference = 0u8;
     for (x, y) in a.iter().zip(b) {
         difference |= x ^ y;
@@ -609,12 +614,12 @@ fn constant_time_equal(a: &[u8; 32], b: &[u8; 32]) -> bool {
     std::hint::black_box(difference) == 0
 }
 
-/// Answers a HELLO: OK, UNAUTHORIZED or UNSUPPORTED_VERSION, the token checked first. It compares SHA-256 digests in
-/// constant time, so the comparison does not show where the tokens differ. Hashing them first still takes time that
-/// grows with each token's length.
+/// Answers a HELLO: OK, UNAUTHORIZED or UNSUPPORTED_VERSION, the token checked first. It compares SHA-256 digests,
+/// so that the comparison does not show where the tokens differ; see [`digests_equal`] for what that comparison does
+/// not yet guarantee. Hashing the tokens first still takes time that grows with each token's length.
 pub fn authenticate(h: &Hello, token: &[u8]) -> Code {
     let (offered, want) = (sha256::digest(&h.token), sha256::digest(token));
-    let same = constant_time_equal(&offered, &want);
+    let same = digests_equal(&offered, &want);
     if !same || h.token.len() < MIN_TOKEN {
         return Code::UNAUTHORIZED;
     }

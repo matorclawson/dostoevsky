@@ -4,6 +4,7 @@
 //! row of the port in which it is filled in. See `rust/PORT-NOTES.md` for the full map.
 
 pub mod base64;
+pub mod crc32c;
 pub mod gojson;
 pub mod sha256;
 

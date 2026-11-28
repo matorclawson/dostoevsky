@@ -40,8 +40,8 @@ and not the default**:
   32-character IDs, 2,048 per cell).
 
 **Embedded fresh publishing, not comparable with Kafka:** a reported gain from 35,614 to 42,026 acknowledgments per second
-(32 producers, 1 KiB, Linux AMD64) did not appear on our 2 vCPU Linux ARM64 host: 15,901 → 15,888 on a quiet host, and
-11,047 → 11,852 (3 of 7 pairs) on an earlier loaded one ([both runs](../../benchmarks/fresh/README.md)).
+(32 producers, 1 KiB, Linux AMD64) was not reproduced consistently on our 2 vCPU Linux ARM64 hosts: 15,901 → 15,888 on a
+quiet one, and 11,047 → 11,852 on a loaded one, with 3 of 7 pairs won in each ([both runs](../../benchmarks/fresh/README.md)).
 
 **To compete we must add, in this order:** (1) replication and automatic failover; (2) batched and compressed publish and fetch;
 (3) server-side consumer group membership and assignment; (4) retention by time and size; (5) metrics, administration and

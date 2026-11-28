@@ -295,7 +295,7 @@ No dates are offered for 4 to 6 until the workflow bounds in 3 are measured.
 ## 4. Scorecards
 
 Redis is kept only as a regression series; it does not decide anything here. An embedded figure (such as 42,026
-acknowledgments per second at 1 KiB, measured by the external reviewers) ranks nothing against a server, and the gain it was reported with did not appear on [our ARM64 host](../../benchmarks/fresh/README.md). Detailed benchmark rules are in the companion documents
+acknowledgments per second at 1 KiB, measured by the external reviewers) ranks nothing against a server, and the gain it was reported with was not reproduced consistently on [our ARM64 hosts](../../benchmarks/fresh/README.md). Detailed benchmark rules are in the companion documents
 against Kafka and Temporal.
 
 Common rules: pass rule fixed before the run (a cell is won only if every one of our trials beats every peer trial; otherwise "no

@@ -49,8 +49,10 @@ func TestSamplesATreeAndStops(t *testing.T) {
 	if err := p.Stop(5 * time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if pids := livePids(t, p.cmd.Process.Pid); len(pids) > 1 {
-		t.Fatalf("children survived Stop: %v", pids)
+	// Not livePids: on Linux a tree with no process left is an error from snapshotTree,
+	// and here that is the expected result.
+	if left, err := snapshotTree(p.cmd.Process.Pid, Source()); err == nil && len(left) > 1 {
+		t.Fatalf("children survived Stop: %v", left)
 	}
 }
 

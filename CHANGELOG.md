@@ -4,6 +4,73 @@ Dostoevsky is an MIT-licensed, pure-Go library for durable messaging and stream 
 
 **Repository status.** The complete 0.2.3 source was merged into this repository on **22 November 2026 at 00:28:38 UTC** (PR #1, before the move to `rodriveracom/dostoevsky`). The versions below follow the six source packages delivered during development.
 
+## Unreleased — durable workflow signal waits
+
+- Added a named signal step and a durable, step-addressed Signal call. Waiting runs hold no leases or worker slots. A signal supplies the input to the next activity.
+- Added replay, stale-signal, repeated-name and process-kill tests. Older readers reject the new transition format when a signal definition first appears.
+- Added a Linux scale benchmark for 100,000 waiting runs and a 1,024-signal burst with one and 32 polling workers. Extended the existing three-activity workload to 30 activities and measured fresh-process recovery. See the [scale report](docs/workflow-wait-scale.md).
+
+## Unreleased — workflow crash recovery
+
+- Added a durable workflow commit boundary and per-store identity. Recovery verifies committed segments and repairs unacknowledged suffixes, including an interrupted rollover. It preserves committed corruption for inspection.
+- Added strict adoption of existing segmented workflow stores, fencing of uncertain writes and reads, and bounded grouping of waiting workflow commands.
+- Added process-kill, corruption, migration and payload-budget tests plus paired ext4 performance and reopen measurements. See the [recovery report](docs/workflow-commit-boundary.md).
+
+## Unreleased — experimental embedded workflow lifecycle
+
+- Added a separate segmented workflow store with immutable sequential activity definitions, exact-input StartOnce, leased Poll, successful or failed Finish, bounded attempts, fixed backoff and paginated History.
+- Added bounded group validation, post-sync replies, replay and fail-closed handling of uncertain writes. Preserved independent stream-only builds.
+- Added shared SQLite conformance cases, abrupt-exit and damaged-tail tests, a runnable Go example, development Make targets and per-completion measurements. See the [workflow guide](docs/workflow-lifecycle.md).
+
+## Unreleased — fresh durable publishing
+
+- Reduced allocation during segmented publication through bounded frame-buffer reuse, frame size reservation and fewer intermediate batch allocations.
+- Added paired fresh-publish benchmarks, single-producer storage timing, a Linux sync comparison, and process-kill recovery tests for one and 32 segmented publishers. See the [benchmark report](benchmarks/fresh/README.md).
+
+## Unreleased — review fixes for the workflow candidate
+
+- An interrupted first initialization of a segmented or workflow directory can be started again.
+- A workflow directory in the older format is converted only after its history replays.
+
+## Unreleased — cache admission and hot-topic analytics
+
+- Added optional frequency-based admission for verified sealed indexes, charged to the ID-table budget. FIFO remains the default. A duplicate receipt can reuse the index already decoded during lookup.
+- Added a bounded time-decayed hot-topic tracker for Go consumers. Updates retain fixed-size names and probation fingerprints. Top-k queries use O(k) scratch space.
+- Added reproducible comparisons with the original FIFO commit, three-way raw benchmark results and analytics accuracy and allocation measurements. See the [benchmark report](benchmarks/admission/README.md).
+
+## Unreleased — review fixes for the council candidate
+
+- `Open` syncs the parent of every directory it creates.
+- `dostoevsky-server` refuses a unix socket path below a directory another user can rewrite.
+- A segmented store refuses records it could not index (a segment checkpoint near 4 GiB) instead of acknowledging them.
+
+## Unreleased — publishing with retained producer IDs
+
+- Sealed segments now have optional per-segment Bloom filters for producer ID lookups. Full-record comparison still determines duplicate receipts and conflicts. Missing, damaged or mismatched hints fall back to the verified exact index. Retention removes expired hints.
+- Added a 64 MiB budget for resident filter bits and an 8 MiB target for cached exact ID tables, with room for one oversized table. Retry lookups read directly from the matching segment.
+- Added `PrepareIDFilters` and offline `dost-storage -mode prepare-ids`, deep-history publish and rollover measurements, and native-protocol peer benchmarks with identified messages and restart verification.
+
+## Unreleased — segmented storage recovery
+
+- Added opt-in segmented storage to the public Go node and native server, with format discovery on reopen and durable checkpoints for topology, offsets, floors and consumer groups.
+- Added range validation for missing segment files, active-tail recovery, bounded index caching, index reconstruction and a sequential batch reader over sealed segments. Retention reclaims fully expired contiguous prefix segments.
+- Added staged migration from existing journals, backward-compatible backup export, a full integrity scan and the offline `dost-storage` tool.
+- Added recovery, missing-file, migration and rollback tests, public API scale and catalog benchmarks, an eight-producer process-kill check and development Make targets. See the [storage guide](docs/segmented-recovery.md).
+
+## Unreleased — 27 November 2026 council recovery candidate
+
+- Integrated the strict journal scanner from PR 81. Recovery verifies framing and checksums, extracts the fields needed to index canonical records, and falls back to the existing JSON decoder for other journal entries.
+- Compressed physical locations for longer partitions. Each block anchors every 32 entries, bounding the number of entries decoded on a random read. Small partitions retain direct locations.
+- Reduced memory for producer IDs by indexing process-keyed fingerprints. A hit reads the full producer ID from the existing journal. Collisions are chained and compared exactly before a publish returns an old receipt or a conflict.
+- Preserved the journal format, acknowledgment boundary and public Go API. Added tests for packed-location boundaries and deliberate fingerprint collisions.
+- Added a Linux history benchmark for separate seed, reopen and full payload readback processes, with optional decimal or 32-character producer IDs. Added native socket comparison, fresh-ready time, boot memory, and verified batched JavaScript trials. Kafka uses a record batch on one partition. Socket clients pipeline individually acknowledged records.
+
+### Native transport staging
+
+- Integrated the native server from PR 72 and native client source from PRs 62, 75 and 77 alongside the JavaScript/TypeScript client. Added native benchmark adapters for Python, Java, Rust and JavaScript.
+- Limited concurrent read and position tasks across connections. Added CLI options for the read-task budget and optional journal byte ceiling. Added coverage for capacity recovery, writes while reads are saturated, and publication at the journal ceiling.
+- Added a process-kill test with concurrent native publishers, byte-for-byte readback, and idempotent retry of every confirmed record. Added a matching peer crash harness that restarts JetStream, Redis and Kafka on their original storage and verifies every observed acknowledgment. Added the upstream hash for the pinned CPython 3.12 AMD64 Kafka benchmark wheel.
+
 ## 0.1.0 — Embedded topics, durable storage, and stream processing
 
 - **Added an embedded Go module.** Reviewed the supplied Faust source and its word-count example, then implemented keyed streams and recoverable processor state in Go. A single-process application opens a data directory. Kafka, Flink, RocksDB, and a separately deployed broker are unnecessary.
@@ -66,7 +133,7 @@ The final source package passed `make release` and `make release-check`, includi
 | Batch transport | `Node.ReadBatch` and database-backed `BatchReader` implementations support pages. `Mesh` uses the single-record peer protocol. |
 | Performance evidence | The proposed **100 durable publishes/s for one hour** test, with two checkpointing consumer groups, remains an acceptance target. This changelog records no completed run of that benchmark. |
 
-## 0.3.0 candidate — Burst publishing, dynamic topics, retention and telemetry (unreleased)
+## 0.3.0 — Burst publishing, dynamic topics, retention and telemetry (23 November 2026)
 
 - Documented durable claims, recipient batching, retry scheduling and separate body storage in `docs/delivery-workload.md`.
 - Added a mergeable, fixed-memory latency histogram. The burst harness now reports percentile upper bounds using worker-local counters and avoids retaining and sorting every batch latency.
@@ -84,15 +151,30 @@ The final source package passed `make release` and `make release-check`, includi
 - **0.3.0 directories cannot be opened by 0.2.x.** New frames carry the signature `DOST0002`, which 0.2.x rejects with `invalid journal header` without modifying the file. A 0.2.x journal gets a marker frame the first time 0.3.0 opens it. Downgrading means restoring a backup taken before the upgrade. `sh scripts/fence-check.sh` proves this with an unmodified 0.2.3 binary.
 - **Fail-closed journal.** A failed directory sync after a retention swap, or a failed write, stops further writes until the node is reopened. Recovery now always syncs the journal before serving.
 
-## 0.4.0 — Publishing throughput and memory (unreleased)
+## 0.4.0 — Publishing throughput, memory, an HTTP API and clients (26 November 2026)
 
-Integrates the post-0.3.0 publishing work (ZIP SHA-256 `fb422713f1b5550fa8c30ae9d0265f13de4f6011b562ee4325a39608f9ad0ef6`, baseline candidate `cf0ed72c`) onto the reviewed 0.3.0 line. The journal format and public API are unchanged; 0.4.0 directories open exactly where 0.3.0 directories do.
+Integrates the post-0.3.0 publishing work (ZIP SHA-256 `fb422713f1b5550fa8c30ae9d0265f13de4f6011b562ee4325a39608f9ad0ef6`, baseline candidate `cf0ed72c`) onto the reviewed 0.3.0 line. The journal format and the root package's exported API are unchanged from 0.3.0; 0.4.0 directories open exactly where 0.3.0 directories do. `clienthttp` and `wire` are new packages.
 
 - **Group commit for concurrent `Node.Publish`.** An idle node writes inline. Calls that arrive during a write join a bounded queue (64 calls, 1 MiB of topic, key, ID and value bytes) and share one write and one sync. Every caller returns only after the sync that covers its record; overflow callers wait on the node lock. Per-call errors, cancellation before the write, conflicting retries and independent result buffers are tested. A crash can persist a prefix of a group; retry with the original IDs.
+- **Gathering.** After a group is released, the drainer waits up to 100 microseconds for the callers it released before it takes the next group, so many producers keep sharing syncs. A lone producer never waits.
 - **Linux `fdatasync` for journal appends.** `EINTR` is retried and an unsupported call falls back to a full `fsync`. File creation, compaction, backup, recovery and directory syncs keep full sync. Other platforms use `File.Sync`.
 - **Lower memory per stream.** The first record location and producer ID are stored inline; the tail index, waiter and checkpoint state are allocated on demand. Single-owner and single-partition nodes skip owner and key hashing. Recovery reads through a bounded buffer and reuses its decode buffer; batches encode into one output buffer; single appends reuse a frame buffer capped at 16 KiB.
 - **Retention rebuilds the index while copying.** Offsets and producer IDs are rebuilt from the replacement journal; there is no second read pass.
-- **HTTP client API and gateway.** `clienthttp` is a standard-library `http.Handler` over a `Store` (publish, read with bounded long polling, position, commit) with binary payloads, bearer-token auth and typed status codes; `cmd/dostoevsky-gateway` serves one embedded node with it: loopback by default, a non-loopback address is refused unless TLS (`-tls-cert`, `-tls-key`) is set, and `-gen-token` prints a 32-byte random token. Non-Go clients are separate PRs.
-- **Clients in five languages.** Python, JavaScript/TypeScript, Java and Rust clients (each dependency-free) with runnable examples, `make dev-client-*` targets, `make dev-client-interop` (all clients against one gateway across a restart), and `docs/clients.md` with a quickstart per language.
-- **Benchmarks.** `make dev-bench-embedded`, `dev-bench-publish` and `dev-bench-publish-gate` run an isolated `benchmarks/embedded` module against embedded JetStream (Linux only). nats-server v2.15.3 and nats.go v1.56.0 appear only in that module's `go.mod`; the runtime module stays standard-library only. The release tarball includes the benchmark module. Results from the supplied shared AMD64 host are in `docs/`; on-device ARM64 numbers are not yet measured.
+- **HTTP client API and gateway.** `clienthttp` is a standard-library `http.Handler` over a `Store` (publish, read with bounded long polling, position, commit) with binary payloads, bearer-token auth and typed status codes; `cmd/dostoevsky-gateway` serves one embedded node with it: loopback by default, a non-loopback address is refused unless TLS (`-tls-cert`, `-tls-key`) is set, and `-gen-token` prints a 32-byte random token. Clients for other languages are in the next entry.
+- **Clients for five languages in four packages.** Python, JavaScript with TypeScript types (one package), Java and Rust clients (each dependency-free) with runnable examples, `make dev-client-*` targets, `make dev-client-interop` (all clients against one gateway across a restart), and `docs/clients.md` with a quickstart per language.
+- **Benchmarks.** `make dev-bench-embedded`, `dev-bench-publish` and `dev-bench-publish-gate` run an isolated `benchmarks/embedded` module against embedded JetStream (Linux only). nats-server v2.15.3 and nats.go v1.56.0 appear only in that module's `go.mod`; the runtime module stays standard-library only. The release tarball includes the benchmark module. Results from a shared AMD64 host and from an ARM64 host (production-03) are in `docs/`. The benchmark module also gained further engines, per-language client workers, a gateway control and a fixed-window sustained mode; these are measurement tools and change nothing in the library.
+- **Wire protocol codec; no server.** `docs/wire-v1.md` describes a native binary protocol, still a draft. The new `wire` package encodes and decodes version 1 for both sides within the protocol's bounds, with vector tests and fuzz targets. Nothing in this release serves the protocol.
+- **TypeScript/JavaScript native client (preview).** `dostoevsky-client/native` speaks the wire protocol over TCP, TLS or a unix socket, with pipelined requests and client-side limits, and does not retry or reconnect. No released server speaks the protocol, so it is tested only against the spec vectors and a scripted server.
+- **Known limits to weigh before production use.** One durable copy per partition. The journal and its in-memory index grow with retained history, and open replays it all. A crash can leave a frame that fails its checksum (out-of-order page writeback); `Open` then stops with the offset instead of truncating, there is no repair tool, and the way back is a backup. A torn final frame is truncated as before.
 - **Integration notes.** Reviewed fixes from the 0.3.0 line are preserved on the new code paths: canonical journal path for repeated `Retain`, post-rename fail-closed journal, retired-inode fence frame, `DOST0002` signature and Fence marker, split retention seed frames and seed merging (`stream.seeded`), recovery sync of a clean tail, torn-V2-fence handling, hidden-sibling `Backup` and the `ErrIncompleteBackup` guard.
+
+## 0.5.0 (unreleased)
+
+- **TypeScript/JavaScript native client: random request ids.** A server is now very unlikely to guess a request's id before receiving its header. The README states what remains.
+- **Breaking: upgrading a 0.2.x directory is explicit.** Until now `Open` marked such a journal on sight, after which 0.2.x refused it. `Open` now returns `ErrUpgradeRequired` and changes nothing; back up the directory, then run `dost-repair -data DIR -upgrade` (or call `UpgradeJournal`). Directories already opened by 0.3.0 or later, and new ones, are unaffected.
+- **Repairing a damaged journal.** `Open` still stops at a frame that does not verify. New: `InspectJournal`, `RepairJournal` and the `dost-repair` command, which truncate after the last good frame only when asked, keep a copy of what they remove, and refuse to discard good frames that follow the damage without a second flag. `Node.Truncated` reports the torn final frame that `Open` removes, and the gateway logs it. `Open` no longer cuts a final frame whose announced length hides frames that verify: it refuses, as for other damage.
+- **A cap on the journal.** `Node.SetJournalCap` and the gateway's `-max-journal-mib` refuse publishes with `ErrJournalFull` (also `ErrLimit`) rather than let the file pass a size, with a reserve for commits so `Retain` can make room. Off by default. `Node.JournalSize` reports the size.
+- **Rust client.** Sets `TCP_NODELAY`, so a request body is sent without waiting for the server to acknowledge the request head.
+- **Faster open.** `Open` reads the journal in 1 MiB pieces and takes the topic, partition, offset and ID straight from a record frame it recognises, instead of building the whole record with `encoding/json`. It checks the same things as before: every checksum, and that each value and time decode. Anything unrecognised is decoded in full. Open time still grows with the history.
+- **`wireserver` and `dostoevsky-server`.** A server for the [native wire protocol, version 1](docs/wire-v1.md): token handshake, TLS or loopback and unix sockets only, ordered publish and commit with queued publishes sharing a sync, read with bounded waiting, position, ping, per-connection window, server-wide request and reply budgets, connection limits and absolute deadlines. Standard library only. No speed or memory figure is claimed: none has been measured.
+- **`Node.Await`.** Waits until an offset can be read, without reading it.

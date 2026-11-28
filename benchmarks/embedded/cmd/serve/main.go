@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/rodriveracom/dostoevsky/benchmarks/embedded/internal/servers"
 )
@@ -89,10 +90,14 @@ func serve(ctx context.Context, engine, bin string, stdin io.Reader, out io.Writ
 			err = rerr
 		}
 	}()
+	start := time.Now()
 	s, err := servers.Start(engine, servers.Options{Ctx: ctx, Bin: bin, Home: os.Getenv("BENCH_KAFKA_HOME"), Java: os.Getenv("BENCH_JAVA_HOME"), Dir: dir})
 	if err != nil {
 		return err
 	}
+	readyMS := float64(time.Since(start)) / 1e6
+	s.Proc.Sample()
+	bootPeak, bootErr := s.Proc.PeakKiB()
 	stopped := false
 	defer func() {
 		if !stopped {
@@ -120,6 +125,9 @@ func serve(ctx context.Context, engine, bin string, stdin io.Reader, out io.Writ
 	if err = s.Stop(); err != nil {
 		return fmt.Errorf("the server did not stop cleanly: %w", err)
 	}
+	if bootErr != nil {
+		return fmt.Errorf("boot memory: %w", bootErr)
+	}
 	if merr != nil {
 		return fmt.Errorf("server memory: %w", merr)
 	}
@@ -127,7 +135,7 @@ func serve(ctx context.Context, engine, bin string, stdin io.Reader, out io.Writ
 	if err = cleanup(); err != nil {
 		return fmt.Errorf("removing the trial directory: %w", err)
 	}
-	if _, err = fmt.Fprintf(out, "STOPPED server_rss_KiB=%d rss_source=%s verdict=clean\n", kib, s.Proc.Source()); err != nil {
+	if _, err = fmt.Fprintf(out, "STOPPED server_rss_KiB=%d rss_source=%s fresh_ready_ms=%.3f boot_peak_KiB=%d verdict=clean\n", kib, s.Proc.Source(), readyMS, bootPeak); err != nil {
 		return fmt.Errorf("writing the STOPPED line: %w", err)
 	}
 	return nil

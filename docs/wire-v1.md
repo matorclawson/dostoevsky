@@ -1,6 +1,6 @@
 # Dostoevsky wire protocol, version 1 (draft)
 
-**Status: draft. Nothing implements this yet.** It describes a native binary protocol that will sit beside the [HTTP API](clients.md), which stays. It makes no speed claim; any such claim will come from a checked-in receipt.
+**Status: draft.** The [`wire`](../wire) Go package encodes and decodes it and [`wireserver`](../wireserver), with the `dostoevsky-server` command, serves it. It describes a native binary protocol that will sit beside the [HTTP API](clients.md), which stays. It makes no speed claim; any such claim will come from a checked-in receipt.
 
 Test vectors for every message are in [`wire/testdata/vectors.json`](../wire/testdata/vectors.json). The file's `note` says what a receiver does with each invalid one. Where this text and a vector disagree, that is a bug to report, not a choice for the implementer.
 
@@ -16,7 +16,7 @@ A TCP or unix-domain stream connection. One connection carries many requests at 
 
 The two plaintext cases are a choice to trust the local machine: a process that can listen at that address or path before the server does receives the token. A server refuses to listen in plaintext anywhere else. A client never falls back from TLS to plaintext.
 
-**Unix socket.** The server creates it inside a directory that only the server's user can enter (mode 0700), so that no other user can reach it at any moment, and gives the socket mode 0600. It does not follow a symbolic link. If anything already exists at the path it refuses to start, except that it may remove a socket owned by its own user while it holds the lock of its data directory.
+**Unix socket.** The server creates it inside a directory that only the server's user can enter (mode 0700), so that no other user can reach it at any moment, and gives the socket mode 0600. It does not follow a symbolic link at that directory or at the socket. Every directory passed through to reach it, including those a symbolic link higher up leads through, must belong to root or to the server's user and must not be writable by group or others unless it is sticky (as `/tmp` is); otherwise the server refuses to start. The server binds the path with those links resolved. A client sends the token to whatever listens at the path, so it must use a path whose directories it trusts in the same way; the server cannot check that for it. If anything already exists at the path it refuses to start, except that it may remove a socket owned by its own user, on which nothing answers, while it holds a lock for that path.
 
 ## Handshake
 
@@ -43,7 +43,7 @@ WELCOME, always 17 bytes:
 | window | u16 | requests a connection may have unanswered |
 | window_bytes | u32 | request bytes a connection may have unanswered |
 
-With a status other than 0, every later field is 0 and the server closes. A wrong magic, nonzero flags or a token_len above 4096 closes the connection with no reply. Before authentication a server reads at most 4,106 bytes. A token shorter than 16 bytes is `unauthorized`. The token is checked before the version. A server compares tokens in constant time (compare their SHA-256 digests, so length does not leak either) and never logs them.
+With a status other than 0, every later field is 0 and the server closes. A wrong magic, nonzero flags or a token_len above 4096 closes the connection with no reply. Before authentication a server reads at most 4,106 bytes. A token shorter than 16 bytes is `unauthorized`. The token is checked before the version. A server compares tokens in constant time (compare their SHA-256 digests, so the comparison does not show where they differ; hashing them still takes time that grows with a token's length) and never logs them.
 
 A client validates WELCOME before it sends anything else: the magic; status 0; 1 <= version <= the max_version it sent; max_body exactly 1,056,768 in version 1; window at least 1; window_bytes at least max_body + 10, so that every legal frame can be admitted. Otherwise it closes. It does not retry with weaker transport security.
 
@@ -93,6 +93,8 @@ The same rules as the Go API and the HTTP API:
 | value, state | any bytes, at most 1 MiB |
 | offset, next, expected | below 2^63 |
 | wait_ms | at most 30000; above that is `invalid` |
+
+A topic or group outside its rule is `invalid`, whatever its length, as in the HTTP API.
 
 A COMMIT whose `expected` is 2^63 - 1 has no representable next position: it is `limit`, and nothing is changed.
 
@@ -152,6 +154,8 @@ Defaults, each configurable within the constraints given.
 | request pool, whole server | 16 MiB | at least max_body + 10 |
 | reply pool, whole server | 16 MiB | at least max_body + 10 |
 | reply pool held by one connection | 2 maximum frames | at least 1 maximum frame |
+| reads waiting for a record, whole server | 4096 | at least 1 |
+| read and position tasks, whole server | 4608 | at least 1 |
 
 A server refuses to start with a configuration that breaks a constraint.
 
@@ -163,6 +167,8 @@ Only authenticated connections draw on these budgets. Intake and replies have **
 - **Request pool.** A frame's bytes are taken after its header is read and before its body is read, and given back once the server no longer holds those bytes: for PUBLISH and COMMIT after the write is durable or has failed, for READ and POSITION once the request is decoded. Nothing that holds request pool waits for any other budget.
 - **Reply pool.** Before the store is read for a READ or POSITION reply, a whole maximum frame is taken; it is given back when the reply has been written or the connection has closed. **A READ that is waiting for a record holds none**: it takes it only once the record exists. Reply pool is granted **in the order it is asked for**, across all connections: nothing asked later is granted while an earlier request is still waiting for pool. A connection already at its own cap does not ask until one of its replies has been written, so it holds nobody up. All other replies are at most 20 bytes and come from a fixed reserve of window x 20 bytes per connection.
 - Replies are written whether or not the connection is being read.
+- An id is answered once its whole reply has been received. A server may still be returning from that write when the id is used again, so a frame that reuses the id of a reply being written is held for up to 1 s: it is admitted if the write completes, and is a connection error if it does not. A frame that reuses the id of a request whose reply has not begun is a connection error at once.
+- A READ with `wait_ms` above 0 that finds no record when every wait is taken gets ERROR `limit`; a record already stored is still returned. The connection stays open.
 - So every holder of a budget can finish: a request needs no further budget, and a reply needs only the socket to drain, which has a deadline.
 - When a connection closes, its waiting reads end and everything it holds is given back. A publish or commit already admitted still runs to completion and gives back its bytes.
 
@@ -182,3 +188,9 @@ Passing one of the first three closes the connection; after the idle one the ser
 ## Versions
 
 A server answers with the highest version both sides speak, or `unsupported_version`. Anything that changes bytes on the wire needs a new version; version 1 receivers reject flags and unknown types.
+
+## Notes on this implementation (`dostoevsky-server`)
+
+* **Read and position tasks are capped server-wide** (4,608 by default, `-read-tasks`), apart from the limit on waiting reads. At the cap a read is refused with the limit code before the record is looked up, even when it is stored.
+* **`storage_failure` does not say whether a write took effect.** After the server restarts, retry a publish with the same ID and content, and read the position before repeating a commit.
+

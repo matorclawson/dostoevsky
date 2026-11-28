@@ -39,7 +39,8 @@ DOST_RUST_VECTORS="$new/out" go test -overlay "$new/overlay.json" -count=1 -run 
 DOST_RUST_VECTORS="$new/out" go test -overlay "$new/overlay.json" -count=1 -run '^TestWriteRustDriverVectors$' -v ./cmd/dost-conform | grep -E 'rows|^ok|FAIL|SKIP'
 
 expected="base64-go.txt checkpoint3-go.txt crc32c-go.txt driver-requests-go.txt frame3-go.txt frametime-go.txt gojson-reader.txt
- gojson-strings.txt goquote-go.txt gotime-go.txt recordscan-go.txt seam-go.txt wire-go.txt wire-more-go.txt"
+ gojson-strings.txt goquote-go.txt gotime-go.txt idtable-go.txt index-misc-go.txt recordscan-go.txt seam-go.txt segindex-go.txt
+ wire-go.txt wire-more-go.txt"
 missing=
 for name in $expected; do
  [ -s "$new/out/$name" ] || missing="$missing $name"

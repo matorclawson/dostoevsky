@@ -1,0 +1,2 @@
+go: 67 segment files kept, newest seg-0000000000000b67.log, 540 MiB on disk at the end
+rust: 68 segment files kept, newest seg-00000000000007ee.log, 539 MiB on disk at the end

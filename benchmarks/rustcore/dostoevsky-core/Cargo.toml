@@ -1,0 +1,19 @@
+[package]
+name = "dostoevsky-core"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "Prototype: the segmented log's write path, reading and writing the Go engine's on-disk format. Standard library only."
+
+[lib]
+name = "dostoevsky_core"
+
+[[bin]]
+name = "rsab"
+path = "src/bin/rsab.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

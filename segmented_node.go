@@ -33,7 +33,7 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 	marked := string(b[:k]) == segmentMarker
 	if bytes.HasPrefix(b[:k], []byte(workflowMagic)) {
 		if !workflow {
-			return false, ErrSegmentedJournal
+			return false, errWorkflowStore
 		}
 		marked = true
 	}
@@ -51,7 +51,23 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 	}
 	if !marked {
 		if _, e := os.Lstat(path); e == nil {
-			return false, errors.New("unmarked segmented directory; refusing initialization")
+			// The marker is written before the first append, so a first initialization that
+			// stopped short of it acknowledged nothing. Only its own leftovers are removed.
+			abandoned := false
+			if requested {
+				if abandoned, err = abandonedFirstInit(path); err != nil {
+					return false, err
+				}
+			}
+			if !abandoned {
+				return false, errors.New("unmarked segmented directory; refusing initialization")
+			}
+			if err = os.RemoveAll(path); err != nil {
+				return false, err
+			}
+			if err = syncDir(dir); err != nil {
+				return false, err
+			}
 		} else if !errors.Is(e, os.ErrNotExist) {
 			return false, e
 		}
@@ -140,6 +156,43 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 	n.rollBytes = segmentTarget
 	ok = true
 	return true, nil
+}
+
+// abandonedFirstInit reports whether path holds nothing but what an interrupted first
+// initialization leaves: staging files, the range file and at most the first segment, which
+// has no frame after its start checkpoint and no partition in it. Anything else, or a
+// first segment that does not verify, is not recognized.
+func abandonedFirstInit(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+	first := false
+	for _, entry := range entries {
+		switch entry.Name() {
+		case segName(1):
+			first = true
+		case segTmpName(1), "RANGE", "RANGE.tmp":
+		default:
+			return false, nil
+		}
+		if !entry.Type().IsRegular() {
+			return false, nil
+		}
+	}
+	if !first {
+		return true, nil
+	}
+	seg, state, err := scanSegmentCore(osFS{}, path, 1, false, nil, nil)
+	if err != nil {
+		return false, nil
+	}
+	defer seg.f.Close()
+	size, err := seg.f.Size()
+	if err != nil {
+		return false, err
+	}
+	return seg.end == seg.dataStart && size == seg.end && len(state.byPID) == 0, nil
 }
 
 func (n *Node) segmentRecord(p Partition, offset int64) (Record, error) {

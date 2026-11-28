@@ -90,7 +90,12 @@ func replaceWorkflowMetadata(dir, name string, data []byte) error {
 
 // OpenWorkflowLog verifies an existing witness before permitting any tail
 // repair. Pre-witness stores are adopted only after a read-only frame scan.
-func OpenWorkflowLog(dir string) (*WorkflowLog, error) {
+func OpenWorkflowLog(dir string) (*WorkflowLog, error) { return OpenWorkflowLogReplaying(dir, nil) }
+
+// OpenWorkflowLogReplaying is OpenWorkflowLog with the caller's replay, which runs
+// before a pre-witness directory is converted: if replay returns an error, the older
+// format is left as it was. replay may read the log and must not publish to it.
+func OpenWorkflowLogReplaying(dir string, replay func(*WorkflowLog) error) (*WorkflowLog, error) {
 	j, e := openJournal(dir)
 	if e != nil {
 		return nil, e
@@ -147,6 +152,11 @@ func OpenWorkflowLog(dir string) (*WorkflowLog, error) {
 	raw, _ := json.Marshal(cfg)
 	if _, e = n.openSegments(dir, raw, true, true); e != nil {
 		return nil, e
+	}
+	if replay != nil {
+		if e = replay(l); e != nil {
+			return nil, e
+		}
 	}
 	if !witnessed {
 		if identityErr != nil {

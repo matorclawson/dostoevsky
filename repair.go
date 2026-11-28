@@ -30,6 +30,8 @@ const (
 var (
 	// ErrSegmentedJournal indicates the legacy inspection or repair tool was given a segmented store.
 	ErrSegmentedJournal = errors.New("use VerifySegments to inspect a segmented store")
+	// errWorkflowStore matches ErrSegmentedJournal and says what actually applies.
+	errWorkflowStore = fmt.Errorf("%w; this one is a workflow store, which only the workflow package opens and which has no separate inspection tool", ErrSegmentedJournal)
 	// ErrLaterFrames is returned by RepairJournal when frames that verify follow the damage: truncating would discard
 	// writes that were very likely acknowledged.
 	ErrLaterFrames = errors.New("frames that verify follow the damage")
@@ -68,7 +70,11 @@ func openForRepair(dir string) (*journal, error) {
 		j.close()
 		return nil, e
 	}
-	if string(marker[:]) == segmentMarker || strings.HasPrefix(string(marker[:]), workflowMagic) {
+	if strings.HasPrefix(string(marker[:]), workflowMagic) {
+		j.close()
+		return nil, errWorkflowStore
+	}
+	if string(marker[:]) == segmentMarker {
 		j.close()
 		return nil, ErrSegmentedJournal
 	}

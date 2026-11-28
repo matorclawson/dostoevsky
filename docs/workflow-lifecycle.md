@@ -10,9 +10,13 @@ Each record has a version and carries one decision, including its timestamp and 
 
 ## Review and release boundary
 
-This is an experimental embedded API. Closed runs, input, history and start receipts are resident. A durable on-disk historical index, snapshots, signals, parallel graphs, stable network receipts, migration and replication are subsequent work. Idle polls share the writer and can wait behind a sync. A late retry of Finish requires a history lookup. The public conformance scenarios cover a subset of Ephemeral; a general replacement for its API requires the rest of the v2 matrix.
+This is an experimental embedded API. Closed runs, input, history and start receipts are resident. A durable on-disk historical index, snapshots, buffered signals and signal deadlines, parallel graphs, stable network receipts, migration and replication are subsequent work. Idle polls share the writer and can wait behind a sync. A late retry of Finish requires a history lookup. The public conformance scenarios cover a subset of Ephemeral; a general replacement for its API requires the rest of the v2 matrix.
 
 The [workflow commit boundary](workflow-commit-boundary.md) binds replies to a durable segment position and prefix digest. Recovery verifies committed bytes before discarding a newer suffix. The original lifecycle benchmark below predates this change.
+
+Two format changes are separate. The **directory** format changes when a directory is first opened with the commit witness: older readers refuse it. The **transition** format changes only when a definition with a signal step is recorded: older readers then stop during replay (see [durable signal waits](workflow-wait-scale.md)).
+
+**Inspecting a damaged workflow store:** there is no separate tool. `Open`, `dost-repair` and `VerifySegments` do not apply to it; `workflow.Open` reports the segment and offset it stops at. Restore a copy of the whole directory.
 
 ## Evidence and reproduction
 

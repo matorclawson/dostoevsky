@@ -4,7 +4,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/old" "$tmp/base"
 if [ -n "${BASELINE_DIR:-}" ]; then cp -R "$BASELINE_DIR/." "$tmp/old/"
-else git archive 8e410b7 | tar -x -C "$tmp/old"; fi
+else git archive 93acac3 | tar -x -C "$tmp/old"; fi
 cp fresh_bench_test.go "$tmp/old/"
 export GOMAXPROCS=${GOMAXPROCS:-4}
 (cd "$tmp/old" && go test -c -o "$tmp/baseline" .)

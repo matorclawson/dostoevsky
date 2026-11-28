@@ -9,7 +9,7 @@ Go behavior the port keeps on purpose, each it changes, and what is not yet know
 | Row | What | State |
 | ---: | --- | --- |
 | 0 | Workspace, layout, JSON as Go writes and reads it, the test seam, the conformance driver, the differential driver | Done |
-| 1 | Wire codec | Not started |
+| 1 | Wire codec | Done |
 | 2 | Segment frames, checkpoints, the record scanner | Not started |
 | 3 to 14 | Everything that opens a store | Not started |
 
@@ -27,7 +27,7 @@ says so in its first line and names its row.
 | 0 | `internal/seam/points.go` | `dostoevsky-core` | `seam` (`arm`, `reach`, `disarm`) | mechanism only; the Go file has not been seen |
 | 0 | the sentinel errors in `node.go` and its neighbours | `dostoevsky-core` | `errors` | ported |
 | 0 | `encoding/json` as the engine uses it | `dostoevsky-format` | `gojson`, `base64` | ported for strings, integers and bytes |
-| 1 | `wire/wire.go` | `dostoevsky-wire` | `wire` | stub |
+| 1 | `wire/wire.go` | `dostoevsky-wire` | `wire` | ported |
 | 2 | `checkpoint3.go` | `dostoevsky-format` | `checkpoint3` | stub |
 | 2 | `frame3.go` | `dostoevsky-format` | `frame3` | stub |
 | 2 | `recordscan.go` | `dostoevsky-format` | `recordscan` | stub |
@@ -125,18 +125,29 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
 13. **The system's random source.** Unset, Go reads `crypto/rand`; Rust reads `/dev/urandom`. Platforms without that
     file need another source before the workflow layer can run there.
 
+### The wire codec
+
+14. **Names, keys and message IDs are bytes.** They are Go strings, checked for UTF-8 only where the protocol says so.
+    Rust uses byte slices for the same reason. A decoder returns what it decoded together with its verdict, as the Go
+    functions do: a refused request still carries the ID its ERROR must answer.
+15. **`io.ReadFull` tells an input that ended before a part of the HELLO from one that ended inside it.** Rust's
+    `read_exact` does not, so `read_hello` reads in its own loop and reports `Eof` or `UnexpectedEof` as Go would.
+
 ### The build
 
-14. **The source release copies `rust/` as it stands** (`scripts/release.sh`; a test requires every top-level directory
+16. **The source release copies `rust/` as it stands** (`scripts/release.sh`; a test requires every top-level directory
     to be listed). Cargo's build output therefore goes to `.dev/rust-target`, outside `rust/`.
+17. **Fuzz targets.** `wire_test.go` has Go fuzz targets. Rust has none yet. In their place the
+    tests replay the Go functions' own results on inputs damaged in many small ways (7,998 wire frames).
+
 ## Observed in the Go engine
 
-15. **Without the seam, two runs of the Go engine differ in more than record times.** The differential driver, run
+18. **Without the seam, two runs of the Go engine differ in more than record times.** The differential driver, run
     with the Go engine against itself, shows differences in the legacy journal and the segment logs, and also in the
     `.idx` and `.bloom` sidecars and in a backup's `journal.v1`. With the seam fixed these must all vanish; that run
     needs `fix_inputs` in the Go driver.
 
-16. **Two conformance pairings pass for an engine that refuses everything.** `incomplete-backup-directory`, with Go as
+19. **Two conformance pairings pass for an engine that refuses everything.** `incomplete-backup-directory`, with Go as
     the writer and Rust as the reader, passes although the Rust driver has no engine: its last step only requires that
     opening fails. The case would be stricter if it required the code `incomplete_backup`.
 
@@ -144,7 +155,7 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
 
 - **`internal/seam/points.go`** has not been seen. The point names, the meaning of `kill` and `skip` beyond note 12, and
   the type of `reached` in the `disarm` reply (written here as a number) are to be checked against it.
-- **Go 1.27.0** was not on the machine that wrote the vector files other than the two JSON files. `seam-go.txt` comes
+- **Go 1.27.0** was not on the machine that wrote the vector files other than the two JSON files. `seam-go.txt` and `wire-go.txt` come
   from Go 1.24.7. Nothing in them depends on the JSON encoder's change between those releases, but they should be
   written again with 1.27.0 (the programs in `rust/testdata`).
 - **The lint gate on releases newer than the pinned one.** `sha256.rs` avoids `chunks_exact`, which

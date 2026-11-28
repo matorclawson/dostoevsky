@@ -23,7 +23,7 @@ release date, when it is first needed.
 
 | Crate | Needed for | First row |
 | --- | --- | ---: |
-| `sha2` | SHA-256 in the test seam, and in the wire handshake; replaces `dostoevsky-format::sha256` | now |
+| `sha2` | SHA-256 in the wire handshake and the test seam; replaces `dostoevsky-format::sha256` | now |
 | `tokio` | the server's network I/O | 11 |
 | `rustls` | TLS in the server and the gateway | 11 |
 | `pyo3` | the Python binding | 14 |

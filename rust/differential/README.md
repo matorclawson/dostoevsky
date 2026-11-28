@@ -42,6 +42,7 @@ conveniences as the conformance case files: `open` gets a default directory, for
 | `publish-read-commit` | 24, 25 | every record field, a repeated ID, a batch across topics, reads, commits with state, a reopen |
 | `retention` | 16, 16 | retention refused above a group's position, retention with two invalid floors, retention twice, an ID reused after retention, a reopen |
 | `backup-and-migrate` | 16, 11 | a backup, a backup onto an existing directory, migration to the segmented format, inspection |
+| `seam-requests` | 11 (one format) | the seam requests themselves, with nothing open: arming a point that exists and one that does not, a negative skip, what `disarm` replies |
 
 Requests that must fail (an unknown topic, a stale commit, a read past the end) are part of the traces: the error codes
 are compared too.

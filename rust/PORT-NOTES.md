@@ -24,7 +24,7 @@ says so in its first line and names its row.
 | ---: | --- | --- | --- | --- |
 | 0 | `cmd/dost-conform/main.go`, `workflow.go` | `dostoevsky-cli` | `conform`, binary `dost-conform` | ported; engine calls answer "not ported" |
 | 0 | `internal/seam/seam.go` | `dostoevsky-core` | `seam` | ported |
-| 0 | `internal/seam/points.go` | `dostoevsky-core` | `seam` (`arm`, `reach`, `disarm`) | mechanism only; the Go file has not been seen |
+| 0 | `internal/seam/points.go` | `dostoevsky-core` | `seam` (`POINTS`, `arm`, `disarm`, `due`, `fire`, `at`) | ported; no ported module reaches a point yet |
 | 0 | the sentinel errors in `node.go` and its neighbours | `dostoevsky-core` | `errors` | ported |
 | 0 | `encoding/json` as the engine uses it | `dostoevsky-format` | `gojson`, `base64` | ported for strings, integers and bytes |
 | 1 | `wire/wire.go` | `dostoevsky-wire` | `wire` | ported |
@@ -125,9 +125,12 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
     export of a segmented store, migration), it writes partitions ordered by topic and then number, and groups by name.
     Checkpoints order partitions by their stored identifier. Rust must write in these orders; a Go map written in map
     order anywhere else is a defect to report, not a behavior to copy. Nothing ported so far writes from a map.
-12. **Named points.** An armed point fires exactly once, on pass `skip + 1`; passes before and after do nothing. Rust's
-    `seam::arm`, `reach` and `disarm` do this. The list of points, and where each is reached, come from Go's
-    `internal/seam/points.go`, which the ported modules must follow as they are written.
+12. **Named points.** Go's `internal/seam/points.go` lists 18 points. `Arm` refuses a name that is not in the list. An
+    armed point fires exactly once, the first time it is reached after `skip` earlier times; `skip` is signed, and with
+    a negative value the point never fires. `Disarm` reports whether the point fired. A point that does work before it
+    fires calls `Due`, then `Fire`; every other point calls `At`. Rust's `seam` carries the same list and the same
+    functions, and the driver's `arm` and `disarm` reply as Go's do. Each ported module must reach each point at the
+    boundary its Go counterpart does; nothing ported so far contains one.
 13. **The system's random source.** Unset, Go reads `crypto/rand`; Rust reads `/dev/urandom`. Platforms without that
     file need another source before the workflow layer can run there.
 
@@ -163,17 +166,16 @@ Where a Go file mixes encoding with file access, the encoding goes to `dostoevsk
 
 22. **Without the seam, two runs of the Go engine differ in more than record times.** The differential driver, run
     with the Go engine against itself, shows differences in the legacy journal and the segment logs, and also in the
-    `.idx` and `.bloom` sidecars and in a backup's `journal.v1`. With the seam fixed these must all vanish; that run
-    needs `fix_inputs` in the Go driver.
-
-23. **Two conformance pairings pass for an engine that refuses everything.** `incomplete-backup-directory`, with Go as
-    the writer and Rust as the reader, passes although the Rust driver has no engine: its last step only requires that
-    opening fails. The case would be stricter if it required the code `incomplete_backup`.
+    `.idx` and `.bloom` sidecars and in a backup's `journal.v1`. **With the seam fixed they all vanish:** with a Go
+    driver that serves `fix_inputs`, the Go engine against itself is identical in every trace, replies and files, in
+    six runs out of six (`receipts/seam/`).
+23. **A case without a `switch` step never runs its second engine.** The runner counts a case once per ordered pair of
+    engines, and uses the second only after a `switch`. `incomplete-backup-directory` has none, so its pairing "Go then
+    Rust" is the Go engine alone and passes whatever the Rust driver does. Two of the 28 passes of a run with both
+    drivers are of this kind (`receipts/seam/conformance-pairings.txt`).
 
 ## Not yet known
 
-- **`internal/seam/points.go`** has not been seen. The point names, the meaning of `kill` and `skip` beyond note 12, and
-  the type of `reached` in the `disarm` reply (written here as a number) are to be checked against it.
 - **Go 1.27.0** was not on the machine that wrote the vector files other than the two JSON files. `seam-go.txt`,
   `wire-go.txt` and the files written by `internal_vectors_test.go.txt` come
   from Go 1.24.7. Nothing in them depends on the JSON encoder's change between those releases, but they should be

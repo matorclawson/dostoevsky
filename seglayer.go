@@ -241,10 +241,10 @@ func (s *segment) append(frames []byte) error {
 	if err != nil {
 		return fmt.Errorf("segment write: %w", err)
 	}
-	if seam.Armed("workflow.mid_append") {
+	if seam.Due("workflow.mid_append") {
 		// Leave the group half written, as an interrupted write would.
 		if _, err = s.f.WriteAt(frames[:len(frames)/2], s.end); err == nil {
-			err = seam.At("workflow.mid_append")
+			err = seam.Fire("workflow.mid_append")
 		}
 		if err != nil {
 			return fmt.Errorf("segment write: %w", err)

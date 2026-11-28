@@ -51,3 +51,35 @@ func TestEveryWorkflowCommitPoint(t *testing.T) {
 		})
 	}
 }
+
+// A skipped pass of the mid-append point writes nothing of its own: the first commit succeeds and survives, the second
+// is cut off.
+func TestMidAppendWritesNothingOnASkippedPass(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store")
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seam.Arm("workflow.mid_append", false, 1); err != nil {
+		t.Fatal(err)
+	}
+	defer seam.Disarm()
+	if err := s.Register("work", 1, []Step{{Kind: "activity", Name: "send", Attempts: 1}}); err != nil {
+		t.Fatalf("the skipped pass failed: %v", err)
+	}
+	if _, err := s.StartOnce("run", "work", 1, "q", []byte("0"), nil); !errors.Is(err, seam.ErrInjected) {
+		t.Fatalf("the second commit: %v", err)
+	}
+	if !seam.Disarm() {
+		t.Fatal("the point was not reached")
+	}
+	_ = s.Close()
+	s, err = Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	if created, err := s.StartOnce("run", "work", 1, "q", []byte("0"), nil); err != nil || !created {
+		t.Fatalf("after reopen: created %v, %v", created, err)
+	}
+}

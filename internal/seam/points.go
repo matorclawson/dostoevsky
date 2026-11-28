@@ -18,15 +18,21 @@ var Points = []string{
 	"segment.write", "segment.sync",
 	// Before the new range file replaces the old one.
 	"range.publish",
-	// Any directory sync.
+	// A directory sync made by the engine's syncDir: the directory chain at open, segmented and workflow initialization
+	// and the cleanup of an abandoned one, a staged backup and its parent, after the range file is replaced, after
+	// retention removes a segment file, and after a workflow metadata file is replaced. NOT counted: the syncs the segment
+	// layer makes when it creates a segment or publishes an index or filter side file, the one made when a legacy journal
+	// file is created, those of repair and upgrade, and legacy retention's, which is retention.dirsync.
 	"dirsync",
 	// Legacy retention: each frame of the replacement, its sync, the rename, the directory sync and the release of the
 	// replaced journal.
 	"retention.write", "retention.sync", "retention.rename", "retention.dirsync", "retention.truncate",
 	// Backup and migration: before the copy, before the copy is published, before the parent directory is synced.
 	"backup.write", "backup.rename", "backup.syncparent",
-	// A workflow commit: before anything is written; part-way through writing the group (half its bytes are written,
-	// at the next segment append, so arm it only where a workflow store is the thing writing); after the segment is
+	// A workflow commit: before anything is written, once the call has passed the closed, fenced and cancellation checks
+	// and before its items are examined; part-way through writing the group (on the pass where it fires, and only then,
+	// half the bytes are written first; it counts segment appends, so arm it only where a workflow store is the thing
+	// writing); after the segment is
 	// synced and before the witness is replaced; after the witness is replaced and before any caller is answered.
 	"workflow.before_append", "workflow.mid_append", "workflow.after_segment_sync_before_witness",
 	"workflow.after_witness_before_reply",
@@ -44,8 +50,8 @@ type armed struct {
 
 var current_ atomic.Pointer[armed]
 
-// Arm makes the named point fail, or kill the process, the first time it is reached after skip earlier times. One point
-// is armed at a time. A test must check with Disarm that the point was reached: an unreached point proves nothing.
+// Arm makes the named point fail, or kill the process, once: the first time it is reached after skip earlier times.
+// Every later pass goes through. One point is armed at a time. A test must check with Disarm that the point was reached: an unreached point proves nothing.
 func Arm(name string, kill bool, skip int) error {
 	if !slices.Contains(Points, name) {
 		return fmt.Errorf("seam: no point is named %q", name)
@@ -62,16 +68,17 @@ func Disarm() bool {
 	return a != nil && a.reached.Load()
 }
 
-// Armed reports whether the named point is the armed one, for a point that needs work done before it fires.
-func Armed(name string) bool {
+// Due counts one pass of the named point and reports whether this is the pass that fires. A point that has to do work
+// before it fires calls Due, does the work and then calls Fire; every other point uses At.
+func Due(name string) bool {
 	a := current_.Load()
-	return a != nil && a.name == name
+	return a != nil && a.name == name && a.skip.Add(-1) == -1
 }
 
-// At is called by the engine at a point. It returns nil unless a test armed this point and its turn has come.
-func At(name string) error {
+// Fire fails or kills at the armed point, after Due has said that this pass is the one.
+func Fire(name string) error {
 	a := current_.Load()
-	if a == nil || a.name != name || a.skip.Add(-1) >= 0 {
+	if a == nil || a.name != name {
 		return nil
 	}
 	a.reached.Store(true)
@@ -83,4 +90,12 @@ func At(name string) error {
 		}
 	}
 	return fmt.Errorf("%w at %s", ErrInjected, name)
+}
+
+// At is called by the engine at a point. It returns nil unless a test armed this point and this is its pass.
+func At(name string) error {
+	if !Due(name) {
+		return nil
+	}
+	return Fire(name)
 }

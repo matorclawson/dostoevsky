@@ -351,6 +351,15 @@ func (l *WorkflowLog) PublishBatch(ctx context.Context, items []Publication) ([]
 	if len(items) == 0 || len(items) > 1024 {
 		return nil, ErrInvalid
 	}
+	if n.closed {
+		return nil, ErrClosed
+	}
+	if e := n.segments.failed; e != nil {
+		return nil, e
+	}
+	if e := ctx.Err(); e != nil {
+		return nil, e
+	}
 	if e := seam.At("workflow.before_append"); e != nil {
 		n.segments.failed = e
 		return nil, e

@@ -1,5 +1,5 @@
-//! The conformance driver for this engine. Mirrors `cmd/dost-conform/main.go`: one JSON request per line in, one JSON
-//! reply per line out, until end of input. The protocol is described in `cmd/dost-conform/README.md`.
+//! The conformance driver for this engine. Mirrors `cmd/dost-conform/main.go`: one JSON request in, one JSON reply
+//! line out, until end of input. The protocol is described in `cmd/dost-conform/README.md`.
 //!
 //! Besides the engine requests it serves the test seam (`dostoevsky_core::seam`): `fix_inputs` (`start`, `step`,
 //! and `seed` as an unsigned 64-bit number), `advance` (`nanoseconds`), `arm` (`point`, `kill`, `skip`) and `disarm`
@@ -7,8 +7,8 @@
 //! `arm` refuses a name that is not one of the engine's points.
 //!
 //! A request whose module is not ported yet answers with the error `other` and names the row that brings it. The
-//! parts that do not depend on the engine are complete and tested: reading requests as Go's decoder does, the order
-//! of the checks, the error codes, and the reply bytes.
+//! parts that do not depend on the engine are complete and tested: binding a request as Go's decoder binds it, the
+//! order of the checks, the error codes, and the reply bytes.
 
 use dostoevsky_core::errors::Error;
 use dostoevsky_core::seam;
@@ -20,7 +20,7 @@ use std::io::{BufRead, Write};
 pub struct Message {
     pub topic: String,
     pub key: String,
-    pub value: Option<Vec<u8>>,
+    pub value: Slice<u8>,
     pub id: String,
 }
 
@@ -38,34 +38,34 @@ pub struct Request {
     pub dir: String,
     pub segmented: bool,
     pub node: String,
-    pub nodes: Option<Vec<String>>,
+    pub nodes: Slice<String>,
     pub topics: Option<Vec<(String, i64)>>,
-    pub items: Option<Vec<Message>>,
+    pub items: Slice<Message>,
     pub group: String,
     pub offset: i64,
     pub next: i64,
-    pub state: Option<Vec<u8>>,
+    pub state: Slice<u8>,
     pub records: i64,
     pub bytes: i64,
-    pub floors: Option<Vec<Floor>>,
+    pub floors: Slice<Floor>,
     pub dest: String,
     pub discard_later: bool,
     pub topic: String,
     pub partition: i64,
     pub key: String,
-    pub value: Option<Vec<u8>>,
+    pub value: Slice<u8>,
     pub id: String,
     // The workflow requests (`wf_...`). `step` is also the clock step of `fix_inputs`.
     pub name: String,
     pub version: i64,
-    pub steps: Option<Vec<WorkflowStep>>,
+    pub steps: Slice<WorkflowStep>,
     pub run: String,
     pub queue: String,
-    pub input: Option<Vec<u8>>,
+    pub input: Slice<u8>,
     pub attrs: Option<Vec<(String, String)>>,
     pub lease_ms: i64,
     pub token: String,
-    pub failure: Option<Vec<u8>>,
+    pub failure: Slice<u8>,
     pub step: i64,
     pub after: i64,
     pub limit: i64,
@@ -87,6 +87,64 @@ pub struct WorkflowStep {
 }
 
 type Decoded<T> = Result<T, String>;
+
+/// A Go slice as `encoding/json` leaves it. Go decodes an array into the slice the field already holds: element
+/// by element over the old ones, without clearing them first, and it cuts the slice to the new length without
+/// dropping what lay beyond. So a key given twice does not simply take its last value: a `null` element, or a
+/// member an object leaves out, keeps what an earlier value put there. `spare` holds the elements beyond the
+/// length, which a longer array brings back.
+#[derive(Debug, Default, Clone)]
+pub struct Slice<T> {
+    live: Option<Vec<T>>,
+    spare: Vec<T>,
+}
+
+impl<T> Slice<T> {
+    /// The slice: `None` for Go's nil.
+    pub fn get(&self) -> Option<&[T]> {
+        self.live.as_deref()
+    }
+
+    /// Go's `null`: the field becomes nil and the old elements are gone.
+    fn clear(&mut self) {
+        self.live = None;
+        self.spare.clear();
+    }
+
+    /// A value that replaces the slice outright, as a base64 string replaces a byte slice.
+    fn set(&mut self, items: Vec<T>) {
+        self.live = Some(items);
+        self.spare.clear();
+    }
+}
+
+impl<T: Default> Slice<T> {
+    /// Go's `decodeState.array` for a slice.
+    fn array(&mut self, values: &[Value], element: impl Fn(&mut T, &Value) -> Decoded<()>) -> Decoded<()> {
+        if values.is_empty() {
+            // Go replaces the slice with a new empty one.
+            self.set(Vec::new());
+            return Ok(());
+        }
+        let mut all = self.live.take().unwrap_or_default();
+        all.append(&mut self.spare);
+        for (i, v) in values.iter().enumerate() {
+            if i == all.len() {
+                all.push(T::default());
+            }
+            element(&mut all[i], v)?;
+        }
+        self.spare = all.split_off(values.len());
+        self.live = Some(all);
+        Ok(())
+    }
+}
+
+impl<T: PartialEq> PartialEq for Slice<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.live == other.live
+    }
+}
 
 fn kind(v: &Value) -> &'static str {
     match v {
@@ -135,11 +193,11 @@ fn set_int(to: &mut i64, field: &str, v: &Value) -> Decoded<()> {
         Value::Null => Ok(()),
         // Go accepts only a literal that is an integer as written: no fraction and no exponent.
         Value::Number(n) => match n.parse::<i64>() {
-            Ok(i) if !n.starts_with('+') => {
+            Ok(i) => {
                 *to = i;
                 Ok(())
             }
-            _ => Err(format!(
+            Err(_) => Err(format!(
                 "json: cannot unmarshal number {n} into Go struct field {field} of type int"
             )),
         },
@@ -147,51 +205,119 @@ fn set_int(to: &mut i64, field: &str, v: &Value) -> Decoded<()> {
     }
 }
 
-fn set_unsigned(to: &mut u64, field: &str, v: &Value) -> Decoded<()> {
+/// An unsigned field of the given width. Go refuses a sign, so `-0` is refused here although it is zero.
+fn set_unsigned(to: &mut u64, limit: u64, field: &str, v: &Value) -> Decoded<()> {
     match v {
         Value::Null => Ok(()),
         Value::Number(n) => match n.parse::<u64>() {
-            Ok(i) if !n.starts_with('+') => {
+            Ok(i) if i <= limit => {
                 *to = i;
                 Ok(())
             }
             _ => Err(format!(
-                "json: cannot unmarshal number {n} into Go struct field {field} of type uint64"
+                "json: cannot unmarshal number {n} into Go struct field {field} of type uint"
             )),
         },
-        _ => wrong(field, v, "uint64"),
+        _ => wrong(field, v, "uint"),
     }
 }
 
-fn set_bytes(to: &mut Option<Vec<u8>>, field: &str, v: &Value) -> Decoded<()> {
+/// A byte slice: base64 text, or an array of numbers from 0 to 255, which Go reads as it reads any slice.
+fn set_bytes(to: &mut Slice<u8>, field: &str, v: &Value) -> Decoded<()> {
+    match v {
+        Value::Null => {
+            to.clear();
+            Ok(())
+        }
+        Value::String(s) => match base64::decode(s) {
+            Some(b) => {
+                to.set(b);
+                Ok(())
+            }
+            None => Err(format!("illegal base64 data in field {field}")),
+        },
+        Value::Array(values) => to.array(values, |byte, v| {
+            let mut n = u64::from(*byte);
+            set_unsigned(&mut n, 255, field, v)?;
+            *byte = n as u8;
+            Ok(())
+        }),
+        _ => wrong(field, v, "[]uint8"),
+    }
+}
+
+fn set_list<T: Default>(
+    to: &mut Slice<T>,
+    field: &str,
+    v: &Value,
+    element: impl Fn(&mut T, &Value) -> Decoded<()>,
+) -> Decoded<()> {
+    match v {
+        Value::Null => {
+            to.clear();
+            Ok(())
+        }
+        Value::Array(values) => to.array(values, element),
+        _ => wrong(field, v, "slice"),
+    }
+}
+
+/// A Go map. `null` makes it nil. An object adds to the map already there; each value starts from zero, so a key
+/// given twice keeps one entry with the last value, and a `null` value leaves zero.
+fn set_map<T: Default>(
+    to: &mut Option<Vec<(String, T)>>,
+    field: &str,
+    v: &Value,
+    element: impl Fn(&mut T, &Value) -> Decoded<()>,
+) -> Decoded<()> {
     match v {
         Value::Null => {
             *to = None;
             Ok(())
         }
-        Value::String(s) => match base64::decode(s) {
-            Some(b) => {
-                *to = Some(b);
-                Ok(())
+        Value::Object(members) => {
+            let map = to.get_or_insert_with(Vec::new);
+            for (key, v) in members {
+                let mut value = T::default();
+                element(&mut value, v)?;
+                match map.iter_mut().find(|entry| entry.0 == *key) {
+                    Some(entry) => entry.1 = value,
+                    None => map.push((key.clone(), value)),
+                }
             }
-            None => Err(format!("illegal base64 data in field {field}")),
-        },
-        _ => wrong(field, v, "[]uint8"),
+            Ok(())
+        }
+        _ => wrong(field, v, "map"),
     }
 }
 
-/// Go matches a key to a field by its exact name first and otherwise without regard to case.
-fn field_of<'a>(key: &str, names: &[&'a str]) -> Option<&'a str> {
-    names
-        .iter()
-        .find(|n| **n == key)
-        .or_else(|| names.iter().find(|n| n.eq_ignore_ascii_case(key)))
-        .copied()
+/// Go's `foldName`: ASCII letters to upper case, and every other character to the smallest character of its simple
+/// case-folding orbit. Two characters outside ASCII share an orbit with an ASCII letter: U+017F (long s) with `S`
+/// and U+212A (the kelvin sign) with `K`. No other character can be part of a match with an ASCII field name, so the
+/// rest pass through unchanged.
+fn fold(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '\u{17f}' => 'S',
+            '\u{212a}' => 'K',
+            c => c.to_ascii_uppercase(),
+        })
+        .collect()
 }
 
-fn members<'a>(v: &'a Value, what: &str) -> Decoded<&'a [(String, Value)]> {
+/// Go matches a key to a field by its exact name first and otherwise by its folded name.
+fn field_of<'a>(key: &str, names: &[&'a str]) -> Option<&'a str> {
+    names.iter().find(|n| **n == key).copied().or_else(|| {
+        let folded = fold(key);
+        names.iter().find(|n| n.to_ascii_uppercase() == folded).copied()
+    })
+}
+
+/// The members of an object that is bound to a struct. `None` for `null`, which leaves the struct as it is.
+fn members<'a>(v: &'a Value, what: &str) -> Decoded<Option<&'a [(String, Value)]>> {
     match v {
-        Value::Object(m) => Ok(m),
+        Value::Null => Ok(None),
+        Value::Object(m) => Ok(Some(m)),
         _ => wrong(what, v, "struct"),
     }
 }
@@ -200,9 +326,8 @@ fn unknown<T>(key: &str) -> Decoded<T> {
     Err(format!("json: unknown field {key:?}"))
 }
 
-fn message(v: &Value) -> Decoded<Message> {
-    let mut m = Message::default();
-    for (key, v) in members(v, "items")? {
+fn message(m: &mut Message, v: &Value) -> Decoded<()> {
+    for (key, v) in members(v, "items")?.unwrap_or_default() {
         match field_of(key, &["topic", "key", "value", "id"]) {
             Some("topic") => set_string(&mut m.topic, "topic", v)?,
             Some("key") => set_string(&mut m.key, "key", v)?,
@@ -211,12 +336,11 @@ fn message(v: &Value) -> Decoded<Message> {
             _ => return unknown(key),
         }
     }
-    Ok(m)
+    Ok(())
 }
 
-fn floor(v: &Value) -> Decoded<Floor> {
-    let mut f = Floor::default();
-    for (key, v) in members(v, "floors")? {
+fn floor(f: &mut Floor, v: &Value) -> Decoded<()> {
+    for (key, v) in members(v, "floors")?.unwrap_or_default() {
         match field_of(key, &["topic", "partition", "floor"]) {
             Some("topic") => set_string(&mut f.topic, "topic", v)?,
             Some("partition") => set_int(&mut f.partition, "partition", v)?,
@@ -224,12 +348,11 @@ fn floor(v: &Value) -> Decoded<Floor> {
             _ => return unknown(key),
         }
     }
-    Ok(f)
+    Ok(())
 }
 
-fn workflow_step(v: &Value) -> Decoded<WorkflowStep> {
-    let mut w = WorkflowStep::default();
-    for (key, v) in members(v, "steps")? {
+fn workflow_step(w: &mut WorkflowStep, v: &Value) -> Decoded<()> {
+    for (key, v) in members(v, "steps")?.unwrap_or_default() {
         match field_of(key, &["kind", "name", "attempts", "backoff_ms"]) {
             Some("kind") => set_string(&mut w.kind, "kind", v)?,
             Some("name") => set_string(&mut w.name, "name", v)?,
@@ -238,21 +361,7 @@ fn workflow_step(v: &Value) -> Decoded<WorkflowStep> {
             _ => return unknown(key),
         }
     }
-    Ok(w)
-}
-
-fn list<T>(to: &mut Option<Vec<T>>, field: &str, v: &Value, item: impl Fn(&Value) -> Decoded<T>) -> Decoded<()> {
-    match v {
-        Value::Null => {
-            *to = None;
-            Ok(())
-        }
-        Value::Array(items) => {
-            *to = Some(items.iter().map(item).collect::<Decoded<Vec<T>>>()?);
-            Ok(())
-        }
-        _ => wrong(field, v, "slice"),
-    }
+    Ok(())
 }
 
 const FIELDS: [&str; 40] = [
@@ -298,11 +407,12 @@ const FIELDS: [&str; 40] = [
     "skip",
 ];
 
-/// Reads a request as Go's decoder reads the driver's request struct with unknown fields disallowed. A key given
-/// twice takes its last value.
+/// Binds one JSON value to a request as Go's decoder binds it to the driver's request struct with unknown fields
+/// disallowed. `null` gives the zero request. A key is matched by its exact name and otherwise by its folded name. A
+/// key given twice is bound twice, onto what the first left: see [`Slice`].
 pub fn decode(v: &Value) -> Decoded<Request> {
     let mut q = Request::default();
-    for (key, v) in members(v, "request")? {
+    for (key, v) in members(v, "request")?.unwrap_or_default() {
         let Some(name) = field_of(key, &FIELDS) else {
             return unknown(key);
         };
@@ -311,35 +421,16 @@ pub fn decode(v: &Value) -> Decoded<Request> {
             "dir" => set_string(&mut q.dir, name, v)?,
             "segmented" => set_bool(&mut q.segmented, name, v)?,
             "node" => set_string(&mut q.node, name, v)?,
-            "nodes" => list(&mut q.nodes, name, v, |v| {
-                let mut s = String::new();
-                set_string(&mut s, "nodes", v).map(|_| s)
-            })?,
-            "topics" => match v {
-                Value::Null => q.topics = None,
-                Value::Object(m) => {
-                    // A Go map: a key given twice keeps one entry, with the last value.
-                    let mut topics: Vec<(String, i64)> = q.topics.take().unwrap_or_default();
-                    for (topic, count) in m {
-                        let mut n = 0;
-                        set_int(&mut n, "topics", count)?;
-                        match topics.iter_mut().find(|t| t.0 == *topic) {
-                            Some(t) => t.1 = n,
-                            None => topics.push((topic.clone(), n)),
-                        }
-                    }
-                    q.topics = Some(topics);
-                }
-                _ => return wrong(name, v, "map[string]int"),
-            },
-            "items" => list(&mut q.items, name, v, message)?,
+            "nodes" => set_list(&mut q.nodes, name, v, |s, v| set_string(s, "nodes", v))?,
+            "topics" => set_map(&mut q.topics, name, v, |n, v| set_int(n, "topics", v))?,
+            "items" => set_list(&mut q.items, name, v, message)?,
             "group" => set_string(&mut q.group, name, v)?,
             "offset" => set_int(&mut q.offset, name, v)?,
             "next" => set_int(&mut q.next, name, v)?,
             "state" => set_bytes(&mut q.state, name, v)?,
             "records" => set_int(&mut q.records, name, v)?,
             "bytes" => set_int(&mut q.bytes, name, v)?,
-            "floors" => list(&mut q.floors, name, v, floor)?,
+            "floors" => set_list(&mut q.floors, name, v, floor)?,
             "dest" => set_string(&mut q.dest, name, v)?,
             "discard_later" => set_bool(&mut q.discard_later, name, v)?,
             "topic" => set_string(&mut q.topic, name, v)?,
@@ -349,26 +440,11 @@ pub fn decode(v: &Value) -> Decoded<Request> {
             "id" => set_string(&mut q.id, name, v)?,
             "name" => set_string(&mut q.name, name, v)?,
             "version" => set_int(&mut q.version, name, v)?,
-            "steps" => list(&mut q.steps, name, v, workflow_step)?,
+            "steps" => set_list(&mut q.steps, name, v, workflow_step)?,
             "run" => set_string(&mut q.run, name, v)?,
             "queue" => set_string(&mut q.queue, name, v)?,
             "input" => set_bytes(&mut q.input, name, v)?,
-            "attrs" => match v {
-                Value::Null => q.attrs = None,
-                Value::Object(m) => {
-                    let mut attrs: Vec<(String, String)> = q.attrs.take().unwrap_or_default();
-                    for (key, value) in m {
-                        let mut text = String::new();
-                        set_string(&mut text, "attrs", value)?;
-                        match attrs.iter_mut().find(|a| a.0 == *key) {
-                            Some(a) => a.1 = text,
-                            None => attrs.push((key.clone(), text)),
-                        }
-                    }
-                    q.attrs = Some(attrs);
-                }
-                _ => return wrong(name, v, "map[string]string"),
-            },
+            "attrs" => set_map(&mut q.attrs, name, v, |s, v| set_string(s, "attrs", v))?,
             "lease_ms" => set_int(&mut q.lease_ms, name, v)?,
             "token" => set_string(&mut q.token, name, v)?,
             "failure" => set_bytes(&mut q.failure, name, v)?,
@@ -376,7 +452,7 @@ pub fn decode(v: &Value) -> Decoded<Request> {
             "after" => set_int(&mut q.after, name, v)?,
             "limit" => set_int(&mut q.limit, name, v)?,
             "start" => set_int(&mut q.start, name, v)?,
-            "seed" => set_unsigned(&mut q.seed, name, v)?,
+            "seed" => set_unsigned(&mut q.seed, u64::MAX, name, v)?,
             "nanoseconds" => set_int(&mut q.nanoseconds, name, v)?,
             "point" => set_string(&mut q.point, name, v)?,
             "kill" => set_bool(&mut q.kill, name, v)?,
@@ -529,36 +605,46 @@ mod tests {
         let v = gojson::parse(br#"{"op":"publish","topic":"t","Partition":3,"value":"aGk=","value":"eW8=","key":null,"items":[{"topic":"a","value":null}],"topics":{"a":1,"b":2,"a":4},"nodes":["n1"],"floors":[{"topic":"a","partition":1,"floor":9}]}"#).unwrap();
         let q = decode(&v).unwrap();
         assert_eq!((q.op.as_str(), q.topic.as_str(), q.partition), ("publish", "t", 3));
-        assert_eq!(q.value.as_deref(), Some(&b"yo"[..]), "the last of a repeated key wins");
+        assert_eq!(
+            q.value.get(),
+            Some(&b"yo"[..]),
+            "base64 text replaces what an earlier key gave"
+        );
         assert_eq!(q.key, "");
         assert_eq!(
-            q.items,
-            Some(vec![Message {
-                topic: "a".into(),
-                ..Default::default()
-            }])
+            q.items.get(),
+            Some(
+                &[Message {
+                    topic: "a".into(),
+                    ..Default::default()
+                }][..]
+            )
         );
         assert_eq!(q.topics, Some(vec![("a".into(), 4), ("b".into(), 2)]));
         assert_eq!(
-            q.floors,
-            Some(vec![Floor {
-                topic: "a".into(),
-                partition: 1,
-                floor: 9
-            }])
+            q.floors.get(),
+            Some(
+                &[Floor {
+                    topic: "a".into(),
+                    partition: 1,
+                    floor: 9
+                }][..]
+            )
         );
         let w = decode(&gojson::parse(br#"{"op":"wf_register","name":"n","version":2,"steps":[{"kind":"activity","name":"a","attempts":3,"backoff_ms":10}],"attrs":{"k":"v"},"input":"e30="}"#).unwrap()).unwrap();
         assert_eq!(
-            w.steps,
-            Some(vec![WorkflowStep {
-                kind: "activity".into(),
-                name: "a".into(),
-                attempts: 3,
-                backoff_ms: 10
-            }])
+            w.steps.get(),
+            Some(
+                &[WorkflowStep {
+                    kind: "activity".into(),
+                    name: "a".into(),
+                    attempts: 3,
+                    backoff_ms: 10
+                }][..]
+            )
         );
         assert_eq!(
-            (w.attrs, w.input.as_deref()),
+            (w.attrs, w.input.get()),
             (Some(vec![("k".into(), "v".into())]), Some(&b"{}"[..]))
         );
         let f =
@@ -575,6 +661,31 @@ mod tests {
         ] {
             assert!(decode(&gojson::parse(bad.as_bytes()).unwrap()).is_err(), "{bad}");
         }
+        // What Go's binding accepts beyond the plain case. The Go driver's own results for several thousand such
+        // requests are replayed in tests/go_vectors.rs; these are the four kinds by name.
+        let bound = |text: &str| decode(&gojson::parse(text.as_bytes()).unwrap()).unwrap();
+        assert_eq!(
+            bound(r#"{"value":[104,105]}"#).value.get(),
+            Some(&b"hi"[..]),
+            "bytes as numbers"
+        );
+        let folded = bound("{\"\u{17f}kip\":3,\"\u{212a}ill\":true,\"OP\":\"x\"}");
+        assert_eq!(
+            (folded.skip, folded.kill, folded.op.as_str()),
+            (3, true, "x"),
+            "folded names"
+        );
+        assert_eq!(bound("null"), Request::default(), "null for a request");
+        assert_eq!(
+            bound(r#"{"nodes":[null,"b"]}"#).nodes.get(),
+            Some(&[String::new(), "b".into()][..])
+        );
+        let again = bound(r#"{"nodes":["a","b","c"],"nodes":["z"],"nodes":[null,null]}"#);
+        assert_eq!(
+            again.nodes.get(),
+            Some(&["z".to_string(), "b".into()][..]),
+            "a repeated key binds onto what the earlier one left, as in Go"
+        );
         for bad in [
             r#"{"op":1}"#,
             r#"{"surprise":1}"#,
@@ -583,6 +694,9 @@ mod tests {
             r#"{"offset":"1"}"#,
             r#"{"value":"!"}"#,
             r#"{"items":[{"nope":1}]}"#,
+            r#"{"value":[256]}"#,
+            r#"{"value":[-0]}"#,
+            "{\"o\u{440}\":\"x\"}",
             r#"[]"#,
         ] {
             assert!(decode(&gojson::parse(bad.as_bytes()).unwrap()).is_err(), "{bad}");

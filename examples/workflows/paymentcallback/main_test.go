@@ -45,13 +45,19 @@ func lose(t *testing.T, dir, activity string, world ledger) {
 	if err != nil || task == nil || task.Activity != activity {
 		t.Fatal(task, err)
 	}
-	handle(task, world)
+	if _, failure := handle(task, world); failure != "" {
+		t.Fatal(failure)
+	}
+	if (activity == "charge" && !world.charged["payment/1"]) || (activity == "settle" && world.settled["payment/1"] == "") {
+		t.Fatal("first effect", activity, world)
+	}
+	lost := task.Run
 	s.Close()
 	time.Sleep(100 * time.Millisecond)
 	s = open(t, dir)
 	defer s.Close()
 	task, err = s.Poll(queue, time.Minute)
-	if err != nil || task == nil || task.Activity != activity || task.Attempt != 2 {
+	if err != nil || task == nil || task.Run != lost || task.Activity != activity || task.Attempt != 2 {
 		t.Fatal(task, err)
 	}
 	out, failure := handle(task, world)

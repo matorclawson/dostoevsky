@@ -5,6 +5,11 @@
 // python/end-to-end-applications/rag-ingestion. The object store, embedding
 // model and vector store are local stand-ins. The PDF path, with one call per
 // chunk, needs fan-out and join, which the module does not have.
+//
+// Assumption: an object name always holds the same content, so a changed
+// document is uploaded under a new name. Without that, a retried download could
+// read another version, and a shorter second version would leave the first one's
+// extra vectors in place.
 package main
 
 import (

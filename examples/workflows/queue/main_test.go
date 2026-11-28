@@ -47,13 +47,15 @@ func TestCrashAndResume(t *testing.T) {
 	if err != nil || lost == nil {
 		t.Fatal(lost, err)
 	}
-	handle(lost, record)
+	if _, failure := handle(lost, record); failure != "" || recorded["task/1"] != "A" {
+		t.Fatal("first effect", failure, recorded)
+	}
 	s.Close()
 	time.Sleep(100 * time.Millisecond)
 
 	s = open(t, dir)
 	task, err := s.Poll(queue, time.Minute)
-	if err != nil || task == nil || task.Attempt != 2 {
+	if err != nil || task == nil || task.Run != lost.Run || task.Step != lost.Step || task.Attempt != 2 {
 		t.Fatal(task, err)
 	}
 	out, failure := handle(task, record)

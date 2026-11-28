@@ -3,9 +3,18 @@
 //
 // Mirrors the webhook callback pattern in github.com/restatedev/examples (MIT),
 // go/patterns-use-cases/src/webhookcallbacks.
+//
+// Trust: an event is accepted only with an HMAC-SHA256 of the exact body under a
+// secret shared with the sender, in hex, in the X-Signature header. This program
+// serves plain HTTP, so use TLS in front of it on any untrusted network. A
+// captured request can be sent again; the event ID keeps it from being applied
+// twice.
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,6 +28,10 @@ import (
 
 const name = "payment-event"
 const queue = "payment-events"
+const bodyLimit = 64 << 10
+
+// labelLimit is the longest run ID the store accepts.
+const labelLimit = 256
 
 type event struct {
 	ID      string `json:"id"`
@@ -30,16 +43,39 @@ func register(s *workflow.Store) error {
 	return s.Register(name, 1, []workflow.Step{{Kind: "activity", Name: "apply", Attempts: 20}})
 }
 
+// sign returns the signature a sender puts on body.
+func sign(secret, body []byte) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // intake stores the fields it uses in one spelling, so a provider that resends
-// the event with different spacing or extra fields is still recognized.
-func intake(s *workflow.Store) http.HandlerFunc {
+// the event with different spacing or extra fields is still recognized. A 4xx
+// answer means that sending the same request again cannot succeed.
+func intake(s *workflow.Store, secret []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, bodyLimit))
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "event too large", http.StatusRequestEntityTooLarge)
+			} else {
+				http.Error(w, "unreadable request", http.StatusBadRequest)
+			}
+			return
+		}
+		if !hmac.Equal([]byte(r.Header.Get("X-Signature")), []byte(sign(secret, body))) {
+			http.Error(w, "bad signature", http.StatusUnauthorized)
+			return
+		}
+		// Unmarshal refuses anything after the first JSON value.
 		var e event
-		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&e); err != nil || e.ID == "" || e.Invoice == "" {
+		if err = json.Unmarshal(body, &e); err != nil || e.ID == "" || e.Invoice == "" || len(name+"/"+e.ID) > labelLimit {
 			http.Error(w, "bad event", http.StatusBadRequest)
 			return
 		}
@@ -72,8 +108,9 @@ func handle(task *workflow.Task, apply func(key string, e event) error) ([]byte,
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		log.Fatal("usage: webhook DATA-DIRECTORY LISTEN-ADDRESS")
+	secret := []byte(os.Getenv("WEBHOOK_SECRET"))
+	if len(os.Args) != 3 || len(secret) < 16 {
+		log.Fatal("usage: WEBHOOK_SECRET=at-least-16-bytes webhook DATA-DIRECTORY LISTEN-ADDRESS (for example 127.0.0.1:8080)")
 	}
 	s, err := workflow.Open(os.Args[1])
 	if err != nil {
@@ -84,7 +121,8 @@ func main() {
 		log.Fatal(err)
 	}
 	go func() {
-		log.Fatal(http.ListenAndServe(os.Args[2], intake(s)))
+		server := &http.Server{Addr: os.Args[2], Handler: intake(s, secret), ReadTimeout: 10 * time.Second}
+		log.Fatal(server.ListenAndServe())
 	}()
 	for {
 		task, err := s.Poll(queue, time.Minute)

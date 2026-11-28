@@ -41,12 +41,21 @@ func TestCrashAndResume(t *testing.T) {
 		if _, failure := handle(task, world); failure != "" {
 			t.Fatal(failure)
 		}
+		done := map[string]bool{
+			"download": world.objects["ingest-text/1/text"] != nil,
+			"embed":    world.objects["ingest-text/1/vectors"] != nil,
+			"upsert":   len(world.vectors) == 3,
+		}
+		if !done[activity] {
+			t.Fatal("first effect", activity)
+		}
+		lost := task.Run
 		s.Close()
 		time.Sleep(100 * time.Millisecond)
 
 		s = open(t, dir)
 		task, err = s.Poll(queue, time.Minute)
-		if err != nil || task == nil || task.Activity != activity || task.Attempt != 2 {
+		if err != nil || task == nil || task.Run != lost || task.Activity != activity || task.Attempt != 2 {
 			t.Fatal(task, err)
 		}
 		out, failure := handle(task, world)

@@ -1,0 +1,89 @@
+{
+ "about": "An incomplete last frame is cut off by open; the records before it stay and writing continues.",
+ "covers": [],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 5,
+   "batch": 1
+  },
+  {
+   "do": "snapshot",
+   "as": "all"
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "truncate",
+   "file": "store/journal.v1",
+   "bytes": 9,
+   "only": "legacy"
+  },
+  {
+   "do": "inspect",
+   "dir": "$root/store",
+   "expect": {
+    "damage": "torn-tail",
+    "later_frames": 0
+   },
+   "only": "legacy"
+  },
+  {
+   "do": "truncate",
+   "file": "store/segments/seg-*.log",
+   "bytes": 9,
+   "only": "segmented"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open",
+   "nonzero": [
+    "truncated_bytes"
+   ]
+  },
+  {
+   "do": "same",
+   "as": "all",
+   "drop_last": 1
+  },
+  {
+   "do": "publish",
+   "value": "again",
+   "id": "",
+   "expect": {
+    "offset": 4
+   }
+  },
+  {
+   "do": "snapshot",
+   "as": "recovered"
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open",
+   "expect": {
+    "truncated_bytes": 0
+   }
+  },
+  {
+   "do": "same",
+   "as": "recovered"
+  }
+ ]
+}

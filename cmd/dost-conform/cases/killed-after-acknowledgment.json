@@ -1,0 +1,91 @@
+{
+ "about": "A publish and then a checkpoint are each acknowledged and the process is killed at once; both are there afterwards.",
+ "covers": [],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 20,
+   "ids": true
+  },
+  {
+   "do": "publish",
+   "value": "last",
+   "id": "id-last",
+   "expect": {
+    "offset": 20
+   }
+  },
+  {
+   "do": "kill"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "read",
+   "offset": 20,
+   "expect": {
+    "offset": 20,
+    "value": "last",
+    "id": "id-last"
+   }
+  },
+  {
+   "do": "read",
+   "offset": 0,
+   "expect": {
+    "offset": 0,
+    "value": "00000000",
+    "id": "id-0"
+   }
+  },
+  {
+   "do": "count",
+   "is": 21
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 0,
+   "next": 5,
+   "state": "s"
+  },
+  {
+   "do": "kill"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "position",
+   "group": "g",
+   "expect": {
+    "next": 5,
+    "state": "s"
+   }
+  },
+  {
+   "do": "publish",
+   "value": "last",
+   "id": "id-last",
+   "expect": {
+    "offset": 20
+   }
+  },
+  {
+   "do": "count",
+   "is": 21
+  }
+ ]
+}

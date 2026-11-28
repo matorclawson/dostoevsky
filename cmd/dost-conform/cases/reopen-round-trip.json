@@ -1,0 +1,88 @@
+{
+ "about": "Records, IDs and a consumer checkpoint survive closing, and another process appends to them.",
+ "covers": [],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 50,
+   "ids": true,
+   "size": 64
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 0,
+   "next": 10,
+   "state": "state-10"
+  },
+  {
+   "do": "snapshot",
+   "as": "first",
+   "groups": [
+    "g"
+   ]
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "same",
+   "as": "first",
+   "groups": [
+    "g"
+   ]
+  },
+  {
+   "do": "publish",
+   "value": "after",
+   "id": "id-after",
+   "expect": {
+    "offset": 50
+   }
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 10,
+   "next": 51,
+   "state": "state-51"
+  },
+  {
+   "do": "snapshot",
+   "as": "second",
+   "groups": [
+    "g"
+   ]
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "same",
+   "as": "second",
+   "groups": [
+    "g"
+   ]
+  }
+ ]
+}

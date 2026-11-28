@@ -1,0 +1,100 @@
+{
+ "about": "A repeated ID returns the first record, a changed one is refused, and a stale checkpoint is refused, before and after reopening.",
+ "covers": [],
+ "formats": [
+  "legacy",
+  "segmented"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish",
+   "value": "a",
+   "id": "x",
+   "expect": {
+    "offset": 0
+   }
+  },
+  {
+   "do": "publish",
+   "value": "a",
+   "id": "x",
+   "expect": {
+    "offset": 0
+   }
+  },
+  {
+   "do": "publish",
+   "value": "b",
+   "id": "x",
+   "error": "conflict"
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 0,
+   "next": 1,
+   "state": "one"
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 0,
+   "next": 1,
+   "state": "one",
+   "error": "conflict"
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 1,
+   "next": 3,
+   "state": "past-end",
+   "error": "conflict"
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish",
+   "value": "a",
+   "id": "x",
+   "expect": {
+    "offset": 0
+   }
+  },
+  {
+   "do": "publish",
+   "value": "b",
+   "id": "x",
+   "error": "conflict"
+  },
+  {
+   "do": "commit_batch",
+   "group": "g",
+   "offset": 0,
+   "next": 1,
+   "state": "one",
+   "error": "conflict"
+  },
+  {
+   "do": "position",
+   "group": "g",
+   "expect": {
+    "next": 1
+   }
+  },
+  {
+   "do": "count",
+   "is": 1
+  }
+ ]
+}

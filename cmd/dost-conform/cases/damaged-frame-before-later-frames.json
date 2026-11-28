@@ -1,0 +1,99 @@
+{
+ "about": "A checksum error with sound frames after it stops open and changes nothing; repair needs permission to discard them.",
+ "covers": [
+  "f20ffa0",
+  "614c3ed"
+ ],
+ "formats": [
+  "legacy"
+ ],
+ "steps": [
+  {
+   "do": "open"
+  },
+  {
+   "do": "publish_many",
+   "start": 0,
+   "count": 2,
+   "batch": 1
+  },
+  {
+   "do": "mark",
+   "file": "store/journal.v1",
+   "as": "third"
+  },
+  {
+   "do": "publish_many",
+   "start": 2,
+   "count": 3,
+   "batch": 1
+  },
+  {
+   "do": "close"
+  },
+  {
+   "do": "flip",
+   "file": "store/journal.v1",
+   "at": "third",
+   "plus": 25
+  },
+  {
+   "do": "remember_bytes",
+   "file": "store/journal.v1",
+   "as": "damaged"
+  },
+  {
+   "do": "switch"
+  },
+  {
+   "do": "open",
+   "fails": true
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "store/journal.v1",
+   "as": "damaged"
+  },
+  {
+   "do": "inspect",
+   "dir": "$root/store",
+   "expect": {
+    "damage": "checksum",
+    "later_frames": 2
+   }
+  },
+  {
+   "do": "repair",
+   "dir": "$root/store",
+   "error": "later_frames"
+  },
+  {
+   "do": "bytes_unchanged",
+   "file": "store/journal.v1",
+   "as": "damaged"
+  },
+  {
+   "do": "repair",
+   "dir": "$root/store",
+   "discard_later": true,
+   "expect": {
+    "quarantined": true
+   }
+  },
+  {
+   "do": "open"
+  },
+  {
+   "do": "count",
+   "is": 2
+  },
+  {
+   "do": "publish",
+   "value": "new",
+   "id": "",
+   "expect": {
+    "offset": 2
+   }
+  }
+ ]
+}

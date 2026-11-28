@@ -325,6 +325,11 @@
    "as": "second"
   },
   {
+   "do": "at_least",
+   "mark": "second",
+   "bytes": 100000
+  },
+  {
    "do": "bytes_unchanged",
    "file": "roll/journal.v1",
    "as": "witness"
@@ -385,6 +390,14 @@
    "do": "mark",
    "file": "roll/segments/seg-0000000000000002.log",
    "as": "after"
+  },
+  {
+   "do": "compare",
+   "marks": [
+    "second",
+    "after"
+   ],
+   "is": "less"
   },
   {
    "do": "switch"

@@ -30,7 +30,7 @@ var Points = []string{
 	// Backup and migration: before the copy, before the copy is published, before the parent directory is synced.
 	"backup.write", "backup.rename", "backup.syncparent",
 	// A workflow commit: before anything is written, once the call has passed the closed, fenced and cancellation checks
-	// after the check of their number and before the items themselves are examined; part-way through writing the group (on the pass where it fires, and only then,
+	// and after the check of their number, before the items themselves are examined; part-way through writing the group (on the pass where it fires, and only then,
 	// half the bytes are written first; it counts segment appends, so arm it only where a workflow store is the thing
 	// writing); after the segment is
 	// synced and before the witness is replaced; after the witness is replaced and before any caller is answered.

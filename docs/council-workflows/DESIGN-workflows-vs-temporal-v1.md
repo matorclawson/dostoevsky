@@ -1,13 +1,11 @@
 # Design: workflows against Temporal, v1
 
-Companion to the workflow-streams design (written against v1, sha256 `cc4236c8…`, "the v1 design"; updated for the council's
-changes that go into v2) and PR 84 (`1745c8a2`). Lead: ephemeral-maintainer.
-For the external council. November 27, 2026.
+Companion to the workflow-streams design (written against v1, original text sha256 `cc4236c8…`, "the v1 design"; updated for the
+changes that go into v2). For external review. November 27, 2026.
 
 **How to read the numbers.** **[measured]** has a receipt named beside it. **[documented]** is what Temporal's own documentation says,
 read on 27 November 2026, not tested by us. Everything else is **[proposed]**. We have **not run Temporal**, and nothing in this
-document is a performance comparison. PR 84 (council head `1745c8a2`, now `d711c946` with review fixes) is not
-merged; its newest head is not yet gated or re-reviewed.
+document is a performance comparison. Pull request 84, which this builds on, is merged.
 
 ---
 
@@ -32,13 +30,13 @@ unproven until measured, and it has two honest limits:
 
 **Recommendation on the key fork.** Keep **workflows as data** as the engine contract. Do not build a code-with-replay SDK now.
 Spend the effort on what the step graph lacks (bounded loops, dynamic fan-out, access to earlier results, queries, schedules)
-and on a network protocol usable from any language. Ask the council whether implementing Temporal's server API, so that
+and on a network protocol usable from any language. Ask reviewers whether implementing Temporal's server API, so that
 Temporal's own SDKs can connect, is worth studying later.
 
 **Order of work:** the v1 dependencies; a server with authentication; the five step-graph gaps; operator tooling; benchmark;
-only then any claim against Temporal. Replication is shared with the Kafka design and gates any claim about availability.
+only then any claim against Temporal. Replication is shared with the Kafka design and is required before any claim about availability.
 
-**Rulings asked:** (1) data, not code, for v1 and the next version; (2) "beat Temporal" is limited to named, measured cells on
+**Decisions asked:** (1) data, not code, for v1 and the next version; (2) "beat Temporal" is limited to named, measured cells on
 named hardware, plus footprint and operating cost; (3) no automatic migration from Temporal is promised.
 
 ---
@@ -73,6 +71,10 @@ Sources: [persistence](https://docs.temporal.io/temporal-service/persistence),
 [task queues](https://docs.temporal.io/task-queue), [server](https://docs.temporal.io/temporal-service/temporal-server),
 [multi-cluster](https://docs.temporal.io/temporal-service/multi-cluster-replication),
 [omes](https://github.com/temporalio/omes). The worker-versioning and workflow-limits pages were not read.
+
+## 1a. Licenses
+
+The Restate server is licensed under the Business Source License 1.1, which its own text says is not an Open Source license; Dostoevsky is MIT. (Restate license text: <https://github.com/restatedev/restate/blob/85c633357c22800d7e689e7506c19fdfb4c01a66/LICENSE>, checked November 28, 2026.)
 
 ## 2. Parity table
 
@@ -117,10 +119,10 @@ to see and cancel runs (CLI first); retention and purge; backup and restore; met
 
 | Claim to test | Why it is plausible | What is known now |
 |---|---|---|
-| Footprint and operating cost | No external database or search cluster; one process | Dostoevsky's HTTP gateway peaked at 13 to 36 MiB in 120 s trials **[measured]** (source `d7b967a`, `HOST.log` sha256 `f94a43ce…0ac1ca`). This is **not** a workflow server and says nothing about long histories |
+| Footprint and operating cost | No external database or search cluster; one process | Publishing only, not workflows: the HTTP gateway peaked at 13 to 36 MiB in 120 s trials **[measured]** (source `d7b967a`, `HOST.log` sha256 `f94a43ce…0ac1ca`); the native server used more memory than JetStream and Redis in a later publishing comparison (table in the Kafka design, same directory), so no "smallest" claim is made. Says nothing about long histories |
 | Start and activity-dispatch latency | No network hop to a database; one durable write per transition | None for the combined product |
-| Cold start | Open a directory, no schema service | Council figures for segmented storage reopen are for the stream core only, not reproduced, and exclude workflow state |
-| Workflows next to streams | One server can serve both | Design only. By the council's ruling they use **separate stores** with no shared commit; a stream-triggered workflow starts through `StartOnce` keyed by (topic, partition, offset) |
+| Cold start | Open a directory, no schema service | For the stream core only, not for this design: segmented storage reopened in per-size medians of 8.6 to 12.4 ms in our run on Linux ARM64 (candidate `ed99753f`, store files evicted from the page cache, directory entries still cached, 160,000 to 10M records, 512-byte values). Excludes workflow state, which has not been measured |
+| Workflows next to streams | One server can serve both | Design only. They use **separate stores** with no shared commit; a stream-triggered workflow starts through `StartOnce` keyed by (topic, partition, offset) |
 
 For scale, the only workflow figure we have: Ephemeral on SQLite completed 160.8 one-activity runs per second, p99 10.48 ms,
 sequential, in-process, one run on Linux ARM64 with 2 vCPU **[measured]** (source `c2e078a2`, `BENCH.log` sha256 `4d253617…`).
@@ -188,7 +190,7 @@ default. The load generator runs on a second host for both.
 **Equal durability.** PostgreSQL `fsync=on`, `synchronous_commit=on`, `full_page_writes=on`; our server as shipped, with every
 acknowledgment after sync. One node each: this compares no availability. Weaker settings are never compared.
 
-**Workloads** (the council's Temporal and Ephemeral track), written once per system with the same work:
+**Workloads** (the Temporal and Ephemeral track), written once per system with the same work:
 
 1. Start, three no-op activities in sequence, complete.
 2. Start, wait for a signal, resume, complete.
@@ -219,16 +221,16 @@ a rule written before the run.
 
 ## 7. Dependencies and risks
 
-First milestone (council): a crash-tested activity lifecycle, a measured cost per completed workflow, and evidence that a
-streams-only user pays no measurable penalty. Order: v1 design steps 1 to 7; wire operations for workflows and authentication; clients; step-graph additions; operator
-tooling; benchmark. No dates: the first dependency, PR 84, is undecided.
+First milestone: a crash-tested activity lifecycle, a measured cost per completed workflow, and evidence that a
+streams-only user pays no measurable penalty. Order: the dependency steps of the v2 workflow design (section 3); wire operations for workflows and authentication; clients; step-graph additions; operator
+tooling; benchmark. No dates: the first dependency, pull request 84, has merged, and the workflow bounds are not yet measured.
 
 - **Footprint against indexes.** Run state, per-run history and attribute indexes will add memory and disk to the stream core.
 - **One node.** Until replication exists, say "single node" wherever we compare.
 - **Long polling.** Dispatch latency depends on waking waiting workers; today's API only offers a next-due hint.
 - **Expressiveness.** If users need loops and code, the recommendation in section 4 is wrong for them.
 
-## 8. Questions for the council
+## 8. Questions for reviewers
 
 1. Is workflows-as-data enough to be worth choosing over Temporal, and for whom?
 2. Do the five additions keep the engine's guarantees and the size rule? Which first?

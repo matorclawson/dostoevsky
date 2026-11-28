@@ -12,7 +12,7 @@ TMPDIR=/path/on/test-volume REPEATS=7 make dev-bench-fresh
 
 The driver builds both revisions, seeds 96 sealed segments and one active segment with 64 IDs each, and reopens a fresh copy for every cell. It prepares membership hints and constructs payloads before timing. Each cell submits 4,096 unique IDs, checks their receipts and checks that the resulting offsets form the expected contiguous range. Seven paired trials alternate build order. The zero-byte workload measures an identified message with an empty value. One KiB represents application content. Acks/s includes waiting for durable completion. The driver emits trial, build, CELL, producers, payload bytes, acks/s, p95 and p99 in microseconds, allocations and allocated bytes per record, process peak RSS in KiB, and number of publish groups. RSS includes prebuilt inputs. Allocated bytes count total heap allocation traffic during the measurement.
 
-For a source-only directory, set BASELINE_DIR to a checkout of 8e410b7. The included bundle can be cloned with `git clone -b council/fresh-publishing dostoevsky-fresh.bundle checkout`.
+For a source-only directory, set BASELINE_DIR to a checkout of the baseline: 93acac3 in this repository (8e410b7 in the council bundle). The included bundle can be cloned with `git clone -b council/fresh-publishing dostoevsky-fresh.bundle checkout`.
 
 ## Storage and correctness checks
 

@@ -1,23 +1,22 @@
 # Design: workflow streams v2 (Dostoevsky + Ephemeral as one product)
 
-Revision of v1 (sha256 `cc4236c8…`, kept unchanged) after the external council's review (Architect 12349, 28 November 2026).
-Lead: dostoevsky-maintainer. Co-author: ephemeral-maintainer. Sections 1.4, 1.7, 1.8, 2 and 5 started from the co-author's source reading (v2 parts sha256 e707a7ea…)
-of Ephemeral `dbf27040`. Statements about Dostoevsky in 1.4, 2 and 5 describe main `93870fe2`, not the candidate.
-No code is merged by this note. Statements about today's behavior come from source or from named receipts; everything about the
-combined product is a proposal and has not been built or measured.
+Revision of v1 (original text sha256 `cc4236c8…`; the copy beside this was edited for publication) after external review, 28 November 2026. Sections on Ephemeral come from a source
+reading of Ephemeral `dbf27040`. Statements about Dostoevsky in 1.4, 2 and 5 describe main `93870fe2`. No code is merged by
+this note. Statements about today's behavior come from source or from named receipts; everything about the combined product is
+a proposal and has not been built or measured.
 
 **Changed from v1:** workflows get their own store (1.5); one writer with group commit and no lock held across publishing (1.6);
 an explicit lost-reply contract (1.7); stream-triggered workflows (1.8); three scorecards instead of a Redis race (4); a first
 milestone (3).
 
-## 0. Rulings
+## 0. Decisions
 
-**Given (Architect 12349):** one record per transition; one owner per workflow store; attempts-bounded redelivery (never
+**Decided:** one record per transition; one owner per workflow store; attempts-bounded redelivery (never
 "at-least-once": Ephemeral's default is one attempt); a single workflow partition in v1.
 
-**Standing from v1:** activities and workflow state are not built on consumer groups or `Fold` (1.2).
+**Carried from v1:** activities and workflow state are not built on consumer groups or `Fold` (1.2).
 
-**Still open for the council:** recovery of a torn group (1.6); whether to add a caller-chosen poll ID and a `Finish`
+**Still open:** recovery of a torn group (1.6); whether to add a caller-chosen poll ID and a `Finish`
 receipt (1.7). The first slice keeps today's behavior exactly, so it can be compared with Ephemeral; the poll ID is
 recommended before any network client is called production-ready.
 
@@ -79,7 +78,7 @@ stream triggers. A workflow that must emit a stream event does it from an activi
 builds with system SQLite through cgo or, with `CGO_ENABLED=0` as in the release
 binary, with the modernc SQLite module. The combined core takes neither, so reading old databases needs a separate tool (5).
 
-### 1.4 Ephemeral's side of the mapping (co-author)
+### 1.4 Ephemeral's side of the mapping
 
 #### Proposed shape
 
@@ -108,7 +107,7 @@ Why decide before append: Ephemeral rejects synchronously (stale lease, signal I
 #### Constraints this puts on the core
 
 - v1 uses a single transition partition, so parent and child atomicity, queue order and today's global history cursor follow
-  directly. Partitioning by root run ID is a council question (6).
+  directly. Partitioning by root run ID is an open question (6).
 - **Size limits.** Value 1 MiB, frame 4 MiB. Ephemeral sets no payload limit of its own. A 64-way parallel step passes the same input to every child, so the record must hold the input once and reference it. A hard input and result limit would be a compatibility break and must be stated.
 - **Retention.** `Retain` drops records and their IDs. Workflow records for live runs, receipts and signals must be snapshotted first. Proposed rule for v1: no retention on workflow logs until snapshot and restore are tested.
 - **Heartbeat cost.** Each heartbeat becomes a durable append, as it is a durable write today.
@@ -147,7 +146,7 @@ damaged frame in an unacknowledged group, and recovery then stops with a corrupt
 store must not need an operator after an ordinary crash during a group.** It needs a way to tell an unacknowledged group from
 damage to acknowledged data (for example a group commit marker), with a crash test, before workflows ship.
 
-### 1.7 When a reply is lost (co-author)
+### 1.7 When a reply is lost
 
 **Rule.** A rejection changed nothing. A lost reply, a crash before the caller saw the reply, or an uncertain-write error means
 the operation **may have committed**. What a caller does then:
@@ -187,9 +186,9 @@ Also kill **before the record is written**: the retry behaves as a first call. A
 leaves the bytes in the page cache, so either outcome is correct there; the test must accept both and require that exactly one
 holds. Only a power-loss test could show what the sync adds, and none is planned. The comparison side needs no kill hooks in
 Ephemeral: make the call, discard its result, close, reopen and retry, through the public API. These go into the conformance
-suite after PR 20.
+suite (Ephemeral pull request 20, merged).
 
-### 1.8 Workflows triggered by a stream (co-author)
+### 1.8 Workflows triggered by a stream
 
 Proposed: the consumer calls `StartOnce` and commits its cursor only after it succeeds.
 
@@ -271,21 +270,17 @@ One `Poll` may apply up to 32 due transitions (timers, expiries, child starts, j
 
 ## 3. Dependencies, order and first milestone
 
-This design builds on the council candidate (pull request 84; council head `1745c8a2`, with review fixes on top). It is **not
-merged** and its acceptance measurements are not in; the council's figures are its own (shared Linux AMD64) and **not
-reproduced**.
+This design builds on pull request 84 (head `ed99753f`, merged). Our ARM64 measurements of it are used below.
 
-1. **Conformance suite** for today's Ephemeral guarantees through the public API: started. Ephemeral pull request 20 (test
-   only, open at `624cb475`, paired review approve with three lows, CI and gate passed, awaiting approval, **not merged**) covers
-   the default single attempt, heartbeat, a lease across reopen, buffered signal order, repeats on closed runs, `History` and
-   `List` pages, a timer not firing early and a parallel parent with a failed child. A follow-up (the three lows, plus
-   lost-reply tests for `StartOnce`, `Poll` and `Finish`) is **written, not yet run**. Still missing: kill-during-write cases,
-   clock steps, storage failures during a transition.
-2. **Candidate merged:** gate, both readers, acceptance receipts, Architect approval.
-3. **Bounds on segmented storage measured by us.** The one measurement of ours so far is of the reopen change in the older format
-   (ARM64, fresh process, warm cache, 160,000 records: 979 ms on main, 230 ms with the change, embedded JetStream 89 ms).
-   Segment checkpoints hold no application state, so workflow reopen needs its own gate: load the module snapshot and replay after
-   it, with 16k to 10M transitions and many closed runs.
+1. **Conformance suite** for today's Ephemeral guarantees through the public API: Ephemeral pull requests 20 and 21 are
+   merged (defaults, heartbeat, lease across reopen, signal order, repeats on closed runs, paging, timers, parallel failure,
+   and lost-reply cases for `StartOnce`, `Poll` and `Finish`); a tightening of those tests is open. Still missing:
+   kill-during-write cases, clock steps, storage failures during a transition.
+2. **Candidate merged** (pull request 84).
+3. **Bounds on segmented storage measured by us** (stream core only): per-size medians of 8.6 to 12.4 ms to reopen with the
+   store's files evicted from cache, 160,000 to 10M records, about 7 MiB resident; memory grew with history when all of it was
+   kept (24 to 68 MiB over 5M records). Segment checkpoints hold no application state, so workflow reopen needs its own
+   test and bound: load the module snapshot and replay after it, with 16k to 10M transitions and many closed runs.
 4. **Workflow store:** the separate directory, the writer of 1.6, transition records, module snapshots, each with crash tests.
 5. **Work queue with leases, due-time index, on-disk index for closed runs.** The candidate's ID filters index producer IDs only.
 6. **Workflow module**, then the compatibility layer, then migration.
@@ -295,12 +290,12 @@ reproduced**.
 - measured cost per completed workflow: durable writes, bytes, CPU, latency;
 - evidence that a streams-only user pays no measurable penalty.
 
-No dates are offered for 4 to 6 until 2 and 3 are done.
+No dates are offered for 4 to 6 until the workflow bounds in 3 are measured.
 
 ## 4. Scorecards
 
-Redis is kept only as a regression series; it does not decide anything here. An embedded figure (including the council's 42,026
-acknowledgments per second at 1 KiB) ranks nothing against a server. Detailed benchmark rules are in the companion documents
+Redis is kept only as a regression series; it does not decide anything here. An embedded figure (such as 42,026
+acknowledgments per second at 1 KiB, measured by the external reviewers) ranks nothing against a server. Detailed benchmark rules are in the companion documents
 against Kafka and Temporal.
 
 Common rules: pass rule fixed before the run (a cell is won only if every one of our trials beats every peer trial; otherwise "no
@@ -315,10 +310,28 @@ system's acknowledgment, replication and failure settings** and what they can lo
 
 **Open runs and closed history are varied independently**, including 1 million completed runs and 1 million waiting timers.
 
-What we know today, all of it about publishing only and none of it about workflows: in our ARM64 baseline over the HTTP gateway,
-one record per request, Redis Streams had the highest throughput in every cell, and our server's memory was the smallest (13 to
-36 MiB peak in 120 s trials; source `d7b967a`, host log sha256 `f94a43ce…0ac1ca`). Ephemeral's only workflow figure is its serial
-benchmark: 160.8 one-activity runs per second on a 2-vCPU Linux ARM64 host (its README).
+What we know today, all of it about publishing only and none of it about workflows.
+
+**Our own ARM64 measurements of the native server** (candidate `ed99753f`, Python clients, one record per request,
+512 bytes, durable acknowledgment, 5 rounds; medians in records/s):
+
+| Producers | Dostoevsky | Redis Streams | JetStream | Kafka |
+|---:|---:|---:|---:|---:|
+| 1 | 619 | 587 | 468 | 215 |
+| 8 | 2,268 | 2,128 | 626 | 302 |
+| 32 | 5,059 | 4,306 | 712 | 281 |
+
+- Faster than JetStream and Kafka in these unbatched runs (in an earlier run, one of our trials at 1 producer fell inside
+  JetStream's range).
+- p99 lower than Redis at 32 producers (13.4 against 52.9 ms).
+- **No throughput difference established against Redis** at 1, 8 or 32 producers: the trial ranges overlap. Redis ran without
+  publish deduplication.
+- **Not the smallest memory:** JetStream and Redis used less than Dostoevsky in the same runs (median ready 18.2 MiB and
+  largest per-cell median peak 31.6 MiB, against JetStream's 13.9 and 28.3 and Redis's 7.5 and 10.8; 512-byte records with
+  32-character IDs, 2,048 per cell).
+
+Ephemeral's only workflow figure is its serial benchmark: 160.8 one-activity runs per second on a 2-vCPU Linux ARM64 host
+(its README).
 
 ## 5. Migration for existing Ephemeral users
 
@@ -349,9 +362,9 @@ On disk: one SQLite database in WAL mode (with sidecar files). Tables `definitio
 2. One database file as the argument to `Open` and as the unit users copy or inspect. Direct SQL access by users, if any do it, ends; this was never an API.
 3. Unbounded transaction size (large cancel trees, 64-way fan-out with large input).
 4. Payloads over the stream's value limit.
-5. History and indexes held on disk and read on demand: unless the module keeps them on disk, memory grows with history. This depends on the lead's reopen and history-memory fix.
+5. History and indexes held on disk and read on demand: unless the module keeps them on disk, memory grows with history. This depends on the reopen and history-memory work.
 
-## 6. For the next council round
+## 6. Open questions for review
 
 1. **Staged validation and one record per transition** (including what apply derives): its size limit,
    recovery, and what `Retain` may drop. Payload limits and retention for workflow logs.

@@ -31,6 +31,7 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 		return false, err
 	}
 	marked := string(b[:k]) == segmentMarker
+	partial := partialMarker(dir, b[:k])
 	if bytes.HasPrefix(b[:k], []byte(workflowMagic)) {
 		if !workflow {
 			return false, errWorkflowStore
@@ -38,7 +39,7 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 		marked = true
 	}
 	path := filepath.Join(dir, "segments")
-	if !marked && k != 0 {
+	if !marked && k != 0 && !partial {
 		if k < len(segmentMarker) {
 			if _, err := os.Stat(path); err == nil {
 				return false, fmt.Errorf("%w: bad format marker", ErrCorruptLog)
@@ -50,22 +51,24 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 		return false, nil
 	}
 	if !marked {
-		if _, e := os.Lstat(path); e == nil {
+		if info, e := os.Lstat(path); e == nil {
 			// The marker is written before the first append, so a first initialization that
-			// stopped short of it acknowledged nothing. Only its own leftovers are removed.
+			// stopped short of it acknowledged nothing. Only its own leftovers are removed,
+			// and only from a real directory: through a link they could be another store's,
+			// which this lock does not cover.
 			abandoned := false
-			if requested {
+			if requested && info.IsDir() {
 				if abandoned, err = abandonedFirstInit(path); err != nil {
 					return false, err
 				}
 			}
 			if !abandoned {
+				if partial {
+					return false, fmt.Errorf("%w: bad format marker", ErrCorruptLog)
+				}
 				return false, errors.New("unmarked segmented directory; refusing initialization")
 			}
-			if err = os.RemoveAll(path); err != nil {
-				return false, err
-			}
-			if err = syncDir(dir); err != nil {
+			if err = clearAbandonedInit(n.j.file, dir, path); err != nil {
 				return false, err
 			}
 		} else if !errors.Is(e, os.ErrNotExist) {
@@ -158,6 +161,38 @@ func (n *Node) openSegments(dir string, raw []byte, requested, workflow bool) (b
 	return true, nil
 }
 
+// partialMarker reports whether b is the beginning of the format marker, cut short, in a
+// directory that has a segments directory: what a torn first write of the marker leaves.
+func partialMarker(dir string, b []byte) bool {
+	if len(b) == 0 || len(b) >= len(segmentMarker) || string(b) != segmentMarker[:len(b)] {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(dir, "segments"))
+	return err == nil
+}
+
+// clearAbandonedInit removes what abandonedFirstInit recognized, in an order that leaves
+// a recognized state after a crash at any step: the marker goes back to empty while
+// segments/ still exists, and the range file is durably gone before the segment it names.
+func clearAbandonedInit(marker *os.File, dir, path string) error {
+	if err := marker.Truncate(0); err != nil {
+		return err
+	}
+	if err := marker.Sync(); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(path, "RANGE")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := syncDir(path); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	return syncDir(dir)
+}
+
 // abandonedFirstInit reports whether path holds nothing but what an interrupted first
 // initialization leaves: staging files, the range file and at most the first segment, which
 // has no frame after its start checkpoint and no partition in it. Anything else, or a
@@ -167,16 +202,29 @@ func abandonedFirstInit(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	first := false
+	first, ranged := false, false
 	for _, entry := range entries {
 		switch entry.Name() {
 		case segName(1):
 			first = true
-		case segTmpName(1), "RANGE", "RANGE.tmp":
+		case "RANGE":
+			ranged = true
+		case segTmpName(1), "RANGE.tmp":
 		default:
 			return false, nil
 		}
 		if !entry.Type().IsRegular() {
+			return false, nil
+		}
+	}
+	// A range file that names anything but the first segment is evidence of a store that
+	// had more: nothing is removed then.
+	if ranged {
+		named, err := readSegmentRange(path)
+		if err != nil {
+			return false, err
+		}
+		if !first || !bytes.Equal(named, rangeBytes(1, 1)) {
 			return false, nil
 		}
 	}

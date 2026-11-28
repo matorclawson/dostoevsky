@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestWorkflowWitnessKillAtRollover(t *testing.T) {
@@ -28,7 +29,14 @@ func TestWorkflowWitnessKillAtRollover(t *testing.T) {
 					return e
 				}
 			}
-			return syscall.Kill(os.Getpid(), syscall.SIGKILL)
+			if e := syscall.Kill(os.Getpid(), syscall.SIGKILL); e != nil {
+				return e
+			}
+			// SIGKILL need not stop this thread before its next instruction: wait for it,
+			// so nothing past the kill point can run.
+			for {
+				time.Sleep(time.Second)
+			}
 		}
 		if e = put(l, "lost-reply"); e != nil {
 			t.Fatal(e)

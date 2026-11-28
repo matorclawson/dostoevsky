@@ -36,6 +36,9 @@ version = "0.0.0"
 [[package]]
 name = "dostoevsky-wire"
 version = "0.0.0"
+dependencies = [
+ "dostoevsky-format",
+]
 
 [[package]]
 name = "dostoevsky-workflow"
